@@ -1,6 +1,6 @@
-# ea-script-template
+# ea-scripts
 
-Professional workspace template for building and maintaining multiple ExcalidrawAutomate scripts in one repository.
+TypeScript workspace for building and maintaining multiple ExcalidrawAutomate scripts in one repository. This repository was created from `ea-script-template`.
 
 ## Template or Fork?
 
@@ -41,10 +41,17 @@ Script extension semantics in Obsidian Excalidraw (since plugin 2.27.0):
 
 Generated scripts start with a purpose comment, followed by editable top-level `UPPER_SNAKE_CASE` configuration constants, then the bundled script.
 
+## Included scripts
+
+- `slideshow`: the production Slideshow script, organized as typed path,
+  controls, lifecycle, and PDF modules
+- `minimal-starter` and `color-palette-picker`: small template examples that
+  demonstrate that scripts can be built and packaged side by side
+
 ## Recommended workspace layout
 
 ```text
-ea-script-template/
+ea-scripts/
 ├── src/
 │   ├── scripts/
 │   │   ├── minimal-starter/
@@ -53,11 +60,22 @@ ea-script-template/
 │   │   ├── color-palette-picker/
 │   │   │   ├── main.ts
 │   │   │   └── preview.svg
+│   │   ├── slideshow/
+│   │   │   ├── main.ts
+│   │   │   ├── SlideshowController.ts
+│   │   │   ├── PresentationControls.ts
+│   │   │   ├── presentationPath.ts
+│   │   │   ├── printToPdf.ts
+│   │   │   ├── types.ts
+│   │   │   └── preview.svg
 │   │   └── script-n/
 │   │       ├── main.ts
 │   │       └── preview.svg
 │   ├── sharedUtils/
-│   │   └── notice.ts
+│   │   ├── notice.ts
+│   │   ├── SingleNotice.ts
+│   │   ├── presentationGeometry.ts
+│   │   └── windowTiming.ts
 │   └── types/
 │       └── ea.d.ts
 ├── build/                  # generated, one folder per script slug

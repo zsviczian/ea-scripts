@@ -1,7 +1,7 @@
 {
-  "name": "ea-script-template",
+  "name": "ea-scripts",
   "version": "1.0.0",
-  "description": "Professional starter template for building ExcalidrawAutomate scripts for Obsidian Excalidraw",
+  "description": "TypeScript workspace for building ExcalidrawAutomate scripts for Obsidian Excalidraw",
   "engines": {
     "node": ">=22"
   },
@@ -30,7 +30,12 @@
     "tsx": "^4.0.0",
     "typescript": "^5.5.0"
   },
-  "keywords": ["obsidian", "excalidraw", "excalidraw-automate", "script-template"],
+  "keywords": [
+    "obsidian",
+    "excalidraw",
+    "excalidraw-automate",
+    "scripts"
+  ],
   "author": "",
   "license": "MIT"
 }

@@ -3,6 +3,15 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@zsviczian/excalidraw/types": [
+        "node_modules/@zsviczian/excalidraw/types/excalidraw/types.d.ts"
+      ],
+      "@zsviczian/excalidraw/element/types": [
+        "node_modules/@zsviczian/excalidraw/types/element/src/types.d.ts"
+      ]
+    },
     "lib": ["ES2022", "DOM"],
     "strict": true,
     "noUncheckedIndexedAccess": true,

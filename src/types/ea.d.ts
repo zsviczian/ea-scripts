@@ -1,127 +1,191 @@
 /**
  * @file ea.d.ts
- * @overview Ambient type declarations for the ExcalidrawAutomate globals
- *   injected by the Excalidraw Script Engine at runtime.
- *
- *   These are minimal stubs — add more signatures as your script grows.
- *   For the authoritative API see:
- *   https://zsviczian.github.io/obsidian-excalidraw-plugin/
+ * @overview Typed declarations for the globals injected by the Excalidraw
+ *   Script Engine and the narrow host surface used by script projects.
  */
 
-// ---------------------------------------------------------------------------
-// Minimal ExcalidrawAutomate surface
-// ---------------------------------------------------------------------------
+/* eslint-disable max-params -- Host callback declarations must match ExcalidrawAutomate's runtime signature. */
 
-declare interface ExcalidrawAutomate {
-  /** Returns true when the running plugin version meets the minimum. */
-  verifyMinAppVersion(version: string): boolean;
+import type { AppState, ExcalidrawImperativeAPI } from "@zsviczian/excalidraw/types";
+import type {
+  ExcalidrawElement as ForkExcalidrawElement,
+  ExcalidrawFrameElement as ForkExcalidrawFrameElement,
+  ExcalidrawLinearElement as ForkExcalidrawLinearElement,
+} from "@zsviczian/excalidraw/element/types";
+import type { TFile, WorkspaceLeaf } from "obsidian";
 
-  /** Returns the live Excalidraw React API for the active canvas. */
-  getExcalidrawAPI(): ExcalidrawAPI | null;
+declare global {
+  type ExcalidrawElement = ForkExcalidrawElement;
+  type ExcalidrawFrameElement = ForkExcalidrawFrameElement;
+  type ExcalidrawLinearElement = ForkExcalidrawLinearElement;
+  type ExcalidrawAPI = ExcalidrawImperativeAPI;
+  type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
 
-  /** Opens the EA workbench so elements can be staged before insertion. */
-  reset(): void;
+  interface ModifierKeyState {
+    shiftKey: boolean;
+    metaKey: boolean;
+    ctrlKey: boolean;
+    altKey: boolean;
+  }
 
-  /**
-   * Copies staged elements to the live scene.
-   *
-   * @param repositionToCursor                 When true, elements are placed at the cursor position.
-   * @param finalizeWhenFallbackIsAvailable    When true, the scene is finalised even if the
-   *                                           canvas API falls back to a compatibility path.
-   */
-  addElementsToView(repositionToCursor?: boolean, finalizeWhenFallbackIsAvailable?: boolean): Promise<void>;
+  interface ScriptContentElement extends HTMLDivElement {
+    readonly innerWidth: number;
+    readonly innerHeight: number;
+    webkitRequestFullscreen(): Promise<void>;
+  }
 
-  /** The currently selected element IDs on the canvas. */
-  getViewSelectedElements(): ExcalidrawElement[];
+  type ScriptWorkspaceLeaf = WorkspaceLeaf & {
+    readonly width: number;
+    readonly height: number;
+    readonly view: WorkspaceLeaf["view"] & ScriptExcalidrawView;
+  };
 
-  /** Gets the current script's settings object from Obsidian data. */
-  getScriptSettings(): Record<string, unknown>;
+  interface ScriptExcalidrawView {
+    readonly leaf: ScriptWorkspaceLeaf;
+    readonly file: TFile;
+    readonly modifierKeyDown: ModifierKeyState;
+    readonly ownerDocument: Document;
+    readonly ownerWindow: Window;
+    readonly contentEl: ScriptContentElement;
+    readonly excalidrawContainer?: HTMLDivElement;
+    isDirty(): boolean;
+    forceSave(silent?: boolean): Promise<void>;
+    preventAutozoom(): void;
+    refreshCanvasOffset(): void;
+    clearDirty(): void;
+  }
 
-  /** Persists updated script settings. */
-  setScriptSettings(settings: Record<string, unknown>): Promise<void>;
+  interface ScriptUtils {
+    readonly scriptFile: TFile;
+  }
 
-  /** Shows a native Obsidian input prompt modal. */
-  inputPrompt(
-    header: string,
-    placeholder?: string,
-    value?: string,
-  ): Promise<string | null>;
+  interface ElementStyle {
+    strokeColor: string;
+    backgroundColor: string;
+    strokeWidth: number;
+    fillStyle: "hachure" | "cross-hatch" | "solid" | "dots" | "dashed" | "zigzag";
+    roughness: number;
+    opacity: number;
+    fontSize: number;
+    fontFamily: 1 | 2 | 3 | 4;
+    textAlign: "left" | "center" | "right";
+    verticalAlign: "top" | "middle" | "bottom";
+  }
 
-  /** Shows a native Obsidian suggestion modal. */
-  suggestionPrompt(
-    header: string,
-    displayItems: string[],
-    hint?: string,
-  ): Promise<string | null>;
+  interface TextFormatting {
+    width?: number;
+    height?: number;
+    textAlign?: "left" | "center" | "right";
+    box?: boolean;
+    boxPadding?: number;
+  }
 
-  // Element creation helpers
-  addRect(topX: number, topY: number, width: number, height: number): string;
-  addEllipse(topX: number, topY: number, width: number, height: number): string;
-  addText(topX: number, topY: number, text: string, formatting?: TextFormatting): string;
-  addLine(points: [number, number][]): string;
-  addArrow(points: [number, number][], formatting?: ArrowFormatting): string;
+  interface ArrowFormatting {
+    startArrowHead?: string;
+    endArrowHead?: string;
+  }
 
-  // Style setters (apply before calling add*)
-  style: ElementStyle;
+  interface ViewSvgOptions {
+    withBackground?: boolean;
+    theme?: AppState["theme"];
+    frameRendering?: {
+      enabled: boolean;
+      name: boolean;
+      outline: boolean;
+      clip: boolean;
+    };
+    padding?: number;
+    selectedOnly?: boolean;
+    skipInliningFonts?: boolean;
+    embedScene?: boolean;
+    elementsOverride?: ExcalidrawElement[];
+  }
+
+  interface PdfPageProperties {
+    dimensions?: { width: number; height: number };
+    backgroundColor?: string;
+    margin: { left: number; right: number; top: number; bottom: number };
+    alignment: "center" | "left" | "right";
+  }
+
+  interface ExcalidrawAutomate {
+    targetView: ScriptExcalidrawView | null;
+    readonly obsidian: typeof import("obsidian");
+    readonly DEVICE: {
+      isDesktop: boolean;
+      isMobile: boolean;
+    };
+    style: ElementStyle;
+    onLinkClickHook:
+      | ((
+          element: ExcalidrawElement,
+          linkText: string,
+          event: MouseEvent,
+          view: ScriptExcalidrawView,
+          ea: ExcalidrawAutomate,
+        ) => boolean)
+      | null;
+
+    verifyMinAppVersion(version: string): boolean;
+    verifyMinimumPluginVersion(version: string): boolean;
+    getExcalidrawAPI(): ExcalidrawAPI | null;
+    getViewElements(): ExcalidrawElement[];
+    getViewSelectedElements(): ExcalidrawElement[];
+    getViewSelectedElement(): ExcalidrawElement | null;
+    cloneElement<T extends ExcalidrawElement>(element: T): Mutable<T>;
+    clear(): void;
+    reset(): void;
+    copyViewElementsToEAforEditing(elements: readonly ExcalidrawElement[]): void;
+    getElement<T extends ExcalidrawElement = ExcalidrawElement>(id: string): Mutable<T> | null;
+    getElements(): ExcalidrawElement[];
+    addElementsToView(
+      repositionToCursor?: boolean,
+      finalizeWhenFallbackIsAvailable?: boolean,
+    ): Promise<void>;
+    selectElementsInView(elements: readonly ExcalidrawElement[]): void;
+    setViewModeEnabled(enabled: boolean): void;
+    viewToggleFullScreen(forceViewMode?: boolean): void;
+    addRect(topX: number, topY: number, width: number, height: number): string;
+    addEllipse(topX: number, topY: number, width: number, height: number): string;
+    addText(topX: number, topY: number, text: string, formatting?: TextFormatting): string;
+    addLine(points: [number, number][]): string;
+    addArrow(points: [number, number][], formatting?: ArrowFormatting): string;
+    getBoundingBox(elements: readonly ExcalidrawElement[]): {
+      topX: number;
+      topY: number;
+      width: number;
+      height: number;
+    };
+    createViewSVG(options: ViewSvgOptions): Promise<SVGSVGElement>;
+    createPDF(options: {
+      SVG: SVGSVGElement[];
+      scale?: { fitToPage?: boolean | number; zoom?: number };
+      pageProps?: PdfPageProperties;
+      filename: string;
+    }): Promise<void>;
+    getScriptSettings(): Record<string, unknown>;
+    setScriptSettings(settings: Record<string, unknown>): Promise<void>;
+    inputPrompt(header: string, placeholder?: string, value?: string): Promise<string | null>;
+    suggestionPrompt(header: string, displayItems: string[], hint?: string): Promise<string | null>;
+  }
+
+  interface SlideshowSessionState {
+    script: string;
+    timestamp: number;
+    slide: Record<string, number>;
+  }
+
+  interface Window {
+    ExcalidrawSlideshow?: SlideshowSessionState;
+    ExcalidrawSlideshowStartTimer?: number;
+    removePresentationEventHandlers?: () => void;
+    createDiv(options?: { cls?: string | string[] }): HTMLDivElement;
+  }
+
+  const ea: ExcalidrawAutomate;
+  const utils: ScriptUtils;
+  const app: import("obsidian").App;
+  const Notice: typeof import("obsidian").Notice;
 }
 
-declare interface ElementStyle {
-  strokeColor: string;
-  backgroundColor: string;
-  strokeWidth: number;
-  fillStyle: "hachure" | "cross-hatch" | "solid" | "dots" | "dashed" | "zigzag";
-  roughness: number;
-  opacity: number;
-  fontSize: number;
-  fontFamily: 1 | 2 | 3 | 4;
-  textAlign: "left" | "center" | "right";
-  verticalAlign: "top" | "middle" | "bottom";
-}
-
-declare interface TextFormatting {
-  width?: number;
-  height?: number;
-  textAlign?: "left" | "center" | "right";
-  box?: boolean;
-  boxPadding?: number;
-}
-
-declare interface ArrowFormatting {
-  startArrowHead?: string;
-  endArrowHead?: string;
-}
-
-declare interface ExcalidrawElement {
-  id: string;
-  type: string;
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  strokeColor: string;
-  backgroundColor: string;
-  opacity: number;
-  [key: string]: unknown;
-}
-
-declare interface ExcalidrawAPI {
-  getSceneElements(): readonly ExcalidrawElement[];
-  getAppState(): Record<string, unknown>;
-  updateScene(sceneData: {
-    elements?: ExcalidrawElement[];
-    appState?: Record<string, unknown>;
-  }): void;
-  refresh(): void;
-}
-
-// ---------------------------------------------------------------------------
-// Globals injected by the Script Engine
-// ---------------------------------------------------------------------------
-
-/** The ExcalidrawAutomate instance for the currently active canvas. */
-declare const ea: ExcalidrawAutomate;
-
-/** Obsidian's Notice class — available globally in the plugin context. */
-declare class Notice {
-  constructor(message: string, timeout?: number);
-}
+export {};
