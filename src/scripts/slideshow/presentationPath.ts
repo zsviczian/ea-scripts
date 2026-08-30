@@ -6,8 +6,8 @@
 /* eslint-disable complexity, max-lines-per-function -- Path precedence is kept together to make legacy behavior auditable. */
 
 import { getPresentationFrameName } from "../../sharedUtils/presentationGeometry";
+import { readLineSlideshowData } from "./slideshowMetadata";
 import {
-  getSlideshowPathMetadata,
   isFrameElement,
   isLinearPathElement,
   type NamedFrame,
@@ -24,7 +24,13 @@ export function resolvePresentationSetup(
   let pathElement = viewElements.find(
     (element) =>
       isLinearPathElement(element) &&
-      Boolean((element.customData as { slideshow?: unknown } | undefined)?.slideshow),
+      Boolean(
+        readLineSlideshowData(
+          element.customData,
+          element.id,
+          Math.floor(element.points.length / 2),
+        ),
+      ),
   ) as ExcalidrawLinearElement | undefined;
 
   const frames = viewElements
@@ -102,9 +108,13 @@ export function resolvePresentationSetup(
     });
   }
 
-  const metadata = getSlideshowPathMetadata(pathElement);
-  const originalPathProperties: OriginalPathProperties = metadata?.hidden
-    ? metadata.originalProps
+  const metadata = readLineSlideshowData(
+    pathElement.customData,
+    pathElement.id,
+    Math.floor(pathElement.points.length / 2),
+  );
+  const originalPathProperties: OriginalPathProperties = metadata?.data.hidden
+    ? metadata.data.originalProps
     : {
         strokeColor: pathElement.strokeColor,
         backgroundColor: pathElement.backgroundColor,
@@ -117,7 +127,7 @@ export function resolvePresentationSetup(
     frames,
     slides,
     shouldHidePathAfterPresentation,
-    isHidden: metadata?.hidden ?? false,
+    isHidden: metadata?.data.hidden ?? false,
     originalPathProperties,
     frameRenderingOriginalState,
   };

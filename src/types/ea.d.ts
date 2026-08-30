@@ -138,6 +138,10 @@ declare global {
     copyViewElementsToEAforEditing(elements: readonly ExcalidrawElement[]): void;
     getElement<T extends ExcalidrawElement = ExcalidrawElement>(id: string): Mutable<T> | null;
     getElements(): ExcalidrawElement[];
+    addAppendUpdateCustomData(
+      id: string,
+      newData: Record<string, unknown | undefined>,
+    ): ExcalidrawElement | undefined;
     addElementsToView(
       repositionToCursor?: boolean,
       finalizeWhenFallbackIsAvailable?: boolean,

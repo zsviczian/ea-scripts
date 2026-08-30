@@ -9,6 +9,7 @@ import { getNavigationRect, type NavigationRect } from "../../sharedUtils/presen
 import { sleepInWindow } from "../../sharedUtils/windowTiming";
 import { PresentationControls } from "./PresentationControls";
 import { printSlideshowToPdf } from "./printToPdf";
+import { upgradeLineSlideshowData, writeSlideshowMetadata } from "./slideshowMetadata";
 import {
   type Direction,
   type EditableLinearElement,
@@ -133,7 +134,7 @@ export class SlideshowController {
               closable: true,
             });
           }
-          void this.togglePathVisibility(hidden);
+          void this.togglePathVisibility(hidden, true);
         },
         editSlide: () => {
           if (this.setup.shouldHidePathAfterPresentation) {
@@ -216,9 +217,13 @@ export class SlideshowController {
     }
   }
 
-  private async togglePathVisibility(setToHidden: boolean): Promise<void> {
+  private async togglePathVisibility(
+    setToHidden: boolean,
+    isMetadataEdit = false,
+  ): Promise<void> {
     const pathElement = this.setup.pathElement;
-    if (!pathElement || !this.setup.originalPathProperties) {
+    const originalProps = this.setup.originalPathProperties;
+    if (!pathElement || !originalProps) {
       return;
     }
     this.ea.clear();
@@ -233,23 +238,21 @@ export class SlideshowController {
     }
     element.strokeColor = "transparent";
     element.backgroundColor = "transparent";
-    const customData = element.customData;
-    if (setToHidden && this.setup.shouldHidePathAfterPresentation) {
+    const shouldRemainHidden = setToHidden && this.setup.shouldHidePathAfterPresentation;
+    if (shouldRemainHidden) {
       element.locked = true;
-      element.customData = {
-        ...customData,
-        slideshow: {
-          originalProps: this.setup.originalPathProperties,
-          hidden: true,
-        },
-      };
-      this.setup.isHidden = true;
-    } else {
-      if (customData) {
-        delete customData.slideshow;
-      }
-      this.setup.isHidden = false;
     }
+    if (isMetadataEdit) {
+      const metadata = upgradeLineSlideshowData(
+        element.customData,
+        element.id,
+        Math.floor(element.points.length / 2),
+        originalProps,
+      );
+      metadata.hidden = shouldRemainHidden;
+      writeSlideshowMetadata(this.ea, element.id, metadata);
+    }
+    this.setup.isHidden = shouldRemainHidden;
     await this.ea.addElementsToView();
   }
 

@@ -34,9 +34,15 @@ script is emitted to `build/slideshow/slideshow.md`.
 - `SlideshowController.ts` owns presentation lifecycle, navigation, fullscreen,
   and drawing restoration.
 - `PresentationControls.ts` owns the toolbar, slide picker, fading, and dragging.
-- `presentationPath.ts` resolves line and frame paths.
+- `presentationPath.ts` resolves the currently active legacy presentation path.
+- `slideshowMetadata.ts` validates schema-v2 metadata, reads legacy line metadata,
+  reconciles stable line-slide records, and performs safe slideshow-namespace writes.
+- `SlideDeck.ts` builds the canonical ordered frame/line deck and contains pure
+  reorder/normalization helpers used by the upcoming sorter.
 - `printToPdf.ts` owns PDF page generation.
-- `types.ts` contains slideshow domain types and element guards.
+- `types.ts` contains slideshow domain types, schema contracts, and element guards.
+
+Checkpoint-1 model tests can be run with `npm run test:slideshow`.
 
 Reusable geometry, timer, and notice helpers live in `src/sharedUtils` so future
 scripts can consume them without depending on slideshow-specific modules.

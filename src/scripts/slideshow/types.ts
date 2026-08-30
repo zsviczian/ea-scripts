@@ -3,14 +3,15 @@
  * @overview Slideshow-specific contracts and element guards.
  */
 
-/* eslint-disable complexity -- Metadata validation is deliberately explicit at the untyped customData boundary. */
-
 import type { AppState } from "@zsviczian/excalidraw/types";
 
 import type { NavigationRect, SlideRect } from "../../sharedUtils/presentationGeometry";
 
 export type Direction = "fwd" | "bkwd";
 export type PresentationPathType = "line" | "frame";
+export type AnimationEffect = "appear" | "fade" | "slide" | "zoom";
+export type AnimationTrigger = "advance" | "after-delay";
+export type AnimationDirection = "left" | "right" | "up" | "down";
 
 export interface SlideshowConfig {
   transitionStepCount: number;
@@ -42,14 +43,58 @@ export interface OriginalPathProperties {
   locked: boolean;
 }
 
-export interface SlideshowPathMetadata {
+export type AnimationTarget =
+  | { type: "element"; id: string }
+  | { type: "group"; id: string };
+
+export interface AnimationStep {
+  id: string;
+  targets: AnimationTarget[];
+  effect: AnimationEffect;
+  trigger: AnimationTrigger;
+  delayMs?: number;
+  durationMs?: number;
+  direction?: AnimationDirection;
+}
+
+export interface FrameSlideshowData {
+  schemaVersion: 2;
+  kind: "frame";
+  order: number;
+  excluded?: boolean;
+  notes?: string;
+  animation?: {
+    steps: AnimationStep[];
+  };
+}
+
+export interface LineSlideMetadataRecord {
+  id: string;
+  notes?: string;
+}
+
+export interface LineSlideshowData {
+  schemaVersion: 2;
+  kind: "path";
+  hidden: boolean;
+  originalProps: OriginalPathProperties;
+  slides: LineSlideMetadataRecord[];
+}
+
+/** Legacy metadata written by Slideshow 3.x before schemaVersion 2. */
+export interface LegacyLineSlideshowData {
   originalProps: OriginalPathProperties;
   hidden: boolean;
 }
 
+export type SlideshowElementMetadata =
+  | FrameSlideshowData
+  | LineSlideshowData
+  | LegacyLineSlideshowData;
+
 export type EditableLinearElement = Mutable<ExcalidrawLinearElement> & {
   customData?: Record<string, unknown> & {
-    slideshow?: SlideshowPathMetadata;
+    slideshow?: SlideshowElementMetadata;
   };
   /**
    * Legacy Slideshow.md assigns this misspelled property during cleanup.
@@ -87,35 +132,4 @@ export function isFrameElement(
   element: ExcalidrawElement | null | undefined,
 ): element is ExcalidrawFrameElement {
   return element?.type === "frame";
-}
-
-/** Reads the legacy slideshow metadata stored on a path element. */
-export function getSlideshowPathMetadata(
-  element: ExcalidrawLinearElement,
-): SlideshowPathMetadata | null {
-  const value = (element.customData as { slideshow?: unknown } | undefined)?.slideshow;
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-
-  const metadata = value as Partial<SlideshowPathMetadata>;
-  const props = metadata.originalProps;
-  if (
-    typeof metadata.hidden !== "boolean" ||
-    !props ||
-    typeof props.strokeColor !== "string" ||
-    typeof props.backgroundColor !== "string" ||
-    typeof props.locked !== "boolean"
-  ) {
-    return null;
-  }
-
-  return {
-    hidden: metadata.hidden,
-    originalProps: {
-      strokeColor: props.strokeColor,
-      backgroundColor: props.backgroundColor,
-      locked: props.locked,
-    },
-  };
 }
