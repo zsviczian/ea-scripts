@@ -73,7 +73,7 @@ Each sorter row can own Markdown presenter notes. Use the notes icon on that row
 - Empty notes are removed rather than persisted as empty strings.
 - Each persisted notes edit is followed by an immediate drawing `forceSave(true)` so the metadata is written to disk, not merely left dirty in memory.
 
-On desktop, presenter view runs in a script-owned Obsidian popout. The presenter window shows the current slide, rendered Markdown notes, live animation progress, and the **next navigation state**. When another animation build is pending, the large next preview shows that next build on the current slide; only after the slide is fully built does it preview the next visible slide. Its Previous/Next controls and keyboard shortcuts call the same `SlideshowController` state machine as the floating presentation toolbar. Keyboard handling is scoped to the window that actually has focus, preventing one key press from being interpreted by both the drawing and presenter windows. Closing only the presenter popout leaves the presentation running; ending the presentation closes the presenter popout as part of cleanup. Presenter view is disabled on mobile because Obsidian does not support popout windows there.
+On desktop, presenter view runs in a script-owned Obsidian popout. The presenter window shows the current slide, rendered Markdown notes, live animation progress, and the **next navigation state**. When another animation is pending, the large next preview shows that next animation state on the current slide; only after the slide is fully built does it preview the next visible slide. A layout toggle can devote approximately 85% of the window width to presenter notes, leaving a compact current/next preview rail for teleprompter-style use. Its Previous/Next controls and keyboard shortcuts call the same `SlideshowController` state machine as the floating presentation toolbar. Keyboard handling is scoped to the window that actually has focus and ignores repeated/default-prevented keydown events, preventing one key press from being interpreted twice. Closing only the presenter popout leaves the presentation running; ending the presentation closes the presenter popout as part of cleanup. Presenter view is disabled on mobile because Obsidian does not support popout windows there.
 
 ## Thumbnails
 
@@ -87,9 +87,9 @@ The sidepanel also includes a small support link to [Ko-fi](https://ko-fi.com/zs
 
 ## Presentation launch, displays, and PDF behavior
 
-The sidepanel uses one compact play control. The main play icon starts from the beginning; its adjacent menu offers **From beginning**, **Continue**, **With presenter notes**, and **Current slide**. A separate fullscreen/current-window toggle chooses where the presentation runs. Windowed launches close the sidepanel before presentation so the deck has the available workspace width.
+The sidepanel uses one compact play control. Its adjacent menu offers **From beginning**, **Resume**, **With presenter notes**, and **Current slide**. The main play button remembers and repeats the most recently chosen launch action, while a small `F`, `W`, `R`, or `C` badge communicates fullscreen/window/resume/current-slide intent. The fullscreen/current-window toggle is persisted in script settings as well. Windowed launches hide the entire Excalidraw sidepanel before presentation so the deck receives the full workspace width.
 
-On desktop, when Electron exposes more than one display, the sidepanel offers separate presentation-display and presenter-display selectors. The default keeps the presentation on the current/primary display and chooses another display for presenter notes when available. Window placement is best-effort because Obsidian does not provide a script-level first-class presentation-display API; the slideshow uses the desktop Electron bridge when it is available and restores the original host-window placement on exit. This is intended to make external-monitor and Sidecar workflows practical without changing the plugin API.
+On desktop, when Electron exposes more than one display, the sidepanel offers separate presentation-display and presenter-display selectors. The default keeps the presentation on the current/primary display and chooses another display for presenter notes when available. Presenter popouts are created and placed before the host enters fullscreen, then the presentation window is moved and allowed to settle before fullscreen is requested. The Electron bridge resolves the native BrowserWindow that most closely matches each DOM window rather than assuming `getCurrentWindow()` belongs to the requested popout. Window placement remains best-effort because Obsidian does not provide a script-level first-class presentation-display API, but this sequencing is specifically intended to improve external-monitor and Sidecar workflows. The original host-window placement is restored on exit.
 
 Presentation navigation, the toolbar slide picker, and PDF export consume the canonical visible deck. Frame order and exclusions therefore match the sorter. The presentation slide picker labels entries as `Title (current/total)`. Starting from the sidepanel returns focus to the drawing leaf before keyboard handlers are installed, so arrow-key navigation is immediately active. PDF pages use the final fully built scene state: all animation targets are restored to their original opacity and no animation overlays are included.
 
@@ -103,7 +103,7 @@ Presentation navigation, the toolbar slide picker, and PDF export consume the ca
 - **Return to the current slide:** Home
 - **Go to the final slide:** End
 - **Run in a window:** Hold Alt/Option while launching the script.
-- **Continue from the last slide:** Hold Shift while launching the script. Progress is held only in
+- **Resume from the last slide:** Hold Shift while launching the script. Progress is held only in
   temporary runtime memory and is tracked independently for each concrete Excalidraw view, even
   when two views show the same file. It can be combined with Alt/Option.
 
@@ -123,7 +123,7 @@ Presentation navigation, the toolbar slide picker, and PDF export consume the ca
 - `SlideDeck.ts`: canonical ordered frame/line deck and pure point-pair ordering helpers.
 - `slideDeckMutations.ts`: undoable sorter metadata/geometry transactions.
 - `SlideshowSidepanel.ts`: drawing-aware sidepanel lifecycle and refresh orchestration.
-- `PresenterViewController.ts`: desktop popout lifecycle, current/next-build previews, Markdown notes, display placement, and presenter navigation.
+- `PresenterViewController.ts`: desktop popout lifecycle, current/next-animation previews, Markdown notes, display placement, and presenter navigation.
 - `desktopDisplays.ts`: best-effort desktop monitor discovery, target selection, window placement, and restoration.
 - `presentationState.ts`: pure authoritative presenter-state construction shared with the presentation controller.
 - `SlideSorter.ts`: rows, drag/drop, keyboard controls, frame/line inclusion, notes, and animation entry UI.
@@ -150,4 +150,4 @@ Run the full workspace gate with:
 npm run check
 ```
 
-Checkpoint 1 covers schema/deck foundations. Checkpoint 2 adds focused coverage for sorter behavior, ordering, exclusions, notes, presentation consumption, previews, launch routing, and per-view runtime state. Checkpoint 3 covers frame animation target capture/resolution, bound text and groups, conflict reconciliation, animation metadata persistence, hierarchical runtime reveal/reverse/restoration, and line-slide exclusion. Checkpoint 4 adds the desktop presenter popout, synchronized navigation/build state, Markdown notes, next-build previews, keyboard-focus isolation, multi-display target selection, and popout/window teardown handling.
+Checkpoint 1 covers schema/deck foundations. Checkpoint 2 adds focused coverage for sorter behavior, ordering, exclusions, notes, presentation consumption, previews, launch routing, and per-view runtime state. Checkpoint 3 covers frame animation target capture/resolution, bound text and groups, conflict reconciliation, animation metadata persistence, hierarchical runtime reveal/reverse/restoration, and line-slide exclusion. Checkpoint 4 adds the desktop presenter popout, synchronized navigation/build state, Markdown notes, next-animation previews, keyboard-focus isolation, multi-display target selection, and popout/window teardown handling.

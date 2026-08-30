@@ -6,6 +6,7 @@
 import type { Component, WorkspaceLeaf } from "obsidian";
 
 import { moveWindowToDisplay } from "./desktopDisplays";
+import { sleepInWindow } from "../../sharedUtils/windowTiming";
 import { SlidePreviewService } from "./SlidePreviewService";
 import type { SlideDeckSlide } from "./SlideDeck";
 import type { SlideshowTranslator } from "./lang";
@@ -75,6 +76,8 @@ export class PresenterViewController {
   private nextPreviewEl: HTMLElement | null = null;
   private notesEl: HTMLElement | null = null;
   private progressEl: HTMLElement | null = null;
+  private layoutButton: HTMLButtonElement | null = null;
+  private notesFocusedLayout = false;
   private nextSectionTitleEl: HTMLElement | null = null;
   private markdownComponent: Component | null = null;
   private lastNotesSlideId: string | null = null;
@@ -114,7 +117,8 @@ export class PresenterViewController {
     this.update(initialState);
     await app.workspace.revealLeaf(leaf);
     if (this.options.targetDisplayId !== undefined) {
-      moveWindowToDisplay(win, this.options.targetDisplayId, true);
+      const moved = moveWindowToDisplay(win, this.options.targetDisplayId, true);
+      if (moved) await sleepInWindow(win, 200);
     }
     app.workspace.setActiveLeaf(leaf, { focus: true });
   }
@@ -225,6 +229,16 @@ export class PresenterViewController {
     this.counterEl = doc.createElement("div");
     this.counterEl.className = "slideshow-presenter__counter";
     heading.appendChild(this.counterEl);
+    const headerActions = doc.createElement("div");
+    headerActions.className = "slideshow-presenter__header-actions";
+    header.appendChild(headerActions);
+    this.layoutButton = doc.createElement("button");
+    this.layoutButton.type = "button";
+    this.layoutButton.className = "slideshow-presenter__layout-toggle";
+    this.layoutButton.innerHTML = this.options.icons.notebookPen;
+    this.layoutButton.addEventListener("click", () => this.toggleNotesFocusedLayout());
+    headerActions.appendChild(this.layoutButton);
+    this.updateLayoutButton();
     const close = doc.createElement("button");
     close.type = "button";
     close.className = "slideshow-presenter__close";
@@ -232,7 +246,7 @@ export class PresenterViewController {
     close.setAttribute("aria-label", this.options.t("presenterClose"));
     close.innerHTML = this.options.icons.close;
     close.addEventListener("click", () => void this.destroy(true));
-    header.appendChild(close);
+    headerActions.appendChild(close);
 
     const grid = doc.createElement("div");
     grid.className = "slideshow-presenter__grid";
@@ -245,11 +259,6 @@ export class PresenterViewController {
     this.currentPreviewEl.className = "slideshow-presenter__preview slideshow-presenter__current-preview";
     this.currentPreviewEl.style.aspectRatio = this.previewService.getAspectRatio();
     currentColumn.appendChild(this.currentPreviewEl);
-    currentColumn.appendChild(this.sectionTitle(doc, this.options.t("presenterNotes")));
-    this.notesEl = doc.createElement("div");
-    this.notesEl.className = "slideshow-presenter__notes";
-    currentColumn.appendChild(this.notesEl);
-
     const nextColumn = doc.createElement("section");
     nextColumn.className = "slideshow-presenter__column";
     grid.appendChild(nextColumn);
@@ -263,12 +272,36 @@ export class PresenterViewController {
     this.progressEl.className = "slideshow-presenter__progress";
     nextColumn.appendChild(this.progressEl);
 
+    const notesColumn = doc.createElement("section");
+    notesColumn.className = "slideshow-presenter__column slideshow-presenter__notes-column";
+    grid.appendChild(notesColumn);
+    notesColumn.appendChild(this.sectionTitle(doc, this.options.t("presenterNotes")));
+    this.notesEl = doc.createElement("div");
+    this.notesEl.className = "slideshow-presenter__notes";
+    notesColumn.appendChild(this.notesEl);
+
     const controls = doc.createElement("div");
     controls.className = "slideshow-presenter__controls";
     root.appendChild(controls);
     controls.appendChild(this.iconButton(doc, this.options.icons.leftArrow, this.options.t("previousSlide"), this.options.callbacks.previous));
     controls.appendChild(this.iconButton(doc, this.options.icons.rightArrow, this.options.t("nextSlide"), this.options.callbacks.next));
     controls.appendChild(this.iconButton(doc, this.options.icons.finish, this.options.t("endPresentation"), this.options.callbacks.finish));
+  }
+
+  private toggleNotesFocusedLayout(): void {
+    this.notesFocusedLayout = !this.notesFocusedLayout;
+    this.root?.classList.toggle("is-notes-focused", this.notesFocusedLayout);
+    this.updateLayoutButton();
+  }
+
+  private updateLayoutButton(): void {
+    if (!this.layoutButton) return;
+    const label = this.options.t(
+      this.notesFocusedLayout ? "presenterStandardLayout" : "presenterNotesFocusLayout",
+    );
+    this.layoutButton.title = label;
+    this.layoutButton.setAttribute("aria-label", label);
+    this.layoutButton.classList.toggle("is-active", this.notesFocusedLayout);
   }
 
   private sectionTitle(doc: Document, text: string): HTMLElement {
@@ -371,6 +404,7 @@ export class PresenterViewController {
   }
 
   private readonly keydownListener = (event: KeyboardEvent): void => {
+    if (event.defaultPrevented || event.repeat) return;
     const target = event.target as HTMLElement | null;
     if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
     const action = getPresenterKeyboardAction(event.key);

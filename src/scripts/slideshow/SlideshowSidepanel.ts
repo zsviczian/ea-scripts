@@ -34,7 +34,12 @@ import {
   setLinePresentationPathHidden,
   setLineSlideExcluded,
 } from "./slideDeckMutations";
-import { openSlideshowSettingsModal } from "./slideshowSettings";
+import {
+  loadSlideshowLaunchPreferences,
+  openSlideshowSettingsModal,
+  saveSlideshowLaunchPreferences,
+  type SlideshowLaunchMode,
+} from "./slideshowSettings";
 import { SLIDESHOW_SIDEPANEL_STYLES } from "./styles";
 import { getSlideshowProgress, getSlideshowProgressType } from "./slideshowRuntime";
 import {
@@ -168,6 +173,7 @@ export class SlideshowSidepanel {
   private animationEditor: AnimationEditor | null = null;
   private animationEditingSlideId: string | null = null;
   private startFullscreen = true;
+  private lastLaunchMode: SlideshowLaunchMode = "beginning";
   private displays: SlideshowDisplay[] = [];
   private presentationDisplayId: number | null = null;
   private presenterDisplayId: number | null = null;
@@ -175,6 +181,9 @@ export class SlideshowSidepanel {
   public constructor(private readonly options: SlideshowSidepanelOptions) {
     this.ownerWindow = options.tab.contentEl.ownerDocument.defaultView ?? window;
     this.boundView = null;
+    const launchPreferences = loadSlideshowLaunchPreferences(options.ea);
+    this.startFullscreen = launchPreferences.startFullscreen;
+    this.lastLaunchMode = launchPreferences.mode;
   }
 
   /** Returns the drawing currently edited by this sidepanel. */
@@ -480,15 +489,45 @@ export class SlideshowSidepanel {
     launchGroup.className = "slideshow-sidepanel__launch-group";
     header.appendChild(launchGroup);
 
+    const availableLaunchMode = (): SlideshowLaunchMode => {
+      if (this.lastLaunchMode === "resume" && resumeSlide === null) return "beginning";
+      if (this.lastLaunchMode === "current" && selectedVisibleIndex === null) return "beginning";
+      return this.lastLaunchMode;
+    };
+    const launchModeLabel = (mode: SlideshowLaunchMode): string => {
+      switch (mode) {
+        case "resume":
+          return t("continuePresentation");
+        case "presenter":
+          return t("startWithPresenterView");
+        case "current":
+          return t("startFromCurrentSlide");
+        default:
+          return t("startFromBeginning");
+      }
+    };
+    const launchModeLetter = (mode: SlideshowLaunchMode): string => {
+      if (mode === "resume") return "R";
+      if (mode === "current") return "C";
+      return this.startFullscreen ? "F" : "W";
+    };
+
     const startButton = doc.createElement("button");
     startButton.type = "button";
     startButton.className = "slideshow-sidepanel__icon-button slideshow-sidepanel__launch-main";
-    startButton.setAttribute("aria-label", t("startFromBeginning"));
-    startButton.title = noVisibleSlides ? t("allSlidesExcluded") : t("startFromBeginning");
-    startButton.innerHTML = icons.play;
+    const updateStartButton = (): void => {
+      const mode = availableLaunchMode();
+      const modeLabel = launchModeLabel(mode);
+      const windowLabel = this.startFullscreen ? t("startFullscreen") : t("startCurrentWindow");
+      const label = `${modeLabel} · ${windowLabel}`;
+      startButton.setAttribute("aria-label", label);
+      startButton.title = noVisibleSlides ? t("allSlidesExcluded") : label;
+      startButton.innerHTML = `${icons.play}<span class="slideshow-sidepanel__launch-letter" aria-hidden="true">${launchModeLetter(mode)}</span>`;
+    };
+    updateStartButton();
     startButton.disabled = !this.resolved || noVisibleSlides;
     launchGroup.appendChild(startButton);
-    startButton.addEventListener("click", () => void this.launchPresentation("beginning"));
+    startButton.addEventListener("click", () => void this.launchPresentation(availableLaunchMode()));
 
     const launchMenuButton = doc.createElement("button");
     launchMenuButton.type = "button";
@@ -506,7 +545,7 @@ export class SlideshowSidepanel {
     launchGroup.appendChild(launchMenu);
     const addLaunchItem = (
       label: string,
-      mode: "beginning" | "continue" | "presenter" | "current",
+      mode: SlideshowLaunchMode,
       disabled = false,
     ): void => {
       const item = doc.createElement("button");
@@ -516,12 +555,15 @@ export class SlideshowSidepanel {
       item.disabled = disabled;
       item.addEventListener("click", () => {
         launchMenu.hidden = true;
+        this.lastLaunchMode = mode;
+        updateStartButton();
+        void this.persistLaunchPreferences();
         void this.launchPresentation(mode);
       });
       launchMenu.appendChild(item);
     };
     addLaunchItem(t("startFromBeginning"), "beginning");
-    addLaunchItem(t("continuePresentation"), "continue", resumeSlide === null);
+    addLaunchItem(t("continuePresentation"), "resume", resumeSlide === null);
     addLaunchItem(t("startWithPresenterView"), "presenter", ea.DEVICE.isMobile);
     addLaunchItem(t("startFromCurrentSlide"), "current", selectedVisibleIndex === null);
     launchMenuButton.addEventListener("click", () => {
@@ -548,6 +590,8 @@ export class SlideshowSidepanel {
     windowModeButton.addEventListener("click", () => {
       this.startFullscreen = !this.startFullscreen;
       updateWindowModeButton();
+      updateStartButton();
+      void this.persistLaunchPreferences();
     });
     header.appendChild(windowModeButton);
 
@@ -736,16 +780,24 @@ export class SlideshowSidepanel {
     return `${name} · ${resolution}${primary}`;
   }
 
-  private async launchPresentation(
-    mode: "beginning" | "continue" | "presenter" | "current",
-  ): Promise<void> {
+  private async persistLaunchPreferences(): Promise<void> {
+    await saveSlideshowLaunchPreferences(this.options.ea, {
+      mode: this.lastLaunchMode,
+      startFullscreen: this.startFullscreen,
+    }).catch((error) => console.error("Slideshow launch preference save failed", error));
+  }
+
+  private async launchPresentation(mode: SlideshowLaunchMode): Promise<void> {
     const view = this.boundView;
     const resolved = this.resolved;
     const presentationType = this.presentationType;
     if (!view || !resolved || !presentationType || resolved.deck.visibleSlides.length === 0) return;
 
+    this.lastLaunchMode = mode;
+    await this.persistLaunchPreferences();
+
     let initialSlide: number | undefined;
-    if (mode === "continue") {
+    if (mode === "resume") {
       const resume = getResumeSlideForPresentation(
         getSlideshowProgress(view),
         getSlideshowProgressType(view),
@@ -782,8 +834,13 @@ export class SlideshowSidepanel {
     };
 
     // A windowed presentation and the editing sidepanel compete for horizontal space.
-    // Close the sidepanel first; fullscreen presentations can leave it docked for later reuse.
-    if (!startFullscreen) this.options.tab.close();
+    // Hide the entire Excalidraw sidepanel rather than merely closing this script tab.
+    if (!startFullscreen) {
+      const sidepanelLeaf = this.options.ea.getSidepanelLeaf();
+      if (sidepanelLeaf?.view.containerEl.offsetParent !== null) {
+        this.options.ea.toggleSidepanelView();
+      }
+    }
     await this.options.startPresentation(presentationType, launchOptions);
   }
 

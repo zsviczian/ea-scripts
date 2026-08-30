@@ -139,6 +139,13 @@ export class SlideshowController {
 
     this.createControls();
     this.initializeEventListeners();
+    // Create and place presenter notes before macOS enters fullscreen/Spaces. Moving a popout
+    // after the host window is fullscreen is unreliable, especially for Sidecar displays.
+    if (this.openPresenterViewOnStart) {
+      await this.openPresenterView();
+      app.workspace.setActiveLeaf(this.hostLeaf, { focus: true });
+    }
+    await this.prepareHostWindowPlacement(this.shouldStartFullscreen);
     if (this.shouldStartFullscreen) await this.gotoFullscreen(false);
     else this.controls?.resetPosition(false);
     if (this.setup.pathType === "line") await this.togglePathVisibility(this.setup.isHidden);
@@ -151,7 +158,6 @@ export class SlideshowController {
     this.controls?.setSelectedSlide(this.slide + 1);
     this.emitPresentationState();
     this.hostView.clearDirty();
-    if (this.openPresenterViewOnStart) await this.openPresenterView();
   }
 
   /** Advances this presentation when the script is invoked again for its view. */
@@ -321,17 +327,25 @@ export class SlideshowController {
     }
   }
 
+  private async prepareHostWindowPlacement(fillWorkArea: boolean): Promise<void> {
+    if (this.hostWindowPlacement || this.presentationDisplayId === undefined) return;
+    this.hostWindowPlacement = moveWindowToDisplay(
+      this.ownerWindow,
+      this.presentationDisplayId,
+      fillWorkArea,
+      false,
+    );
+    if (!this.hostWindowPlacement) return;
+    // Electron reports the new bounds synchronously, but macOS/Sidecar window composition lags.
+    // Let the move settle before requesting fullscreen or beginning camera transitions.
+    await sleepInWindow(this.ownerWindow, 250);
+    app.workspace.setActiveLeaf(this.hostLeaf, { focus: true });
+  }
+
   private async gotoFullscreen(refocus = true): Promise<void> {
     if (this.isFullscreen) return;
     this.preventFullscreenExit = true;
-    if (!this.hostWindowPlacement && this.presentationDisplayId !== undefined) {
-      this.hostWindowPlacement = moveWindowToDisplay(
-        this.ownerWindow,
-        this.presentationDisplayId,
-        true,
-        false,
-      );
-    }
+    await this.prepareHostWindowPlacement(true);
     this.animationRuntime?.pauseTimedStep();
     if (this.ea.DEVICE.isMobile) this.ea.viewToggleFullScreen();
     else await this.contentElement.webkitRequestFullscreen();
@@ -529,6 +543,7 @@ export class SlideshowController {
   }
 
   private readonly keydownListener = (event: KeyboardEvent): void => {
+    if (event.defaultPrevented || event.repeat) return;
     if (!this.ownerDocument.hasFocus()) return;
     if (this.hostLeaf !== app.workspace.activeLeaf) return;
     if (this.hostLeaf.width === 0 && this.hostLeaf.height === 0) return;

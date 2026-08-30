@@ -1,10 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { chooseDefaultDisplayTargets, type SlideshowDisplay } from "../desktopDisplays";
+import {
+  chooseClosestNativeWindow,
+  chooseDefaultDisplayTargets,
+  type SlideshowDisplay,
+} from "../desktopDisplays";
 import { getPresenterKeyboardAction } from "../PresenterViewController";
 import { buildFrameSlideDeck, type FrameDeckSlide } from "../SlideDeck";
 import { getHiddenBuildElementIds } from "../SlidePreviewService";
 import { buildPresentationState } from "../presentationState";
+import {
+  loadSlideshowLaunchPreferences,
+  saveSlideshowLaunchPreferences,
+} from "../slideshowSettings";
 import type { AnimationStep } from "../types";
 
 function frame(
@@ -173,4 +181,39 @@ describe("slideshow checkpoint 4 presenter state", () => {
       presenterDisplayId: 2,
     });
   });
+  it("matches a popout DOM window to the closest Electron BrowserWindow", () => {
+    const main = { getBounds: () => ({ x: 0, y: 0, width: 1440, height: 900 }) };
+    const sidecar = { getBounds: () => ({ x: 1440, y: 0, width: 1024, height: 768 }) };
+
+    expect(
+      chooseClosestNativeWindow([main, sidecar], {
+        screenX: 1440,
+        screenY: 0,
+        outerWidth: 1024,
+        outerHeight: 768,
+      }),
+    ).toBe(sidecar);
+  });
+
+  it("persists the most recent launch mode and fullscreen/window preference", async () => {
+    let settings: Record<string, unknown> = { unrelated: "keep" };
+    const ea = {
+      getScriptSettings: () => settings,
+      setScriptSettings: async (next: Record<string, unknown>) => {
+        settings = next;
+      },
+    } as unknown as ExcalidrawAutomate;
+
+    expect(loadSlideshowLaunchPreferences(ea)).toEqual({
+      mode: "beginning",
+      startFullscreen: true,
+    });
+    await saveSlideshowLaunchPreferences(ea, { mode: "resume", startFullscreen: false });
+    expect(loadSlideshowLaunchPreferences(ea)).toEqual({
+      mode: "resume",
+      startFullscreen: false,
+    });
+    expect(settings.unrelated).toBe("keep");
+  });
+
 });

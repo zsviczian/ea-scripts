@@ -19,6 +19,51 @@ export const DEFAULT_SLIDESHOW_CONFIG: SlideshowConfig = {
 
 const CONFIG_KEYS = Object.keys(DEFAULT_SLIDESHOW_CONFIG) as Array<keyof SlideshowConfig>;
 
+export type SlideshowLaunchMode = "beginning" | "resume" | "presenter" | "current";
+
+export interface SlideshowLaunchPreferences {
+  mode: SlideshowLaunchMode;
+  startFullscreen: boolean;
+}
+
+const LAUNCH_MODE_SETTING = "slideshowLaunchMode";
+const START_FULLSCREEN_SETTING = "slideshowStartFullscreen";
+
+/** Reads the user's most recently selected presentation launch behavior. */
+export function loadSlideshowLaunchPreferences(
+  ea: ExcalidrawAutomate,
+): SlideshowLaunchPreferences {
+  const getSettings = (ea as ExcalidrawAutomate & {
+    getScriptSettings?: () => Record<string, unknown>;
+  }).getScriptSettings;
+  const settings = typeof getSettings === "function" ? getSettings.call(ea) : {};
+  const rawMode = settings[LAUNCH_MODE_SETTING];
+  const mode: SlideshowLaunchMode =
+    rawMode === "resume" || rawMode === "presenter" || rawMode === "current"
+      ? rawMode
+      : "beginning";
+  return {
+    mode,
+    startFullscreen:
+      typeof settings[START_FULLSCREEN_SETTING] === "boolean"
+        ? (settings[START_FULLSCREEN_SETTING] as boolean)
+        : true,
+  };
+}
+
+/** Persists launch preferences without disturbing slideshow config or unrelated script settings. */
+export async function saveSlideshowLaunchPreferences(
+  ea: ExcalidrawAutomate,
+  preferences: SlideshowLaunchPreferences,
+): Promise<void> {
+  const settings = ea.getScriptSettings();
+  await ea.setScriptSettings({
+    ...settings,
+    [LAUNCH_MODE_SETTING]: preferences.mode,
+    [START_FULLSCREEN_SETTING]: preferences.startFullscreen,
+  });
+}
+
 function finiteNumber(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isFinite(value) ? value : fallback;
 }

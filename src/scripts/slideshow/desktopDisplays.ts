@@ -40,15 +40,73 @@ interface ElectronBrowserWindowLike {
 
 interface ElectronRemoteLike {
   getCurrentWindow(): ElectronBrowserWindowLike;
+  BrowserWindow?: { getAllWindows(): ElectronBrowserWindowLike[] };
   screen?: ElectronScreenLike;
 }
 
 type ElectronRendererWindow = Window & {
   electron?: { remote?: ElectronRemoteLike };
+  require?: (moduleName: string) => unknown;
 };
 
 function getRemote(win: Window): ElectronRemoteLike | null {
-  return (win as ElectronRendererWindow).electron?.remote ?? null;
+  const rendererWindow = win as ElectronRendererWindow;
+  try {
+    const contextRemote = rendererWindow.require?.("@electron/remote") as ElectronRemoteLike | undefined;
+    if (contextRemote?.getCurrentWindow) return contextRemote;
+  } catch {
+    // Fall back to Obsidian's exposed bridge below.
+  }
+  return rendererWindow.electron?.remote ?? null;
+}
+
+interface WindowGeometryLike {
+  screenX: number;
+  screenY: number;
+  outerWidth: number;
+  outerHeight: number;
+}
+
+/** Chooses the native Electron window whose bounds most closely match one DOM window. */
+export function chooseClosestNativeWindow<T extends { getBounds(): { x: number; y: number; width: number; height: number } }>(
+  windows: readonly T[],
+  geometry: WindowGeometryLike,
+): T | null {
+  if (windows.length === 0) return null;
+  const expectedWidth = Math.max(geometry.outerWidth, 1);
+  const expectedHeight = Math.max(geometry.outerHeight, 1);
+  let best: T | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const candidate of windows) {
+    const bounds = candidate.getBounds();
+    const score =
+      Math.abs(bounds.x - geometry.screenX) * 2 +
+      Math.abs(bounds.y - geometry.screenY) * 2 +
+      Math.abs(bounds.width - expectedWidth) +
+      Math.abs(bounds.height - expectedHeight);
+    if (score < bestScore) {
+      bestScore = score;
+      best = candidate;
+    }
+  }
+  return best;
+}
+
+function getNativeWindow(win: Window): ElectronBrowserWindowLike | null {
+  const remote = getRemote(win);
+  if (!remote) return null;
+  try {
+    const candidates = remote.BrowserWindow?.getAllWindows?.() ?? [];
+    const geometry = {
+      screenX: Number.isFinite(win.screenX) ? win.screenX : 0,
+      screenY: Number.isFinite(win.screenY) ? win.screenY : 0,
+      outerWidth: Number.isFinite(win.outerWidth) ? win.outerWidth : 1,
+      outerHeight: Number.isFinite(win.outerHeight) ? win.outerHeight : 1,
+    };
+    return chooseClosestNativeWindow(candidates, geometry) ?? remote.getCurrentWindow();
+  } catch {
+    return remote.getCurrentWindow();
+  }
 }
 
 function toDisplay(
@@ -86,7 +144,8 @@ export function getCurrentDisplayId(win: Window): number | null {
     const remote = getRemote(win);
     const screen = remote?.screen;
     if (!remote || !screen) return null;
-    return screen.getDisplayMatching(remote.getCurrentWindow().getBounds()).id;
+    const nativeWindow = getNativeWindow(win);
+    return nativeWindow ? screen.getDisplayMatching(nativeWindow.getBounds()).id : null;
   } catch {
     return null;
   }
@@ -125,7 +184,8 @@ export function moveWindowToDisplay(
     if (!remote || !screen) return null;
     const target = screen.getAllDisplays().find((display) => display.id === displayId);
     if (!target) return null;
-    const nativeWindow = remote.getCurrentWindow();
+    const nativeWindow = getNativeWindow(win);
+    if (!nativeWindow) return null;
     const currentBounds = nativeWindow.getBounds();
     const currentDisplay = screen.getDisplayMatching(currentBounds);
     if (currentDisplay.id === displayId && !moveIfAlreadyOnDisplay) return null;
@@ -159,7 +219,7 @@ export function restoreWindowPlacement(
 ): void {
   if (!snapshot) return;
   try {
-    const nativeWindow = getRemote(win)?.getCurrentWindow();
+    const nativeWindow = getNativeWindow(win);
     if (!nativeWindow) return;
     if (nativeWindow.isMaximized?.()) nativeWindow.unmaximize?.();
     nativeWindow.setBounds({ ...snapshot.bounds }, false);
