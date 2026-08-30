@@ -45,8 +45,6 @@ Generated scripts start with the script's local `README.md` and a UTC build time
 
 - `slideshow`: the production Slideshow script, organized as typed path,
   controls, lifecycle, and PDF modules
-- `minimal-starter` and `color-palette-picker`: small template examples that
-  demonstrate that scripts can be built and packaged side by side
 
 ## Recommended workspace layout
 
@@ -54,13 +52,10 @@ Generated scripts start with the script's local `README.md` and a UTC build time
 ea-scripts/
 ├── src/
 │   ├── scripts/
-│   │   ├── minimal-starter/
-│   │   │   ├── main.ts
-│   │   │   └── preview.svg
-│   │   ├── color-palette-picker/
-│   │   │   ├── main.ts
-│   │   │   └── preview.svg
 │   │   ├── slideshow/
+│   │   │   ├── __tests__/checkpoint1.test.ts
+│   │   │   ├── lang/{en,de,es,fr,ru,zh-cn}.ts
+│   │   │   ├── lang/index.ts
 │   │   │   ├── main.ts
 │   │   │   ├── SlideshowController.ts
 │   │   │   ├── PresentationControls.ts
@@ -72,6 +67,7 @@ ea-scripts/
 │   │       ├── main.ts
 │   │       └── preview.svg
 │   ├── sharedUtils/
+│   │   ├── i18n.ts
 │   │   ├── notice.ts
 │   │   ├── SingleNotice.ts
 │   │   ├── presentationGeometry.ts
@@ -96,9 +92,33 @@ ea-scripts/
 | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `npm run build`                            | Discovers `src/scripts/*/main.ts` and emits `build/{slug}/{slug}.md` plus `build/{slug}/{slug}.svg`                                                                                                |
 | `npm run package`                          | Copies all built script artefacts into `release/{slug}/`                                                                                                                                           |
-| `npm run new-script -- --name "My Script"` | Creates `src/scripts/{slug}/main.ts` and `preview.svg`                                                                                                                                             |
-| `npm run check`                            | Typecheck + lint                                                                                                                                                                                   |
+| `npm run new-script -- --name "My Script"` | Creates a complete script workspace with bootstrap, runner, language catalogs, test, README, and preview                                                                                           |
+| `npm test`                                 | Runs every co-located `src/**/__tests__/**/*.test.ts` suite once with Vitest                                                                                                                       |
+| `npm run test:watch`                       | Re-runs affected Vitest suites while developing                                                                                                                                                    |
+| `npm run test:slideshow`                   | Runs only the migrated slideshow checkpoint-1 suite                                                                                                                                                |
+| `npm run check`                            | Typecheck + lint + all tests                                                                                                                                                                       |
 | `npm run sync-refs`                        | Copies the full generated skill snapshot from sibling `obsidian-excalidraw-plugin/docs/AITrainingData/excalidraw-automate/` into `.ai/excalidraw-automate/` and renames reference scripts to `.js` |
+
+## Testing convention
+
+Tests are co-located with the code they own:
+
+- script tests: `src/scripts/{slug}/__tests__/*.test.ts`
+- shared utility tests: `src/sharedUtils/__tests__/*.test.ts`
+
+This keeps each script portable as the repository grows and avoids maintaining a
+second, mirrored directory tree. Keep `main.ts` as the executable bootstrap and
+put behavior in import-safe modules; tests must not import `main.ts`, because it
+runs immediately against Obsidian globals. Vitest discovers all suites through
+one root configuration, and `npm run check` is the universal repository gate.
+
+## Localization convention
+
+Every script owns its strings under `src/scripts/{slug}/lang/`. `en.ts` is the
+typed source of truth; `de.ts`, `es.ts`, `fr.ts`, `ru.ts`, and `zh-cn.ts` contain
+language-specific catalogs. Lookup tries the exact locale, its base language,
+then English. Use named placeholders for dynamic values and obtain the runtime
+locale with `ea.obsidian.moment.locale()`.
 
 ## Publishing model
 

@@ -1,10 +1,14 @@
+import { describe, it } from "vitest";
+
+/* eslint-disable max-lines-per-function -- Migrated checkpoint cases remain intact for traceability. */
+
 import {
   buildFrameSlideDeck,
   buildLineSlideDeck,
   getNormalizedFrameOrderUpdates,
   reorderLinePointPairs,
   type FrameDeckSource,
-} from "../src/scripts/slideshow/SlideDeck";
+} from "../SlideDeck";
 import {
   readFrameSlideshowData,
   readLegacyLineSlideshowData,
@@ -13,9 +17,9 @@ import {
   reorderLineSlideRecords,
   upgradeLineSlideshowData,
   writeSlideshowMetadata,
-} from "../src/scripts/slideshow/slideshowMetadata";
-import { resolvePresentationSetup } from "../src/scripts/slideshow/presentationPath";
-import type { FrameSlideshowData, LineSlideshowData } from "../src/scripts/slideshow/types";
+} from "../slideshowMetadata";
+import { resolvePresentationSetup } from "../presentationPath";
+import type { FrameSlideshowData, LineSlideshowData } from "../types";
 
 function fail(message: string): never {
   throw new Error(message);
@@ -26,7 +30,8 @@ function assert(condition: boolean, message: string): void {
 }
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
-  if (actual !== expected) fail(`${message}: expected ${String(expected)}, received ${String(actual)}`);
+  if (actual !== expected)
+    fail(`${message}: expected ${String(expected)}, received ${String(actual)}`);
 }
 
 function assertDeepEqual(actual: unknown, expected: unknown, message: string): void {
@@ -35,11 +40,7 @@ function assertDeepEqual(actual: unknown, expected: unknown, message: string): v
   if (left !== right) fail(`${message}: expected ${right}, received ${left}`);
 }
 
-function frame(
-  id: string,
-  name: string | null,
-  slideshow?: FrameSlideshowData,
-): FrameDeckSource {
+function frame(id: string, name: string | null, slideshow?: FrameSlideshowData): FrameDeckSource {
   return {
     id,
     name,
@@ -52,8 +53,16 @@ function frame(
 }
 
 function testLegacyFrameOrdering(): void {
-  const deck = buildFrameSlideDeck([frame("c", "Charlie"), frame("a", "Alpha"), frame("b", "Bravo")]);
-  assertDeepEqual(deck.slides.map((slide) => slide.id), ["a", "b", "c"], "frames remain alphabetical without metadata");
+  const deck = buildFrameSlideDeck([
+    frame("c", "Charlie"),
+    frame("a", "Alpha"),
+    frame("b", "Bravo"),
+  ]);
+  assertDeepEqual(
+    deck.slides.map((slide) => slide.id),
+    ["a", "b", "c"],
+    "frames remain alphabetical without metadata",
+  );
   assertEqual(deck.hasExplicitFrameOrder, false, "legacy frame deck has no explicit order");
 }
 
@@ -64,8 +73,16 @@ function testExplicitFrameOrderingAndExclusions(): void {
     frame("new-b", "Beta"),
     frame("new-a", "Alpha"),
   ]);
-  assertDeepEqual(deck.slides.map((slide) => slide.id), ["first", "late", "new-a", "new-b"], "explicit frames precede unordered frames");
-  assertDeepEqual(deck.visibleSlides.map((slide) => slide.id), ["late", "new-a", "new-b"], "excluded frames are omitted only from visible slides");
+  assertDeepEqual(
+    deck.slides.map((slide) => slide.id),
+    ["first", "late", "new-a", "new-b"],
+    "explicit frames precede unordered frames",
+  );
+  assertDeepEqual(
+    deck.visibleSlides.map((slide) => slide.id),
+    ["late", "new-a", "new-b"],
+    "excluded frames are omitted only from visible slides",
+  );
 }
 
 function testFrameOrderNormalization(): void {
@@ -80,20 +97,45 @@ function testFrameOrderNormalization(): void {
     ],
   };
   const frames = [
-    frame("a", "A", { schemaVersion: 2, kind: "frame", order: 8, excluded: true, notes: "Keep", animation }),
+    frame("a", "A", {
+      schemaVersion: 2,
+      kind: "frame",
+      order: 8,
+      excluded: true,
+      notes: "Keep",
+      animation,
+    }),
     frame("b", "B", { schemaVersion: 2, kind: "frame", order: 8 }),
     frame("c", "C"),
   ];
   const updates = getNormalizedFrameOrderUpdates(frames);
-  assertDeepEqual(updates.map((update) => [update.frameId, update.data.order]), [["a", 0], ["b", 1], ["c", 2]], "gaps and duplicate frame orders normalize to 0..n-1");
+  assertDeepEqual(
+    updates.map((update) => [update.frameId, update.data.order]),
+    [
+      ["a", 0],
+      ["b", 1],
+      ["c", 2],
+    ],
+    "gaps and duplicate frame orders normalize to 0..n-1",
+  );
   assertEqual(updates[0]?.data.excluded, true, "normalization preserves exclusion");
   assertEqual(updates[0]?.data.notes, "Keep", "normalization preserves notes");
-  assertDeepEqual(updates[0]?.data.animation, animation, "normalization preserves animation metadata");
+  assertDeepEqual(
+    updates[0]?.data.animation,
+    animation,
+    "normalization preserves animation metadata",
+  );
 }
 
 function testFrameValidation(): void {
-  assertEqual(readFrameSlideshowData({ slideshow: { schemaVersion: 2, kind: "frame", order: -1 } }), null, "negative frame order is rejected");
-  const valid = readFrameSlideshowData({ slideshow: { schemaVersion: 2, kind: "frame", order: 0, notes: "   " } });
+  assertEqual(
+    readFrameSlideshowData({ slideshow: { schemaVersion: 2, kind: "frame", order: -1 } }),
+    null,
+    "negative frame order is rejected",
+  );
+  const valid = readFrameSlideshowData({
+    slideshow: { schemaVersion: 2, kind: "frame", order: 0, notes: "   " },
+  });
   assert(valid !== null, "valid frame metadata is accepted");
   assertEqual(valid?.notes, undefined, "empty notes are removed when normalized");
 }
@@ -109,8 +151,16 @@ function testLegacyLineMigration(): void {
   assert(readLegacyLineSlideshowData(customData) !== null, "legacy path metadata is readable");
   const read = readLineSlideshowData(customData, "path", 2);
   assertEqual(read?.source, "legacy", "legacy metadata is identified without being written");
-  assertDeepEqual(read?.data.slides.map((slide) => slide.id), ["slideshow-path-1", "slideshow-path-2"], "legacy migration creates deterministic slide IDs in memory");
-  assertEqual((customData.slideshow as { schemaVersion?: number }).schemaVersion, undefined, "reading legacy metadata does not mutate it");
+  assertDeepEqual(
+    read?.data.slides.map((slide) => slide.id),
+    ["slideshow-path-1", "slideshow-path-2"],
+    "legacy migration creates deterministic slide IDs in memory",
+  );
+  assertEqual(
+    (customData.slideshow as { schemaVersion?: number }).schemaVersion,
+    undefined,
+    "reading legacy metadata does not mutate it",
+  );
 }
 
 function testLineRecordReconciliation(): void {
@@ -146,7 +196,11 @@ function testLineRecordReorder(): void {
   );
   assertDeepEqual(
     records.map((record) => [record.id, record.notes]),
-    [["three", "Third"], ["one", "First"], ["two", "Second"]],
+    [
+      ["three", "Third"],
+      ["one", "First"],
+      ["two", "Second"],
+    ],
     "line IDs and notes move with the reordered point pair",
   );
 }
@@ -163,24 +217,57 @@ function testLineDeck(): void {
     id: "path",
     x: 100,
     y: 200,
-    points: [[0, 0], [20, 10], [30, 40], [50, 60]],
+    points: [
+      [0, 0],
+      [20, 10],
+      [30, 40],
+      [50, 60],
+    ],
     customData: { slideshow: path },
   });
   assertEqual(deck.slides[0]?.id, "slide-a", "line deck uses persisted stable IDs");
   assertEqual(deck.slides[0]?.notes, "Speaker note", "line deck carries presenter notes");
-  assertDeepEqual(deck.slides[1]?.rect, { x1: 130, y1: 240, x2: 150, y2: 260 }, "line deck converts relative points to scene rectangles");
+  assertDeepEqual(
+    deck.slides[1]?.rect,
+    { x1: 130, y1: 240, x2: 150, y2: 260 },
+    "line deck converts relative points to scene rectangles",
+  );
 }
 
 function testPointPairReorderNormalization(): void {
   const result = reorderLinePointPairs(
     100,
     200,
-    [[0, 0], [10, 10], [20, 20], [30, 30], [40, 40], [50, 50], [60, 60]],
+    [
+      [0, 0],
+      [10, 10],
+      [20, 20],
+      [30, 30],
+      [40, 40],
+      [50, 50],
+      [60, 60],
+    ],
     2,
     0,
   );
-  assertDeepEqual([result.x, result.y], [140, 240], "line origin moves to first point of reordered first pair");
-  assertDeepEqual(result.points, [[0, 0], [10, 10], [-40, -40], [-30, -30], [-20, -20], [-10, -10], [20, 20]], "relative points normalize while preserving absolute coordinates and odd trailing point");
+  assertDeepEqual(
+    [result.x, result.y],
+    [140, 240],
+    "line origin moves to first point of reordered first pair",
+  );
+  assertDeepEqual(
+    result.points,
+    [
+      [0, 0],
+      [10, 10],
+      [-40, -40],
+      [-30, -30],
+      [-20, -20],
+      [-10, -10],
+      [20, 20],
+    ],
+    "relative points normalize while preserving absolute coordinates and odd trailing point",
+  );
 }
 
 function testLegacyPresentationPathCompatibility(): void {
@@ -189,7 +276,10 @@ function testLegacyPresentationPathCompatibility(): void {
     type: "line",
     x: 10,
     y: 20,
-    points: [[0, 0], [100, 50]],
+    points: [
+      [0, 0],
+      [100, 50],
+    ],
     strokeColor: "transparent",
     backgroundColor: "transparent",
     locked: true,
@@ -213,8 +303,16 @@ function testLegacyPresentationPathCompatibility(): void {
   const setup = resolvePresentationSetup(fakeEa, fakeApi);
   assert(setup !== null, "legacy hidden presentation path still resolves");
   assertEqual(setup?.isHidden, true, "legacy hidden state is preserved");
-  assertEqual(setup?.originalPathProperties?.strokeColor, "#123", "legacy original path properties are preserved");
-  assertDeepEqual(setup?.slides, [{ x1: 10, y1: 20, x2: 110, y2: 70 }], "legacy path still resolves the same slide rectangle");
+  assertEqual(
+    setup?.originalPathProperties?.strokeColor,
+    "#123",
+    "legacy original path properties are preserved",
+  );
+  assertDeepEqual(
+    setup?.slides,
+    [{ x1: 10, y1: 20, x2: 110, y2: 70 }],
+    "legacy path still resolves the same slide rectangle",
+  );
 }
 
 function testUpgradeAndSafeWrite(): void {
@@ -224,14 +322,17 @@ function testUpgradeAndSafeWrite(): void {
       originalProps: { strokeColor: "#111", backgroundColor: "#222", locked: true },
     },
   };
-  const upgraded = upgradeLineSlideshowData(
-    customData,
-    "path",
-    2,
-    { strokeColor: "fallback", backgroundColor: "fallback", locked: false },
-  );
+  const upgraded = upgradeLineSlideshowData(customData, "path", 2, {
+    strokeColor: "fallback",
+    backgroundColor: "fallback",
+    locked: false,
+  });
   assertEqual(upgraded.hidden, true, "upgrade preserves hidden state");
-  assertEqual(upgraded.originalProps.strokeColor, "#111", "upgrade preserves original path properties");
+  assertEqual(
+    upgraded.originalProps.strokeColor,
+    "#111",
+    "upgrade preserves original path properties",
+  );
   let patch: Record<string, unknown | undefined> | null = null;
   const fakeEa = {
     addAppendUpdateCustomData: (_id: string, newData: Record<string, unknown | undefined>) => {
@@ -240,25 +341,23 @@ function testUpgradeAndSafeWrite(): void {
     },
   } as unknown as ExcalidrawAutomate;
   writeSlideshowMetadata(fakeEa, "path", upgraded);
-  assertDeepEqual(patch, { slideshow: upgraded }, "safe writer updates only the slideshow namespace");
+  assertDeepEqual(
+    patch,
+    { slideshow: upgraded },
+    "safe writer updates only the slideshow namespace",
+  );
 }
 
-const tests: Array<[string, () => void]> = [
-  ["legacy frame ordering", testLegacyFrameOrdering],
-  ["explicit frame ordering and exclusions", testExplicitFrameOrderingAndExclusions],
-  ["frame order normalization", testFrameOrderNormalization],
-  ["frame metadata validation", testFrameValidation],
-  ["legacy line migration", testLegacyLineMigration],
-  ["line metadata reconciliation", testLineRecordReconciliation],
-  ["line metadata reorder", testLineRecordReorder],
-  ["line deck construction", testLineDeck],
-  ["line point-pair reorder normalization", testPointPairReorderNormalization],
-  ["legacy presentation-path compatibility", testLegacyPresentationPathCompatibility],
-  ["line upgrade and safe write", testUpgradeAndSafeWrite],
-];
-
-for (const [name, run] of tests) {
-  run();
-  console.log(`PASS ${name}`);
-}
-console.log(`PASS ${tests.length} checkpoint-1 slideshow tests`);
+describe("slideshow checkpoint 1", () => {
+  it("preserves legacy frame ordering", testLegacyFrameOrdering);
+  it("supports explicit frame ordering and exclusions", testExplicitFrameOrderingAndExclusions);
+  it("normalizes frame order", testFrameOrderNormalization);
+  it("validates frame metadata", testFrameValidation);
+  it("migrates legacy line metadata in memory", testLegacyLineMigration);
+  it("reconciles line metadata", testLineRecordReconciliation);
+  it("reorders line metadata", testLineRecordReorder);
+  it("constructs a line deck", testLineDeck);
+  it("normalizes reordered line point pairs", testPointPairReorderNormalization);
+  it("retains legacy presentation-path compatibility", testLegacyPresentationPathCompatibility);
+  it("upgrades and safely writes line metadata", testUpgradeAndSafeWrite);
+});

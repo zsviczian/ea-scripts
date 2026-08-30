@@ -8,6 +8,7 @@
 /* eslint-disable complexity, max-lines-per-function -- Startup order mirrors the published Slideshow.md scheduler. */
 
 import { getSlideshowIcons } from "./icons";
+import { createSlideshowTranslator } from "./lang";
 import { resolvePresentationSetup } from "./presentationPath";
 import { SlideshowController } from "./SlideshowController";
 
@@ -25,16 +26,16 @@ export async function runSlideshow(
   scriptEa: ExcalidrawAutomate,
   scriptUtils: ScriptUtils,
 ): Promise<void> {
+  const t = createSlideshowTranslator(scriptEa.obsidian.moment.locale());
+
   if (!scriptEa.verifyMinimumPluginVersion?.("2.8.0")) {
-    new Notice(
-      "This script requires a newer version of Excalidraw. Please install the latest version.",
-    );
+    new Notice(t("requiresNewerVersion"));
     return;
   }
 
   const targetView = scriptEa.targetView;
   if (!targetView) {
-    new Notice("Open an Excalidraw drawing before starting the slideshow.");
+    new Notice(t("noActiveView"));
     return;
   }
   if (targetView.isDirty()) {
@@ -43,7 +44,7 @@ export async function runSlideshow(
 
   const api = scriptEa.getExcalidrawAPI();
   if (!api) {
-    new Notice("Could not access the active Excalidraw view.");
+    new Notice(t("cannotAccessView"));
     return;
   }
   const ctrlKey = targetView.modifierKeyDown.ctrlKey || targetView.modifierKeyDown.metaKey;

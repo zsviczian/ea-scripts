@@ -42,7 +42,18 @@ script is emitted to `build/slideshow/slideshow.md`.
 - `printToPdf.ts` owns PDF page generation.
 - `types.ts` contains slideshow domain types, schema contracts, and element guards.
 
-Checkpoint-1 model tests can be run with `npm run test:slideshow`.
+## Localization
+
+The `lang/` folder demonstrates the workspace convention with localized startup
+and host-validation messages in English, German, Spanish, French, Russian, and
+Simplified Chinese. The rest of Slideshow's UI remains unchanged for now; this is
+intentionally a small adoption sample, not a full translation.
+
+## Testing
+
+The checkpoint-1 model harness was migrated without adding new slideshow cases to
+`__tests__/checkpoint1.test.ts`. Run it with `npm run test:slideshow`, or run all
+current and future script suites with `npm test`.
 
 Reusable geometry, timer, and notice helpers live in `src/sharedUtils` so future
 scripts can consume them without depending on slideshow-specific modules.
