@@ -191,17 +191,18 @@ export function resolvePresentationSetup(
     return null;
   }
 
+  if (resolved.deck.visibleSlides.length === 0) {
+    api.setToast({
+      message:
+        t?.("allSlidesExcluded") ??
+        "All slides are excluded. Include at least one slide before presenting.",
+      duration: 4000,
+      closable: true,
+    });
+    return null;
+  }
+
   if (!resolved.pathElement) {
-    if (resolved.deck.visibleSlides.length === 0) {
-      api.setToast({
-        message:
-          t?.("allFramesExcluded") ??
-          "All frame slides are excluded. Include at least one frame before presenting.",
-        duration: 4000,
-        closable: true,
-      });
-      return null;
-    }
     if (frameRenderingOriginalState.enabled) {
       api.updateScene({
         appState: {

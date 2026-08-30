@@ -30,7 +30,7 @@ script is emitted to `build/slideshow/slideshow.md`.
 - If both frames and a remembered/selected line path are available, the sidepanel shows a presentation-type dropdown. Frame and line configurations remain independent, and **Start presentation** runs the type currently selected in the sidepanel.
 - Frames without slideshow metadata retain alphabetical ordering.
 - The first sorter mutation writes explicit normalized `order` metadata; after that, frame renames do not change presentation order.
-- Excluded frames remain visible and editable in the sorter, but are omitted from presentation and PDF output.
+- Excluded frame and line slides remain visible and editable in the sorter, but are omitted from presentation and PDF output.
 
 ## Slide sorter
 
@@ -40,11 +40,28 @@ The sidepanel shows a title, thumbnail, and controls for every slide. Titles occ
 - All platforms: use the up/down buttons or `Alt+Arrow Up/Down`.
 - `Arrow Up/Down`: move sorter focus.
 - `Enter`: zoom the drawing editor to the focused slide.
-- `Space`: toggle inclusion for frame slides.
+- `Space`: toggle inclusion for frame or line slides.
 - `N`: expand and focus presenter notes for the selected slide.
-- `A`: reserved for the Checkpoint 3 animation editor.
+- `A`: open the animation editor for a frame slide.
 
-Line slides reorder consecutive point pairs in absolute scene coordinates and normalize the line origin afterward. Stable line-slide metadata records are reordered in the same transaction so presenter notes remain attached to the correct slide. Reordering is disabled when the presentation line/arrow has an active start or end binding.
+Line slides reorder consecutive point pairs in absolute scene coordinates and normalize the line origin afterward. Stable line-slide metadata records are reordered in the same transaction so presenter notes and inclusion state remain attached to the correct slide. Reordering is disabled when the presentation line/arrow has an active start or end binding.
+
+## Appearance sequence and animation
+
+Frame slides support a build sequence stored on the frame's slideshow metadata. Open the sorter, choose a frame, and use the sparkles action (or `A`) to expand the animation editor directly beneath that slide. The frame is selected and zoomed to fit when editing starts. Select elements or groups in the drawing, then add or update steps with these effects:
+
+- **Appear:** restore the target instantly.
+- **Fade:** animate from transparent to the element's original opacity.
+- **Slide in:** animate an SVG overlay from the chosen direction.
+- **Zoom in:** animate an SVG overlay from approximately 5% scale at the target center.
+
+Steps can trigger on presenter advance or sequentially after a delay. Fade, slide, and zoom default to 350 ms; timed steps default to a 1000 ms delay. Steps can be reordered with drag/drop, buttons, or `Alt+Arrow Up/Down`, previewed, edited, and deleted.
+
+Groups are stored by group ID and resolved dynamically when the presentation runs. Bound text and its container are treated as one visual unit. Marker frames do not own their contents, so animation eligibility is determined by geometric overlap between each element rectangle and the marker-frame rectangle rather than by `frameId`. Adding a target that already belongs to another animation step moves it to the new step instead of creating conflicting builds.
+
+Presentation navigation is hierarchical: Forward reveals the next pending build before advancing the slide; Backward reverses the most recently completed build before moving to the previous slide. Previous slides entered while navigating backward start fully built, while direct jumps enter the destination in its initial build state. Timed callbacks and animation frames are invalidated on navigation and exit. Temporary scene changes use `captureUpdate: "NEVER"`; real elements are changed only through opacity, while slide/zoom motion uses disposable SVG overlays. Any interruption or presentation exit explicitly restores every animated target to its final/original visibility before cleanup.
+
+Animation editing remains frame-only because frames provide stable geometric slide boundaries. Line slides support ordering, notes, and inclusion/exclusion but not element animation.
 
 ## Presenter notes
 
@@ -54,6 +71,7 @@ Each sorter row can own Markdown presenter notes. Use the notes icon on that row
 - Line-slide notes are stored in the corresponding stable record on the presentation-path element.
 - Notes save after a short debounce and are flushed on blur, slide changes, panel close, and presentation start.
 - Empty notes are removed rather than persisted as empty strings.
+- Each persisted notes edit is followed by an immediate drawing `forceSave(true)` so the metadata is written to disk, not merely left dirty in memory.
 
 The separate presenter popout and rendered Markdown notes are planned for Checkpoint 4.
 
@@ -63,7 +81,7 @@ The separate presenter popout and rendered Markdown notes are planned for Checkp
 
 ## Presentation and PDF behavior
 
-Presentation navigation, the toolbar slide picker, and PDF export consume the canonical visible deck. Frame order and exclusions therefore match the sorter. The presentation slide picker labels entries as `Title (current/total)`. Starting from the sidepanel returns focus to the drawing leaf before keyboard handlers are installed, so arrow-key navigation is immediately active. PDF pages use the normal fully visible scene state; animation-aware final-state rendering is completed with the animation runtime in Checkpoint 3.
+Presentation navigation, the toolbar slide picker, and PDF export consume the canonical visible deck. Frame order and exclusions therefore match the sorter. The presentation slide picker labels entries as `Title (current/total)`. Starting from the sidepanel returns focus to the drawing leaf before keyboard handlers are installed, so arrow-key navigation is immediately active. PDF pages use the final fully built scene state: all animation targets are restored to their original opacity and no animation overlays are included.
 
 ## Keyboard shortcuts and modifier keys during presentation
 
@@ -85,14 +103,16 @@ Presentation navigation, the toolbar slide picker, and PDF export consume the ca
 - `run.ts`: autostart registration and later manual-invocation routing.
 - `slideshowLauncher.ts`: shared sidepanel and presentation launch orchestration.
 - `slideshowRuntime.ts`: shared temporary per-view contexts, controllers, and slide progress.
-- `SlideshowController.ts`: presentation lifecycle, navigation, fullscreen, and restoration.
+- `SlideshowController.ts`: presentation lifecycle, hierarchical slide/build navigation, fullscreen, and restoration.
+- `AnimationEditor.ts`: frame target capture, step editing/reordering, and previews.
+- `AnimationRuntime.ts`: target resolution, timed builds, transient effects, and guaranteed restoration.
 - `PresentationControls.ts`: presentation toolbar and slide picker.
 - `presentationPath.ts`: non-mutating canonical deck resolution plus presentation setup.
 - `slideshowMetadata.ts`: schema validation, migration, reconciliation, and safe metadata writes.
 - `SlideDeck.ts`: canonical ordered frame/line deck and pure point-pair ordering helpers.
 - `slideDeckMutations.ts`: undoable sorter metadata/geometry transactions.
 - `SlideshowSidepanel.ts`: drawing-aware sidepanel lifecycle and refresh orchestration.
-- `SlideSorter.ts`: rows, drag/drop, keyboard controls, inclusion, and notes UI.
+- `SlideSorter.ts`: rows, drag/drop, keyboard controls, frame/line inclusion, notes, and animation entry UI.
 - `SlidePreviewService.ts`: cached whole-scene SVG export and slide cropping.
 - `printToPdf.ts`: PDF page generation from the canonical visible slide rectangles.
 - `styles.ts`: sidepanel/sorter CSS.
@@ -100,7 +120,7 @@ Presentation navigation, the toolbar slide picker, and PDF export consume the ca
 
 ## Localization
 
-English remains the typed source of truth. Existing German, Spanish, French, Russian, and Simplified Chinese startup translations are retained; new Checkpoint 2 strings fall back to English until translated.
+English remains the typed source of truth. Existing German, Spanish, French, Russian, and Simplified Chinese translations are retained; new strings fall back to English until translated.
 
 ## Testing
 
@@ -116,7 +136,4 @@ Run the full workspace gate with:
 npm run check
 ```
 
-Checkpoint 1 covers schema/deck foundations. Checkpoint 2 adds focused coverage for frame reorder
-normalization, exclusions, frame/line notes, line point-pair metadata coupling, bound-line safety,
-canonical presentation consumption, all-excluded prevention, metadata-insensitive thumbnail
-fingerprints, element-action eligibility, and per-view temporary progress isolation.
+Checkpoint 1 covers schema/deck foundations. Checkpoint 2 adds focused coverage for sorter behavior, ordering, exclusions, notes, presentation consumption, previews, launch routing, and per-view runtime state. Checkpoint 3 covers frame animation target capture/resolution, bound text and groups, conflict reconciliation, animation metadata persistence, hierarchical runtime reveal/reverse/restoration, and line-slide exclusion.

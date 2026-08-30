@@ -36,6 +36,7 @@ import {
   chooseSidepanelPresentationType,
   clearLineSelectionForDeckSwitch,
   getSceneSelectedSlideId,
+  SlideshowSidepanel,
 } from "../SlideshowSidepanel";
 
 function frame(
@@ -159,6 +160,21 @@ describe("slideshow checkpoint 2 mutations", () => {
     await saveFrameNotes(ea, "a", "   ");
     const updatedA = elements.find((element) => element.id === "a");
     expect(readFrameSlideshowData(updatedA?.customData)?.notes).toBeUndefined();
+  });
+
+  it("normalizes the whole frame deck before a first notes-only metadata edit", async () => {
+    const elements: ExcalidrawElement[] = [
+      frame("c", "Charlie"),
+      frame("a", "Alpha"),
+      frame("b", "Bravo"),
+    ];
+    const ea = createFakeEa(elements);
+    await saveFrameNotes(ea, "b", "Note");
+    const byId = new Map(elements.map((element) => [element.id, element]));
+    expect(readFrameSlideshowData(byId.get("a")?.customData)?.order).toBe(0);
+    expect(readFrameSlideshowData(byId.get("b")?.customData)?.order).toBe(1);
+    expect(readFrameSlideshowData(byId.get("c")?.customData)?.order).toBe(2);
+    expect(readFrameSlideshowData(byId.get("b")?.customData)?.notes).toBe("Note");
   });
 
   it("persists presenter notes through the awaited EA save path", async () => {
@@ -750,6 +766,106 @@ describe("slideshow checkpoint 2 temporary progress", () => {
 });
 
 describe("slideshow checkpoint 2 presenter-note lifecycle", () => {
+  it("force-saves the drawing immediately after presenter notes are persisted", async () => {
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha")];
+    const ea = createFakeEa(elements);
+    const forceSave = vi.fn(async () => undefined);
+    const view = {
+      file: { path: "Deck.excalidraw.md" },
+      forceSave,
+    } as unknown as ScriptExcalidrawView;
+    ea.targetView = view;
+    const sidepanel = new SlideshowSidepanel({
+      ea,
+      tab: {
+        contentEl: { ownerDocument: { defaultView: {} } },
+      } as unknown as ScriptSidepanelTab,
+      t: createSlideshowTranslator("en"),
+      icons: {} as never,
+      config: {} as never,
+      startPresentation: async () => undefined,
+      onClosed: () => undefined,
+    });
+    const internals = sidepanel as unknown as {
+      boundView: ScriptExcalidrawView | null;
+      saveNotes(slide: ReturnType<typeof buildFrameSlideDeck>["slides"][number], notes: string): Promise<void>;
+    };
+    internals.boundView = view;
+
+    const slide = buildFrameSlideDeck(elements as ExcalidrawFrameElement[]).slides[0];
+    if (!slide) throw new Error("Expected one frame slide.");
+    await internals.saveNotes(slide, "Persist to disk");
+
+    expect(forceSave).toHaveBeenCalledOnce();
+    expect(forceSave).toHaveBeenCalledWith(true);
+    expect(readFrameSlideshowData(elements[0]?.customData)?.notes).toBe("Persist to disk");
+  });
+
+  it("manually inserts printable repeated keys when the host already prevented their default", () => {
+    const deck = buildFrameSlideDeck([frame("a", "Alpha")]);
+    let text = "";
+    let selection = 0;
+    const textarea = {
+      value: text,
+      selectionStart: selection,
+      selectionEnd: selection,
+      setRangeText: (value: string, start: number, end: number): void => {
+        text = `${text.slice(0, start)}${value}${text.slice(end)}`;
+        textarea.value = text;
+        selection = start + value.length;
+        textarea.selectionStart = selection;
+        textarea.selectionEnd = selection;
+      },
+    };
+    const sorter = new SlideSorter({
+      ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
+      container: {
+        ownerDocument: {
+          defaultView: {
+            clearTimeout: () => undefined,
+            setTimeout: () => 1,
+          },
+        },
+      } as unknown as HTMLElement,
+      deck,
+      previewService: {} as SlidePreviewService,
+      icons: {} as never,
+      t: createSlideshowTranslator("en"),
+      reorderEnabled: true,
+      callbacks: {
+        move: async () => undefined,
+        toggleInclusion: async () => undefined,
+        zoomToSlide: () => undefined,
+        saveNotes: async () => undefined,
+        requestAnimationEditor: () => undefined,
+        editLineSlide: async () => undefined,
+        notesBlurred: () => undefined,
+      },
+    });
+    const internals = sorter as unknown as {
+      expandedNotesSlideId: string | null;
+      notesTextarea: typeof textarea | null;
+      handleNotesKeydown(event: KeyboardEvent): void;
+    };
+    internals.expandedNotesSlideId = "a";
+    internals.notesTextarea = textarea;
+    const keydown = () =>
+      ({
+        key: "-",
+        defaultPrevented: true,
+        metaKey: false,
+        ctrlKey: false,
+        altKey: false,
+        currentTarget: textarea,
+        stopPropagation: () => undefined,
+      }) as unknown as KeyboardEvent;
+
+    internals.handleNotesKeydown(keydown());
+    internals.handleNotesKeydown(keydown());
+    internals.handleNotesKeydown(keydown());
+
+    expect(textarea.value).toBe("---");
+  });
   it("keeps the latest textarea draft when an earlier save is still in flight", async () => {
     const deck = buildFrameSlideDeck([frame("a", "Alpha")]);
     const saved: string[] = [];

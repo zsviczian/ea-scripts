@@ -8,7 +8,8 @@
 import type { EventRef, WorkspaceLeaf } from "obsidian";
 
 import { getNavigationRect } from "../../sharedUtils/presentationGeometry";
-import type { SlideDeckSlide } from "./SlideDeck";
+import { AnimationEditor } from "./AnimationEditor";
+import type { FrameDeckSlide, SlideDeckSlide } from "./SlideDeck";
 import { SlidePreviewService, getSceneVisualFingerprint } from "./SlidePreviewService";
 import { SlideSorter } from "./SlideSorter";
 import type { SlideshowTranslator } from "./lang";
@@ -25,6 +26,7 @@ import {
   saveLineNotes,
   setFrameExcluded,
   setLinePresentationPathHidden,
+  setLineSlideExcluded,
 } from "./slideDeckMutations";
 import { SLIDESHOW_SIDEPANEL_STYLES } from "./styles";
 import {
@@ -131,6 +133,8 @@ export class SlideshowSidepanel {
   private activeLeafChangeRef: EventRef | null = null;
   private boundView: ScriptExcalidrawView | null;
   private requestedSlideId: string | null = null;
+  private animationEditor: AnimationEditor | null = null;
+  private animationEditingSlideId: string | null = null;
 
   public constructor(private readonly options: SlideshowSidepanelOptions) {
     this.ownerWindow = options.tab.contentEl.ownerDocument.defaultView ?? window;
@@ -178,6 +182,9 @@ export class SlideshowSidepanel {
     tab.onWindowMigrated = (win) => {
       this.ownerWindow = win;
       this.sorter?.onWindowMigrated(win);
+      void this.animationEditor?.destroy();
+      this.animationEditor = null;
+      this.animationEditingSlideId = null;
       this.previewService?.clear();
       this.lastFingerprint = "";
       void this.refresh(true);
@@ -190,6 +197,9 @@ export class SlideshowSidepanel {
       const sorter = this.sorter;
       this.sorter = null;
       void sorter?.flushNotes().finally(() => sorter.destroy());
+      void this.animationEditor?.destroy();
+      this.animationEditor = null;
+      this.animationEditingSlideId = null;
       this.previewService?.clear();
       this.previewService = null;
       ea.onSceneChangeHook = null;
@@ -211,11 +221,21 @@ export class SlideshowSidepanel {
       },
     );
     ea.onSceneChangeHook = {
-      appStateKeys: ["selectedElementIds", "selectedLinearElement", "viewBackgroundColor", "theme"],
+      appStateKeys: [
+        "selectedElementIds",
+        "selectedGroupIds",
+        "selectedLinearElement",
+        "viewBackgroundColor",
+        "theme",
+      ],
       trackElements: true,
       triggerWhenInvisible: false,
-      callback: (_elements, appState, _files, view) => {
+      callback: (elements, appState, _files, view) => {
         if (!this.boundView || view !== this.boundView) return;
+        if (this.animationEditor) {
+          this.animationEditor.captureSelection(elements, appState);
+          return;
+        }
         const selectedSlideId = getSceneSelectedSlideId(this.resolved, appState);
         if (selectedSlideId) void this.sorter?.selectFromScene(selectedSlideId);
         this.scheduleRefresh();
@@ -245,6 +265,9 @@ export class SlideshowSidepanel {
     if (this.closed || generation !== this.bindGeneration) return;
     previousSorter?.destroy();
     if (this.sorter === previousSorter) this.sorter = null;
+    await this.animationEditor?.destroy();
+    this.animationEditor = null;
+    this.animationEditingSlideId = null;
     this.previewService?.clear();
     this.previewService = null;
     this.resolved = null;
@@ -356,13 +379,15 @@ export class SlideshowSidepanel {
     startButton.type = "button";
     header.appendChild(startButton);
     startButton.innerHTML = `${icons.play}<span>${t("startPresentation")}</span>`;
-    const noVisibleFrames =
-      this.resolved?.deck.kind === "frame" && this.resolved.deck.visibleSlides.length === 0;
-    startButton.disabled = !this.resolved || noVisibleFrames;
-    if (noVisibleFrames) startButton.title = t("allFramesExcluded");
+    const noVisibleSlides = Boolean(this.resolved && this.resolved.deck.visibleSlides.length === 0);
+    startButton.disabled = !this.resolved || noVisibleSlides;
+    if (noVisibleSlides) startButton.title = t("allSlidesExcluded");
     startButton.addEventListener("click", () => {
       void (async () => {
         await this.sorter?.flushNotes();
+        await this.animationEditor?.destroy();
+        this.animationEditor = null;
+        this.animationEditingSlideId = null;
         if (this.presentationType) {
           await this.options.startPresentation(this.presentationType);
         }
@@ -378,6 +403,9 @@ export class SlideshowSidepanel {
     refreshButton.addEventListener("click", () => {
       void (async () => {
         await this.sorter?.flushNotes();
+        await this.animationEditor?.destroy();
+        this.animationEditor = null;
+        this.animationEditingSlideId = null;
         this.previewService?.clear();
         this.lastFingerprint = "";
         await this.refresh(true);
@@ -425,7 +453,7 @@ export class SlideshowSidepanel {
     summary.textContent =
       deck.kind === "frame"
         ? `${t("frameDeck")} · ${t("visibleSlideCount", { visible: deck.visibleSlides.length, total: deck.slides.length })}`
-        : `${t("lineDeck")} · ${t("slideCount", { count: deck.slides.length })}`;
+        : `${t("lineDeck")} · ${t("visibleSlideCount", { visible: deck.visibleSlides.length, total: deck.slides.length })}`;
 
     if (
       deck.kind === "path" &&
@@ -458,7 +486,6 @@ export class SlideshowSidepanel {
       warning.textContent = t("lineAnimationUnsupported");
       root.appendChild(warning);
     }
-
     const sorterContainer = doc.createElement("div");
     sorterContainer.className = "slideshow-sorter";
     sorterContainer.setAttribute("role", "list");
@@ -471,12 +498,14 @@ export class SlideshowSidepanel {
       icons,
       t,
       reorderEnabled,
+      animationEditingSlideId: this.animationEditingSlideId,
       callbacks: {
         move: (fromIndex, toIndex) => this.moveSlide(fromIndex, toIndex),
         toggleInclusion: (slide, excluded) => this.toggleInclusion(slide, excluded),
         zoomToSlide: (slide) => this.zoomToSlide(slide),
         saveNotes: (slide, notes) => this.saveNotes(slide, notes),
         requestAnimationEditor: (slide) => this.requestAnimationEditor(slide),
+        mountAnimationEditor: (slide, container) => this.mountAnimationEditor(slide, container),
         editLineSlide: (slide, index) => this.editLineSlide(slide, index),
         notesBlurred: () => {
           if (this.pendingRefresh) this.scheduleRefresh();
@@ -490,6 +519,9 @@ export class SlideshowSidepanel {
   private async selectPresentationType(presentationType: PresentationPathType): Promise<void> {
     if (!this.choices[presentationType] || presentationType === this.presentationType) return;
     await this.sorter?.flushNotes();
+    await this.animationEditor?.destroy();
+    this.animationEditor = null;
+    this.animationEditingSlideId = null;
     const view = this.boundView;
     if (!view) return;
     this.presentationTypeByDrawing.set(view.file.path, presentationType);
@@ -541,10 +573,13 @@ export class SlideshowSidepanel {
   }
 
   private async toggleInclusion(slide: SlideDeckSlide, excluded: boolean): Promise<void> {
-    if (slide.kind !== "frame") return;
     try {
       await this.sorter?.flushNotes();
-      await setFrameExcluded(this.options.ea, slide.frameId, excluded);
+      if (slide.kind === "frame") {
+        await setFrameExcluded(this.options.ea, slide.frameId, excluded);
+      } else {
+        await setLineSlideExcluded(this.options.ea, slide.pathId, slide.id, excluded);
+      }
       this.lastFingerprint = "";
       await this.refresh(true);
     } catch (error) {
@@ -563,6 +598,7 @@ export class SlideshowSidepanel {
       } else {
         await saveLineNotes(this.options.ea, slide.pathId, slide.id, notes);
       }
+      await view.forceSave(true);
       this.lastFingerprint = "";
       if (!this.sorter?.isEditingNotes() && this.pendingRefresh) this.scheduleRefresh();
     } catch (error) {
@@ -642,10 +678,69 @@ export class SlideshowSidepanel {
   }
 
   private requestAnimationEditor(slide: SlideDeckSlide): void {
-    new Notice(
-      slide.kind === "frame"
-        ? this.options.t("animationCheckpoint3")
-        : this.options.t("lineAnimationUnsupported"),
-    );
+    if (slide.kind !== "frame") {
+      new Notice(this.options.t("lineAnimationUnsupported"));
+      return;
+    }
+    void (async () => {
+      await this.sorter?.flushNotes();
+      if (this.animationEditingSlideId === slide.id) {
+        await this.closeAnimationEditor();
+        return;
+      }
+      await this.animationEditor?.destroy();
+      this.animationEditor = null;
+      this.animationEditingSlideId = slide.id;
+      const expandedNotesId = this.sorter?.getExpandedNotesSlideId() ?? null;
+      this.sorter?.destroy();
+      this.sorter = null;
+      const sorter = this.render(slide.id, expandedNotesId);
+      this.selectAndZoomAnimationFrame(slide);
+      sorter?.scrollToSlide(slide.id, false);
+    })();
+  }
+
+  private mountAnimationEditor(slide: FrameDeckSlide, container: HTMLElement): void {
+    const api = this.options.ea.getExcalidrawAPI();
+    const view = this.boundView;
+    if (!api || !view || slide.id !== this.animationEditingSlideId) return;
+    const previousEditor = this.animationEditor;
+    this.animationEditor = null;
+    void previousEditor?.destroy();
+    this.animationEditor = new AnimationEditor({
+      ea: this.options.ea,
+      api,
+      hostView: view,
+      container,
+      slide,
+      icons: this.options.icons,
+      t: this.options.t,
+      onClose: () => void this.closeAnimationEditor(),
+      onSaved: () => {
+        this.lastFingerprint = "";
+      },
+    });
+    this.animationEditor.render();
+    this.animationEditor.captureSelection(this.options.ea.getViewElements(), api.getAppState());
+  }
+
+  private selectAndZoomAnimationFrame(slide: FrameDeckSlide): void {
+    const view = this.boundView;
+    if (!view) return;
+    const frame = this.options.ea.getViewElements().find((element) => element.id === slide.frameId);
+    if (!frame) return;
+    this.options.ea.selectElementsInView([frame]);
+    this.zoomToSlide(slide);
+    app.workspace.setActiveLeaf(view.leaf, { focus: true });
+  }
+
+  private async closeAnimationEditor(): Promise<void> {
+    await this.animationEditor?.destroy();
+    this.animationEditor = null;
+    const slideId = this.animationEditingSlideId;
+    this.animationEditingSlideId = null;
+    this.lastFingerprint = "";
+    await this.refresh(true);
+    if (slideId) this.sorter?.scrollToSlide(slideId);
   }
 }

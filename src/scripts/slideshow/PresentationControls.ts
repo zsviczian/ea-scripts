@@ -287,13 +287,13 @@ export class PresentationControls {
   }
 
   /** Repositions the panel and restores the current slide's viewport. */
-  public resetPosition(): void {
+  public resetPosition(refocus = true): void {
     if (!this.panel) return;
     const top = this.options.contentElement.innerHeight;
     const left = this.options.contentElement.innerWidth / 2;
     this.panel.style.top = `calc(${top}px - var(--default-button-size)*2)`;
     this.panel.style.left = `calc(${left}px - var(--default-button-size)*5)`;
-    this.options.callbacks.refocus();
+    if (refocus) this.options.callbacks.refocus();
   }
 
   /** Updates the slide picker to the one-based slide number. */

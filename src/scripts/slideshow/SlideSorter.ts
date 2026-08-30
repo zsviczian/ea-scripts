@@ -5,7 +5,7 @@
 
 /* eslint-disable max-lines-per-function -- Row construction is intentionally kept together for accessible control ordering. */
 
-import type { SlideDeck, SlideDeckSlide } from "./SlideDeck";
+import type { FrameDeckSlide, SlideDeck, SlideDeckSlide } from "./SlideDeck";
 import type { SlidePreviewService } from "./SlidePreviewService";
 import type { SlideshowTranslator } from "./lang";
 import type { SlideshowIcons } from "./types";
@@ -16,6 +16,7 @@ export interface SlideSorterCallbacks {
   zoomToSlide(slide: SlideDeckSlide): void;
   saveNotes(slide: SlideDeckSlide, notes: string): Promise<void>;
   requestAnimationEditor(slide: SlideDeckSlide): void;
+  mountAnimationEditor?(slide: FrameDeckSlide, container: HTMLElement): void;
   editLineSlide(slide: SlideDeckSlide, index: number): Promise<void>;
   notesBlurred(): void;
 }
@@ -28,6 +29,7 @@ export interface SlideSorterOptions {
   icons: SlideshowIcons;
   t: SlideshowTranslator;
   reorderEnabled: boolean;
+  animationEditingSlideId?: string | null;
   callbacks: SlideSorterCallbacks;
 }
 
@@ -268,21 +270,27 @@ export class SlideSorter {
         },
       ),
     );
+    actions.appendChild(
+      this.createIconButton(
+        doc,
+        slide.excluded ? icons.eyeOff : icons.eye,
+        slide.excluded ? t("includeSlide") : t("excludeSlide"),
+        false,
+        () => void this.options.callbacks.toggleInclusion(slide, !slide.excluded),
+      ),
+    );
     if (slide.kind === "frame") {
-      actions.appendChild(
-        this.createIconButton(
-          doc,
-          slide.excluded ? icons.eyeOff : icons.eye,
-          slide.excluded ? t("includeSlide") : t("excludeSlide"),
-          false,
-          () => void this.options.callbacks.toggleInclusion(slide, !slide.excluded),
-        ),
+      const animationExpanded = this.options.animationEditingSlideId === slide.id;
+      const animationButton = this.createIconButton(
+        doc,
+        icons.sparkles,
+        t("editAnimations"),
+        false,
+        () => this.options.callbacks.requestAnimationEditor(slide),
       );
-      actions.appendChild(
-        this.createIconButton(doc, icons.sparkles, t("editAnimations"), true, () =>
-          this.options.callbacks.requestAnimationEditor(slide),
-        ),
-      );
+      animationButton.classList.toggle("is-active", animationExpanded);
+      animationButton.setAttribute("aria-expanded", String(animationExpanded));
+      actions.appendChild(animationButton);
     } else {
       actions.appendChild(
         this.createIconButton(doc, icons.edit, t("editLineSlide"), false, () => {
@@ -304,6 +312,12 @@ export class SlideSorter {
     content.appendChild(actions);
 
     if (notesExpanded) this.renderNotesEditor(slide, row);
+    if (slide.kind === "frame" && this.options.animationEditingSlideId === slide.id) {
+      const animationHost = doc.createElement("div");
+      animationHost.className = "slideshow-sorter__animation";
+      row.appendChild(animationHost);
+      this.options.callbacks.mountAnimationEditor?.(slide, animationHost);
+    }
     return row;
   }
 
@@ -334,10 +348,8 @@ export class SlideSorter {
         break;
       case " ":
       case "Spacebar":
-        if (slide.kind === "frame") {
-          event.preventDefault();
-          void this.options.callbacks.toggleInclusion(slide, !slide.excluded);
-        }
+        event.preventDefault();
+        void this.options.callbacks.toggleInclusion(slide, !slide.excluded);
         break;
       case "n":
       case "N":
@@ -390,7 +402,7 @@ export class SlideSorter {
     textarea.placeholder = this.options.t("notesPlaceholder");
     textarea.value = slide.notes ?? "";
     textarea.addEventListener("click", (event) => event.stopPropagation());
-    textarea.addEventListener("keydown", (event) => event.stopPropagation());
+    textarea.addEventListener("keydown", (event) => this.handleNotesKeydown(event));
     textarea.addEventListener("input", () => this.scheduleNotesSave());
     textarea.addEventListener("blur", () => {
       void this.flushNotes().finally(() => this.options.callbacks.notesBlurred());
@@ -402,6 +414,25 @@ export class SlideSorter {
     notes.appendChild(hint);
     row.appendChild(notes);
     this.notesTextarea = textarea;
+  }
+
+  private handleNotesKeydown(event: KeyboardEvent): void {
+    event.stopPropagation();
+    if (
+      !event.defaultPrevented ||
+      event.key.length !== 1 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.altKey
+    ) {
+      return;
+    }
+    const textarea = event.currentTarget as HTMLTextAreaElement | null;
+    if (!textarea) return;
+    const start = textarea.selectionStart ?? textarea.value.length;
+    const end = textarea.selectionEnd ?? start;
+    textarea.setRangeText(event.key, start, end, "end");
+    this.scheduleNotesSave();
   }
 
   private scheduleNotesSave(): void {

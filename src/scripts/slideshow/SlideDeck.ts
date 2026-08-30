@@ -170,12 +170,17 @@ export function buildLineSlideDeck(path: LineDeckSource): SlideDeck {
         x2: path.x + pointB[0],
         y2: path.y + pointB[1],
       },
-      excluded: false,
+      excluded: record?.excluded ?? false,
     };
     if (record?.notes !== undefined) slide.notes = record.notes;
     slides.push(slide);
   }
-  return { kind: "path", slides, visibleSlides: [...slides], hasExplicitFrameOrder: false };
+  return {
+    kind: "path",
+    slides,
+    visibleSlides: slides.filter((slide) => !slide.excluded),
+    hasExplicitFrameOrder: false,
+  };
 }
 
 function movePair<T>(pairs: T[], fromPairIndex: number, toPairIndex: number): void {

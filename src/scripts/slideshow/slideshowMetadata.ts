@@ -178,9 +178,13 @@ function readLineSlideRecord(value: unknown): LineSlideMetadataRecord | null {
   if (value.notes !== undefined && typeof value.notes !== "string") {
     return null;
   }
+  if (value.excluded !== undefined && typeof value.excluded !== "boolean") {
+    return null;
+  }
   const result: LineSlideMetadataRecord = { id: value.id };
   const notes = normalizeNotes(value.notes);
   if (notes !== undefined) result.notes = notes;
+  if (value.excluded !== undefined) result.excluded = value.excluded;
   return result;
 }
 
@@ -220,7 +224,7 @@ function makeGeneratedLineSlideId(pathId: string, index: number, usedIds: Set<st
 
 /**
  * Reconciles path slide records with the current point-pair count without writing.
- * Existing records keep their IDs/notes by index; missing/duplicate IDs are regenerated.
+ * Existing records keep their IDs, notes, and inclusion state by index; missing/duplicate IDs are regenerated.
  */
 export function reconcileLineSlideRecords(
   records: readonly LineSlideMetadataRecord[],
@@ -240,12 +244,13 @@ export function reconcileLineSlideRecords(
     const record: LineSlideMetadataRecord = { id };
     const notes = normalizeNotes(existing?.notes);
     if (notes !== undefined) record.notes = notes;
+    if (existing?.excluded === true) record.excluded = true;
     result.push(record);
   }
   return result;
 }
 
-/** Reorders reconciled line-slide records so IDs and notes travel with their point pair. */
+/** Reorders reconciled line-slide records so IDs, notes, and inclusion state travel with their point pair. */
 export function reorderLineSlideRecords(
   records: readonly LineSlideMetadataRecord[],
   pairCount: number,

@@ -36,5 +36,27 @@ export const SLIDESHOW_SIDEPANEL_STYLES = `
 .slideshow-notes textarea { width:100%; min-height:100px; resize:vertical; box-sizing:border-box; }
 .slideshow-notes__hint, .slideshow-warning, .slideshow-empty { color:var(--text-muted); font-size:var(--font-ui-smaller); }
 .slideshow-warning { padding:8px; border-radius:6px; background:var(--background-secondary); }
+.slideshow-sorter__animation { border-top:1px solid var(--background-modifier-border); padding-top:8px; }
+.slideshow-animation-editor { display:flex; flex-direction:column; gap:10px; min-height:0; overflow:visible; padding-bottom:4px; }
+.slideshow-animation-editor__header { display:flex; justify-content:space-between; gap:8px; align-items:center; }
+.slideshow-animation-editor__header button { width:30px; height:30px; padding:5px; display:flex; align-items:center; justify-content:center; }
+.slideshow-animation-editor__hint, .slideshow-animation-editor__muted { color:var(--text-muted); font-size:var(--font-ui-smaller); }
+.slideshow-animation-editor__section { display:flex; flex-direction:column; gap:6px; }
+.slideshow-animation-editor__section-title { font-weight:600; font-size:var(--font-ui-small); }
+.slideshow-animation-editor__targets { display:flex; flex-wrap:wrap; gap:5px; }
+.slideshow-animation-editor__target { display:inline-flex; align-items:center; gap:4px; padding:3px 4px 3px 7px; border-radius:999px; background:var(--background-secondary); font-size:var(--font-ui-smaller); }
+.slideshow-animation-editor__target button { width:22px; height:22px; min-width:22px; padding:3px; display:flex; align-items:center; justify-content:center; }
+.slideshow-animation-editor__form { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; }
+.slideshow-animation-editor__form label { display:flex; flex-direction:column; gap:4px; color:var(--text-muted); font-size:var(--font-ui-smaller); }
+.slideshow-animation-editor__form select, .slideshow-animation-editor__form input { width:100%; box-sizing:border-box; }
+.slideshow-animation-editor__form-actions { display:flex; flex-wrap:wrap; gap:6px; }
+.slideshow-animation-editor__form-actions button { display:inline-flex; align-items:center; gap:5px; }
+.slideshow-animation-editor__steps { display:flex; flex-direction:column; gap:6px; }
+.slideshow-animation-editor__step { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:6px; padding:6px; border:1px solid var(--background-modifier-border); border-radius:6px; background:var(--background-primary); }
+.slideshow-animation-editor__step.is-selected { border-color:var(--interactive-accent); box-shadow:0 0 0 1px var(--interactive-accent); }
+.slideshow-animation-editor__step-summary { min-width:0; text-align:left; white-space:normal; }
+.slideshow-animation-editor__step-actions { display:grid; grid-template-columns:repeat(2,28px); gap:3px; }
+.slideshow-animation-editor__step-actions button { width:28px; height:28px; padding:4px; display:flex; align-items:center; justify-content:center; }
+
 .slideshow-sidepanel button svg { width:16px; height:16px; }
 `;

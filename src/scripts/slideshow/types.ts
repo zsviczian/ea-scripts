@@ -85,6 +85,7 @@ export interface FrameSlideshowData {
 export interface LineSlideMetadataRecord {
   id: string;
   notes?: string;
+  excluded?: boolean;
 }
 
 export interface LineSlideshowData {

@@ -11,7 +11,12 @@ import {
   withNormalizedFrameOrder,
   writeSlideshowMetadata,
 } from "./slideshowMetadata";
-import { isFrameElement, isLinearPathElement, type EditableLinearElement } from "./types";
+import {
+  isFrameElement,
+  isLinearPathElement,
+  type AnimationStep,
+  type EditableLinearElement,
+} from "./types";
 
 function normalizeNotes(notes: string): string | undefined {
   return notes.trim().length === 0 ? undefined : notes;
@@ -99,21 +104,32 @@ export async function saveFrameNotes(
   notes: string,
 ): Promise<void> {
   const frames = getFrameElements(ea);
-  const deck = buildFrameSlideDeck(frames);
-  const order = deck.slides.findIndex((slide) => slide.id === frameId);
-  const source = frames.find((frame) => frame.id === frameId);
-  if (!source || order < 0) {
+  const orderedIds = buildFrameSlideDeck(frames).slides.map((slide) => slide.id);
+  if (!orderedIds.includes(frameId)) {
     throw new Error("The selected frame slide no longer exists.");
   }
-
-  ea.clear();
-  ea.copyViewElementsToEAforEditing([source]);
-  const data = withNormalizedFrameOrder(source.customData, order);
   const normalized = normalizeNotes(notes);
-  if (normalized === undefined) delete data.notes;
-  else data.notes = normalized;
-  writeSlideshowMetadata(ea, frameId, data);
-  await commitWorkbench(ea);
+  await writeFrameMetadataSet(ea, orderedIds, frameId, (data) => {
+    if (normalized === undefined) delete data.notes;
+    else data.notes = normalized;
+  });
+}
+
+/** Saves a frame animation sequence while preserving order, notes, and exclusion metadata. */
+export async function saveFrameAnimationSteps(
+  ea: ExcalidrawAutomate,
+  frameId: string,
+  steps: readonly AnimationStep[],
+): Promise<void> {
+  const frames = getFrameElements(ea);
+  const orderedIds = buildFrameSlideDeck(frames).slides.map((slide) => slide.id);
+  if (!orderedIds.includes(frameId)) {
+    throw new Error("The selected frame slide no longer exists.");
+  }
+  await writeFrameMetadataSet(ea, orderedIds, frameId, (data) => {
+    if (steps.length === 0) delete data.animation;
+    else data.animation = { steps: steps.map((step) => structuredClone(step)) };
+  });
 }
 
 /** Returns whether line-slide reordering must be disabled for endpoint binding safety. */
@@ -213,6 +229,35 @@ export async function saveLineNotes(
   const normalized = normalizeNotes(notes);
   if (normalized === undefined) delete record.notes;
   else record.notes = normalized;
+  writeSlideshowMetadata(ea, element.id, metadata);
+  await commitWorkbench(ea);
+}
+
+/** Toggles one line slide's inclusion using its stable metadata record. */
+export async function setLineSlideExcluded(
+  ea: ExcalidrawAutomate,
+  pathId: string,
+  slideId: string,
+  excluded: boolean,
+): Promise<void> {
+  const source = ea.getViewElements().find((element) => element.id === pathId);
+  if (!isLinearPathElement(source)) throw new Error("The presentation path no longer exists.");
+
+  ea.clear();
+  ea.copyViewElementsToEAforEditing([source]);
+  const element = ea.getElement<ExcalidrawLinearElement>(pathId) as EditableLinearElement | null;
+  if (!element) throw new Error("The presentation path could not be edited.");
+
+  const metadata = upgradeLineSlideshowData(
+    element.customData,
+    element.id,
+    Math.floor(element.points.length / 2),
+    fallbackPathProperties(source),
+  );
+  const record = metadata.slides.find((candidate) => candidate.id === slideId);
+  if (!record) throw new Error("The selected line slide no longer exists.");
+  if (excluded) record.excluded = true;
+  else delete record.excluded;
   writeSlideshowMetadata(ea, element.id, metadata);
   await commitWorkbench(ea);
 }

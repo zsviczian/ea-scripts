@@ -1,12 +1,14 @@
 /**
  * @file SlideshowController.ts
- * @overview Coordinates slideshow lifecycle, navigation, fullscreen, and cleanup.
+ * @overview Coordinates slideshow lifecycle, hierarchical build navigation, fullscreen, and cleanup.
  */
 
-/* eslint-disable complexity, max-lines-per-function -- Presentation transitions are intentionally kept in legacy execution order. */
+/* eslint-disable complexity, max-lines-per-function -- Presentation restoration intentionally remains explicit and auditable. */
 
 import { getNavigationRect, type NavigationRect } from "../../sharedUtils/presentationGeometry";
 import { sleepInWindow } from "../../sharedUtils/windowTiming";
+import { AnimationRuntime } from "./AnimationRuntime";
+import type { FrameDeckSlide, LineDeckSlide } from "./SlideDeck";
 import { PresentationControls } from "./PresentationControls";
 import type { SlideshowTranslator } from "./lang";
 import { printSlideshowToPdf } from "./printToPdf";
@@ -37,7 +39,7 @@ export interface SlideshowControllerOptions {
   switchPresentation(presentationType: "line" | "frame", startFullscreen: boolean): Promise<void>;
 }
 
-/** Owns one active presentation from setup through restoration. */
+/** Owns one active presentation from setup through guaranteed animation/path restoration. */
 export class SlideshowController {
   private readonly ea: ExcalidrawAutomate;
   private readonly api: ExcalidrawAPI;
@@ -60,6 +62,7 @@ export class SlideshowController {
     presentationType: "line" | "frame",
     startFullscreen: boolean,
   ) => Promise<void>;
+  private readonly animationRuntime: AnimationRuntime | null;
   private controls: PresentationControls | null = null;
   private slide: number;
   private isFullscreen = false;
@@ -68,6 +71,7 @@ export class SlideshowController {
   private busy = false;
   private preventFullscreenExit = true;
   private exitPromise: Promise<void> | null = null;
+  private navigationQueue: Promise<void> = Promise.resolve();
 
   public constructor(options: SlideshowControllerOptions) {
     this.ea = options.ea;
@@ -92,44 +96,48 @@ export class SlideshowController {
     this.onExit = options.onExit;
     this.openSidepanel = options.openSidepanel;
     this.switchPresentation = options.switchPresentation;
+    this.animationRuntime =
+      options.setup.pathType === "frame"
+        ? new AnimationRuntime({ ea: options.ea, api: options.api, hostView: options.hostView })
+        : null;
   }
 
   /** Starts the presentation and installs all temporary UI and handlers. */
   public async start(): Promise<void> {
     this.ea.setView(this.hostView);
-    if (this.statusBarElement) {
-      this.statusBarElement.style.display = "none";
-    }
+    if (this.statusBarElement) this.statusBarElement.style.display = "none";
     this.ea.setViewModeEnabled(true);
     const helpButton = this.hostView.excalidrawContainer?.querySelector(
       ".ToolIcon__icon.help-icon",
     );
-    if (helpButton) {
-      (helpButton as HTMLElement).style.display = "none";
-    }
+    if (helpButton) (helpButton as HTMLElement).style.display = "none";
     const zoomButton = this.hostView.excalidrawContainer?.querySelector(
       ".Stack.Stack_vertical.zoom-actions",
     );
-    if (zoomButton) {
-      (zoomButton as HTMLElement).style.display = "none";
-    }
+    if (zoomButton) (zoomButton as HTMLElement).style.display = "none";
 
     this.createControls();
     this.initializeEventListeners();
-    if (this.shouldStartFullscreen) {
-      await this.gotoFullscreen();
-    } else {
-      this.controls?.resetPosition();
-    }
-    if (this.setup.pathType === "line") {
-      await this.togglePathVisibility(this.setup.isHidden);
-    }
+    if (this.shouldStartFullscreen) await this.gotoFullscreen(false);
+    else this.controls?.resetPosition(false);
+    if (this.setup.pathType === "line") await this.togglePathVisibility(this.setup.isHidden);
+    await this.enterSlide(this.slide, false);
+    this.controls?.setSelectedSlide(this.slide + 1);
     this.hostView.clearDirty();
   }
 
   /** Advances this presentation when the script is invoked again for its view. */
   public advance(): void {
-    void this.navigate("fwd");
+    this.enqueueNavigation(() => this.navigate("fwd"));
+  }
+
+  private enqueueNavigation(task: () => Promise<void>): void {
+    const queued = this.navigationQueue.then(async () => {
+      if (!this.exitPromise) await task();
+    });
+    this.navigationQueue = queued.catch((error) => {
+      console.error("Slideshow navigation failed", error);
+    });
   }
 
   private createControls(): void {
@@ -152,12 +160,13 @@ export class SlideshowController {
       icons: this.icons,
       t: this.t,
       callbacks: {
-        previous: () => void this.navigate("bkwd"),
-        next: () => void this.navigate("fwd"),
-        navigateToSlide: (slideNumber) => this.navigateToSlide(slideNumber),
+        previous: () => this.enqueueNavigation(() => this.navigate("bkwd")),
+        next: () => this.enqueueNavigation(() => this.navigate("fwd")),
+        navigateToSlide: (slideNumber) =>
+          this.enqueueNavigation(() => this.jumpToSlide(slideNumber - 1)),
         toggleLaser: () => this.toggleLaser(),
-        refocus: () => this.refocus(),
-        toggleFullscreen: () => void this.toggleFullscreen(),
+        refocus: () => this.enqueueNavigation(() => this.jumpToSlide(this.slide)),
+        toggleFullscreen: () => this.enqueueNavigation(() => this.toggleFullscreen()),
         togglePathVisibility: (hidden) => {
           this.shouldSaveAfterPresentation = true;
           if (hidden) {
@@ -170,9 +179,7 @@ export class SlideshowController {
           void this.togglePathVisibility(hidden, true);
         },
         editSlide: () => {
-          if (this.setup.shouldHidePathAfterPresentation) {
-            void this.togglePathVisibility(false);
-          }
+          if (this.setup.shouldHidePathAfterPresentation) void this.togglePathVisibility(false);
           void this.exit(true);
         },
         switchPresentation: () => void this.switchToAlternatePresentation(),
@@ -200,11 +207,6 @@ export class SlideshowController {
     return this.isLaserOn;
   }
 
-  private refocus(): void {
-    this.slide -= 1;
-    void this.navigate("fwd");
-  }
-
   private async waitForExcalidrawResize(): Promise<void> {
     await sleepInWindow(this.ownerWindow, 100);
     const deltaWidth = (): number =>
@@ -217,57 +219,47 @@ export class SlideshowController {
     }
   }
 
-  private async gotoFullscreen(): Promise<void> {
-    if (this.isFullscreen) {
-      return;
-    }
+  private async gotoFullscreen(refocus = true): Promise<void> {
+    if (this.isFullscreen) return;
     this.preventFullscreenExit = true;
-    if (this.ea.DEVICE.isMobile) {
-      this.ea.viewToggleFullScreen();
-    } else {
-      await this.contentElement.webkitRequestFullscreen();
-    }
+    this.animationRuntime?.pauseTimedStep();
+    if (this.ea.DEVICE.isMobile) this.ea.viewToggleFullScreen();
+    else await this.contentElement.webkitRequestFullscreen();
     await this.waitForExcalidrawResize();
     const layerUiWrapper = this.contentElement.querySelector(".layer-ui__wrapper");
-    if (!layerUiWrapper?.hasClass("excalidraw-hidden")) {
-      layerUiWrapper?.addClass("excalidraw-hidden");
-    }
+    if (!layerUiWrapper?.hasClass("excalidraw-hidden")) layerUiWrapper?.addClass("excalidraw-hidden");
     this.controls?.setFullscreen(true);
-    this.controls?.resetPosition();
+    this.controls?.resetPosition(false);
     this.isFullscreen = true;
+    if (refocus) await this.scrollToSlide(this.slide, 1);
+    this.animationRuntime?.startPendingTimer();
   }
 
-  private async exitFullscreen(): Promise<void> {
-    if (!this.isFullscreen) {
-      return;
-    }
+  private async exitFullscreen(refocus = true): Promise<void> {
+    if (!this.isFullscreen) return;
     this.preventFullscreenExit = true;
+    this.animationRuntime?.pauseTimedStep();
     if (!this.ea.DEVICE.isMobile && this.ownerDocument.fullscreenElement) {
       await this.ownerDocument.exitFullscreen();
     }
-    if (this.ea.DEVICE.isMobile) {
-      this.ea.viewToggleFullScreen();
-    }
+    if (this.ea.DEVICE.isMobile) this.ea.viewToggleFullScreen();
     this.controls?.setFullscreen(false);
     await this.waitForExcalidrawResize();
-    this.controls?.resetPosition();
+    this.controls?.resetPosition(false);
     this.isFullscreen = false;
+    if (refocus) await this.scrollToSlide(this.slide, 1);
+    this.animationRuntime?.startPendingTimer();
   }
 
   private async toggleFullscreen(): Promise<void> {
-    if (this.isFullscreen) {
-      await this.exitFullscreen();
-    } else {
-      await this.gotoFullscreen();
-    }
+    if (this.isFullscreen) await this.exitFullscreen();
+    else await this.gotoFullscreen();
   }
 
   private async togglePathVisibility(setToHidden: boolean, isMetadataEdit = false): Promise<void> {
     const pathElement = this.setup.pathElement;
     const originalProps = this.setup.originalPathProperties;
-    if (!pathElement || !originalProps) {
-      return;
-    }
+    if (!pathElement || !originalProps) return;
     this.ea.setView(this.hostView);
     this.ea.clear();
     this.ea.copyViewElementsToEAforEditing(
@@ -276,15 +268,11 @@ export class SlideshowController {
     const element = this.ea.getElement<ExcalidrawLinearElement>(
       pathElement.id,
     ) as EditableLinearElement | null;
-    if (!element) {
-      return;
-    }
+    if (!element) return;
     element.strokeColor = "transparent";
     element.backgroundColor = "transparent";
     const shouldRemainHidden = setToHidden && this.setup.shouldHidePathAfterPresentation;
-    if (shouldRemainHidden) {
-      element.locked = true;
-    }
+    if (shouldRemainHidden) element.locked = true;
     if (isMetadataEdit) {
       const metadata = upgradeLineSlideshowData(
         element.customData,
@@ -296,21 +284,18 @@ export class SlideshowController {
       writeSlideshowMetadata(this.ea, element.id, metadata);
     }
     this.setup.isHidden = shouldRemainHidden;
-    await this.ea.addElementsToView();
+    await this.ea.addElementsToView(
+      false,
+      isMetadataEdit,
+      false,
+      false,
+      isMetadataEdit ? "IMMEDIATELY" : "NEVER",
+    );
   }
 
-  private getNextSlideRect(forward: boolean): NavigationRect {
-    this.slide = forward
-      ? this.slide < this.setup.slides.length - 1
-        ? this.slide + 1
-        : 0
-      : this.slide <= 0
-        ? this.setup.slides.length - 1
-        : this.slide - 1;
-    const targetSlide = this.setup.slides[this.slide];
-    if (!targetSlide) {
-      throw new Error(this.t("invalidSlide"));
-    }
+  private getSlideNavigationRect(index: number): NavigationRect {
+    const targetSlide = this.setup.slides[index];
+    if (!targetSlide) throw new Error(this.t("invalidSlide"));
     const appState = this.api.getAppState();
     return getNavigationRect(
       targetSlide,
@@ -319,111 +304,135 @@ export class SlideshowController {
     );
   }
 
+  private async scrollToSlide(index: number, steps = this.config.transitionStepCount): Promise<void> {
+    await this.scrollToRect(this.getSlideNavigationRect(index), steps);
+  }
+
+  private async enterSlide(index: number, fullyBuilt: boolean): Promise<void> {
+    const deckSlide = this.setup.deck.visibleSlides[index];
+    if (deckSlide?.kind === "frame" && this.animationRuntime) {
+      await this.animationRuntime.enterSlide(deckSlide as FrameDeckSlide, fullyBuilt, false);
+    } else {
+      await this.animationRuntime?.leaveSlide();
+    }
+    await this.scrollToSlide(index);
+    this.animationRuntime?.startPendingTimer();
+  }
+
   private async scrollToRect(
     rect: NavigationRect,
     steps = this.config.transitionStepCount,
   ): Promise<void> {
     const startTimer = Date.now();
     let watchdog = 0;
-    while (this.busy && watchdog++ < 15) {
-      await sleepInWindow(this.ownerWindow, 100);
-    }
-    if (this.busy && watchdog >= 15) {
-      return;
-    }
+    while (this.busy && watchdog++ < 15) await sleepInWindow(this.ownerWindow, 100);
+    if (this.busy && watchdog >= 15) return;
     this.busy = true;
-    this.api.updateScene({ appState: { shouldCacheIgnoreZoom: true } });
-    const { scrollX, scrollY, zoom } = this.api.getAppState();
-    const zoomStep = (zoom.value - rect.nextZoom) / steps;
-    const xStep = (rect.left + scrollX) / steps;
-    const yStep = (rect.top + scrollY) / steps;
-    let index = 1;
-    while (index <= steps) {
-      this.api.updateScene({
-        appState: {
-          scrollX: scrollX - xStep * index,
-          scrollY: scrollY - yStep * index,
-          zoom: {
-            value: (zoom.value - zoomStep * index) as typeof zoom.value,
+    try {
+      this.api.updateScene({ appState: { shouldCacheIgnoreZoom: true } });
+      const { scrollX, scrollY, zoom } = this.api.getAppState();
+      const zoomStep = (zoom.value - rect.nextZoom) / steps;
+      const xStep = (rect.left + scrollX) / steps;
+      const yStep = (rect.top + scrollY) / steps;
+      let index = 1;
+      while (index <= steps) {
+        this.api.updateScene({
+          appState: {
+            scrollX: scrollX - xStep * index,
+            scrollY: scrollY - yStep * index,
+            zoom: { value: (zoom.value - zoomStep * index) as typeof zoom.value },
           },
-        },
-      });
-      const elapsed = Date.now() - startTimer;
-      if (elapsed > this.config.transitionDelay) {
-        index = index < steps ? steps : steps + 1;
-      } else {
-        const timeProgress = elapsed / this.config.transitionDelay;
-        index = Math.min(Math.round(steps * timeProgress), steps);
-        await sleepInWindow(this.ownerWindow, this.config.frameSleep);
+        });
+        const elapsed = Date.now() - startTimer;
+        if (elapsed > this.config.transitionDelay) index = index < steps ? steps : steps + 1;
+        else {
+          const timeProgress = elapsed / this.config.transitionDelay;
+          index = Math.min(Math.round(steps * timeProgress), steps);
+          await sleepInWindow(this.ownerWindow, this.config.frameSleep);
+        }
       }
+      this.api.updateScene({ appState: { shouldCacheIgnoreZoom: false } });
+      if (this.isLaserOn) this.api.setActiveTool({ type: "laser" });
+    } finally {
+      this.busy = false;
     }
-    this.api.updateScene({ appState: { shouldCacheIgnoreZoom: false } });
-    if (this.isLaserOn) {
-      this.api.setActiveTool({ type: "laser" });
-    }
-    this.busy = false;
   }
 
   private async navigate(direction: Direction): Promise<void> {
-    const forward = direction === "fwd";
-    const previousSlide = this.slide;
-    const nextRect = this.getNextSlideRect(forward);
-    const shouldExit = forward ? this.slide <= previousSlide : this.slide >= previousSlide;
-    if (shouldExit) {
+    if (direction === "fwd") {
+      if (await this.animationRuntime?.advance()) return;
+      if (this.slide >= this.setup.slides.length - 1) {
+        void this.exit();
+        return;
+      }
+      await this.animationRuntime?.leaveSlide();
+      this.slide += 1;
+      this.controls?.setSelectedSlide(this.slide + 1);
+      await this.enterSlide(this.slide, false);
+      this.onSlideChange(this.slide);
+      return;
+    }
+
+    if (await this.animationRuntime?.reverse()) return;
+    if (this.slide <= 0) {
       void this.exit();
       return;
     }
+    await this.animationRuntime?.leaveSlide();
+    this.slide -= 1;
     this.controls?.setSelectedSlide(this.slide + 1);
-    await this.scrollToRect(nextRect);
+    await this.enterSlide(this.slide, true);
     this.onSlideChange(this.slide);
   }
 
-  private navigateToSlide(slideNumber: number): void {
-    const boundedSlide = Math.min(Math.max(slideNumber, 1), this.setup.slides.length);
-    this.slide = boundedSlide - 2;
-    void this.navigate("fwd");
+  private async jumpToSlide(index: number): Promise<void> {
+    const bounded = Math.min(Math.max(index, 0), this.setup.slides.length - 1);
+    await this.animationRuntime?.leaveSlide();
+    this.slide = bounded;
+    this.controls?.setSelectedSlide(this.slide + 1);
+    await this.enterSlide(this.slide, false);
+    this.onSlideChange(this.slide);
   }
 
   private readonly keydownListener = (event: KeyboardEvent): void => {
-    if (this.hostLeaf !== app.workspace.activeLeaf) {
-      return;
-    }
-    if (this.hostLeaf.width === 0 && this.hostLeaf.height === 0) {
-      return;
-    }
-    event.preventDefault();
+    if (this.hostLeaf !== app.workspace.activeLeaf) return;
+    if (this.hostLeaf.width === 0 && this.hostLeaf.height === 0) return;
     switch (event.key) {
       case "Backspace":
       case "Escape":
+        event.preventDefault();
         void this.exit();
         break;
       case "Space":
       case "ArrowRight":
       case "ArrowDown":
-        void this.navigate("fwd");
+        event.preventDefault();
+        this.enqueueNavigation(() => this.navigate("fwd"));
         break;
       case "ArrowLeft":
       case "ArrowUp":
-        void this.navigate("bkwd");
+        event.preventDefault();
+        this.enqueueNavigation(() => this.navigate("bkwd"));
         break;
       case "End":
-        this.slide = this.setup.slides.length - 2;
-        void this.navigate("fwd");
+        event.preventDefault();
+        this.enqueueNavigation(() => this.jumpToSlide(this.setup.slides.length - 1));
         break;
       case "Home":
-        this.refocus();
+        event.preventDefault();
+        this.enqueueNavigation(() => this.jumpToSlide(this.slide));
         break;
       case "e":
-        if (this.setup.pathType !== "line") {
-          return;
-        }
+        if (this.setup.pathType !== "line") return;
+        event.preventDefault();
         void (async () => {
           await this.togglePathVisibility(false);
           await this.exit(true);
         })();
         break;
       case "f":
-        void this.toggleFullscreen();
+        event.preventDefault();
+        this.enqueueNavigation(() => this.toggleFullscreen());
         break;
     }
   };
@@ -470,91 +479,91 @@ export class SlideshowController {
   }
 
   private async performExit(openForEdit: boolean): Promise<void> {
-    // Other scripts can replace EA's target view while this presentation is active.
     this.ea.setView(this.hostView);
-    this.isLaserOn = false;
-    if (this.statusBarElement) {
-      this.statusBarElement.style.display = "inherit";
-    }
-    if (openForEdit) {
-      this.hostView.preventAutozoom();
-    }
-    await this.exitFullscreen();
-    await this.waitForExcalidrawResize();
-    this.ea.setViewModeEnabled(false);
+    try {
+      await this.animationRuntime?.finishActiveSlide();
+      this.isLaserOn = false;
+      if (this.statusBarElement) this.statusBarElement.style.display = "inherit";
+      if (openForEdit) this.hostView.preventAutozoom();
+      await this.exitFullscreen(false);
+      await this.waitForExcalidrawResize();
+      this.ea.setViewModeEnabled(false);
 
-    if (
-      this.setup.pathType === "line" &&
-      this.setup.pathElement &&
-      this.setup.originalPathProperties
-    ) {
-      this.ea.clear();
-      this.ea.copyViewElementsToEAforEditing(
-        this.ea.getViewElements().filter((element) => element.id === this.setup.pathElement?.id),
-      );
-      const element = this.ea.getElement<ExcalidrawLinearElement>(
-        this.setup.pathElement.id,
-      ) as EditableLinearElement | null;
-      if (element) {
-        if (!this.setup.isHidden) {
-          element.strokeColor = this.setup.originalPathProperties.strokeColor;
-          element.backgroundColor = this.setup.originalPathProperties.backgroundColor;
-          element.locked = openForEdit ? false : this.setup.originalPathProperties.locked;
-        }
-        await this.ea.addElementsToView();
-        if (!this.setup.isHidden) {
-          this.ea.selectElementsInView([element]);
-        }
-        if (openForEdit) {
-          // The legacy script passes the decremented numeric value as a boolean.
-          let nextRect = this.getNextSlideRect(Boolean(--this.slide));
-          const offsetWidth =
-            ((nextRect.right - nextRect.left) * (1 - this.config.editZoomOut)) / 2;
-          const offsetHeight =
-            ((nextRect.bottom - nextRect.top) * (1 - this.config.editZoomOut)) / 2;
-          nextRect = {
-            left: nextRect.left - offsetWidth,
-            right: nextRect.right + offsetWidth,
-            top: nextRect.top - offsetHeight,
-            bottom: nextRect.bottom + offsetHeight,
-            nextZoom: Math.max(nextRect.nextZoom * this.config.editZoomOut, 0.1),
-          };
-          await this.scrollToRect(nextRect, 1);
-          this.api.startLineEditor(element, [this.slide * 2, this.slide * 2 + 1]);
-        }
-      }
-    } else if (this.setup.frameRenderingOriginalState.enabled) {
-      this.api.updateScene({
-        appState: {
-          frameRendering: {
-            ...this.setup.frameRenderingOriginalState,
-            enabled: true,
+      if (
+        this.setup.pathType === "line" &&
+        this.setup.pathElement &&
+        this.setup.originalPathProperties
+      ) {
+        await this.restoreLinePathForExit(openForEdit);
+      } else if (this.setup.frameRenderingOriginalState.enabled) {
+        this.api.updateScene({
+          appState: {
+            frameRendering: { ...this.setup.frameRenderingOriginalState, enabled: true },
           },
-        },
+        });
+      }
+    } finally {
+      await this.animationRuntime?.finishActiveSlide().catch(() => undefined);
+      this.removeEventListeners();
+      this.ownerWindow.setTimeout(() => {
+        this.hostView.refreshCanvasOffset();
+        this.api.setActiveTool({ type: "selection" });
       });
+      if (!this.shouldSaveAfterPresentation) this.hostView.clearDirty();
     }
+  }
 
-    this.removeEventListeners();
-    this.ownerWindow.setTimeout(() => {
-      this.hostView.refreshCanvasOffset();
-      this.api.setActiveTool({ type: "selection" });
-    });
-    if (!this.shouldSaveAfterPresentation) {
-      this.hostView.clearDirty();
+  private async restoreLinePathForExit(openForEdit: boolean): Promise<void> {
+    const pathElement = this.setup.pathElement;
+    const originalProps = this.setup.originalPathProperties;
+    if (!pathElement || !originalProps) return;
+    this.ea.clear();
+    this.ea.copyViewElementsToEAforEditing(
+      this.ea.getViewElements().filter((element) => element.id === pathElement.id),
+    );
+    const element = this.ea.getElement<ExcalidrawLinearElement>(
+      pathElement.id,
+    ) as EditableLinearElement | null;
+    if (!element) return;
+    if (!this.setup.isHidden) {
+      element.strokeColor = originalProps.strokeColor;
+      element.backgroundColor = originalProps.backgroundColor;
+      element.locked = openForEdit ? false : originalProps.locked;
     }
+    await this.ea.addElementsToView(false, false, false, false, "NEVER");
+    if (!this.setup.isHidden) this.ea.selectElementsInView([element]);
+    if (!openForEdit) return;
+
+    const deckSlide = this.setup.deck.visibleSlides[this.slide] as LineDeckSlide | undefined;
+    const pairIndex = deckSlide?.kind === "path" ? deckSlide.pairIndex : this.slide;
+    let nextRect = this.getSlideNavigationRect(this.slide);
+    const offsetWidth = ((nextRect.right - nextRect.left) * (1 - this.config.editZoomOut)) / 2;
+    const offsetHeight = ((nextRect.bottom - nextRect.top) * (1 - this.config.editZoomOut)) / 2;
+    nextRect = {
+      left: nextRect.left - offsetWidth,
+      right: nextRect.right + offsetWidth,
+      top: nextRect.top - offsetHeight,
+      bottom: nextRect.bottom + offsetHeight,
+      nextZoom: Math.max(nextRect.nextZoom * this.config.editZoomOut, 0.1),
+    };
+    await this.scrollToRect(nextRect, 1);
+    this.api.startLineEditor(element, [pairIndex * 2, pairIndex * 2 + 1]);
   }
 
   private async print(event: MouseEvent): Promise<void> {
     this.ea.setView(this.hostView);
-    await printSlideshowToPdf({
-      event,
-      ea: this.ea,
-      api: this.api,
-      slides: this.setup.slides,
-      printSlideWidth: this.config.printSlideWidth,
-      printSlideHeight: this.config.printSlideHeight,
-      maxZoom: this.config.maxZoom,
-      t: this.t,
-    });
+    const task = () =>
+      printSlideshowToPdf({
+        event,
+        ea: this.ea,
+        api: this.api,
+        slides: this.setup.slides,
+        printSlideWidth: this.config.printSlideWidth,
+        printSlideHeight: this.config.printSlideHeight,
+        maxZoom: this.config.maxZoom,
+        t: this.t,
+      });
+    if (this.animationRuntime) await this.animationRuntime.withFinalState(task);
+    else await task();
   }
 }

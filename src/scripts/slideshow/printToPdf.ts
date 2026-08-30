@@ -99,8 +99,8 @@ export async function printSlideshowToPdf(options: PrintSlideshowOptions): Promi
   }
 
   notice.setMessage(t("creatingPdf"));
-  void ea
-    .createPDF({
+  try {
+    await ea.createPDF({
       SVG: pages,
       scale: { fitToPage: true },
       pageProps: {
@@ -110,6 +110,8 @@ export async function printSlideshowToPdf(options: PrintSlideshowOptions): Promi
         alignment: "center",
       },
       filename: `${ea.targetView?.file.basename ?? "slideshow"}.pdf`,
-    })
-    .then(() => notice.hide());
+    });
+  } finally {
+    notice.hide();
+  }
 }
