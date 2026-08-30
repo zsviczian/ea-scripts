@@ -49,9 +49,24 @@ function findRememberedPath(elements: readonly ExcalidrawElement[]): ExcalidrawL
   );
 }
 
-function resolveFrameDeck(
-  frames: NamedFrame[],
-): ResolvedSlideDeck | null {
+function findHiddenRememberedPath(
+  elements: readonly ExcalidrawElement[],
+): ExcalidrawLinearElement | null {
+  return (
+    (elements.find((element) => {
+      if (!isLinearPathElement(element)) return false;
+      return (
+        readLineSlideshowData(
+          element.customData,
+          element.id,
+          Math.floor(element.points.length / 2),
+        )?.data.hidden === true
+      );
+    }) as ExcalidrawLinearElement | undefined) ?? null
+  );
+}
+
+function resolveFrameDeck(frames: NamedFrame[]): ResolvedSlideDeck | null {
   if (frames.length === 0) return null;
   return {
     deck: buildFrameSlideDeck(frames),
@@ -74,21 +89,54 @@ function resolveLineDeck(
   };
 }
 
+/** Returns whether a presentation path is persistently hidden by slideshow metadata. */
+export function isPresentationPathHidden(path: ExcalidrawLinearElement): boolean {
+  return (
+    readLineSlideshowData(path.customData, path.id, Math.floor(path.points.length / 2))?.data.hidden ??
+    false
+  );
+}
+
+/** Returns whether a canonical deck can actually be started. */
+export function isResolvedDeckPresentable(resolved: ResolvedSlideDeck | null): boolean {
+  return Boolean(resolved && resolved.deck.visibleSlides.length > 0);
+}
+
+/** Returns the other runnable presentation type when both frame and line decks are available. */
+export function getAlternatePresentationType(
+  choices: SlideDeckChoices,
+  currentType: PresentationPathType,
+): PresentationPathType | null {
+  const alternate = currentType === "frame" ? "line" : "frame";
+  return isResolvedDeckPresentable(choices[alternate]) ? alternate : null;
+}
+
 /** Resolves every slideshow type currently available in the drawing without mutating app state. */
 export function resolveSlideDeckChoices(ea: ExcalidrawAutomate): SlideDeckChoices {
   const viewElements = ea.getViewElements();
   const frames = getNamedFrames(ea, viewElements);
   const selectedElement = ea.getViewSelectedElement();
+  const selectedPath = isLinearPathElement(selectedElement) ? selectedElement : null;
   const rememberedPath = findRememberedPath(viewElements);
+  const hiddenRememberedPath = findHiddenRememberedPath(viewElements);
   const frame = resolveFrameDeck(frames);
   const line = resolveLineDeck(selectedElement, rememberedPath, frames);
-  return {
-    frame,
-    line,
-    // Preserve legacy behavior when no explicit sidepanel choice is supplied: a selected or
-    // remembered presentation path takes precedence over frames.
-    defaultType: line ? "line" : frame ? "frame" : null,
-  };
+
+  // Default launch precedence deliberately distinguishes a visible remembered path from a hidden
+  // one. A selected line is an explicit request for a line presentation. A hidden remembered path
+  // remains the legacy implicit line presentation. A visible, unselected remembered path yields to
+  // frames when frames exist, allowing both configurations to coexist in the same drawing.
+  const defaultType: PresentationPathType | null = selectedPath
+    ? "line"
+    : hiddenRememberedPath
+      ? "line"
+      : frame
+        ? "frame"
+        : line
+          ? "line"
+          : null;
+
+  return { frame, line, defaultType };
 }
 
 /** Resolves the current canonical deck without mutating app state or showing notices. */
@@ -116,7 +164,8 @@ export function resolvePresentationSetup(
   if (
     presentationType !== "frame" &&
     rememberedPath &&
-    isLinearPathElement(selectedElement)
+    isLinearPathElement(selectedElement) &&
+    selectedElement.id !== rememberedPath.id
   ) {
     api.setToast({
       message:
@@ -144,7 +193,9 @@ export function resolvePresentationSetup(
   if (!resolved.pathElement) {
     if (resolved.deck.visibleSlides.length === 0) {
       api.setToast({
-        message: t?.("allFramesExcluded") ?? "All frame slides are excluded. Include at least one frame before presenting.",
+        message:
+          t?.("allFramesExcluded") ??
+          "All frame slides are excluded. Include at least one frame before presenting.",
         duration: 4000,
         closable: true,
       });

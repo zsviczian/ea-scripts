@@ -13,11 +13,13 @@ import type { SlideDeckSlide } from "./SlideDeck";
 const PRESENTATION_WIDTH = 1920;
 const PRESENTATION_HEIGHT = 1080;
 const EXPORT_PADDING = 10;
+const FALLBACK_BACKGROUND = "#ffffff";
 
 interface CachedSceneSvg {
   fingerprint: string;
   svgMarkup: string;
   sceneBounds: SceneBounds;
+  backgroundColor: string;
 }
 
 /** Calculates sorter crops using the fixed HD presentation viewport. */
@@ -52,6 +54,12 @@ export function getSceneVisualFingerprint(elements: readonly ExcalidrawElement[]
   return JSON.stringify(elements.map(cloneWithoutMetadata));
 }
 
+function readBackgroundColor(appState: ReturnType<ExcalidrawAPI["getAppState"]>): string {
+  return typeof appState.viewBackgroundColor === "string"
+    ? appState.viewBackgroundColor
+    : FALLBACK_BACKGROUND;
+}
+
 /** Owns the expensive whole-scene SVG export used by slide thumbnails. */
 export class SlidePreviewService {
   private cached: CachedSceneSvg | null = null;
@@ -64,6 +72,11 @@ export class SlidePreviewService {
     private readonly maxZoom: number,
   ) {}
 
+  /** Returns the drawing background used behind crop areas outside exported scene bounds. */
+  public getBackgroundColor(): string {
+    return readBackgroundColor(this.api.getAppState());
+  }
+
   /** Drops all cached SVG state, for example after switching drawings. */
   public clear(): void {
     this.cached = null;
@@ -72,13 +85,14 @@ export class SlidePreviewService {
   }
 
   private async ensureSceneSvg(elements: readonly ExcalidrawElement[]): Promise<CachedSceneSvg> {
-    const fingerprint = getSceneVisualFingerprint(elements);
+    const appState = this.api.getAppState();
+    const backgroundColor = readBackgroundColor(appState);
+    const fingerprint = `${appState.theme}|${backgroundColor}|${getSceneVisualFingerprint(elements)}`;
     if (this.cached?.fingerprint === fingerprint) return this.cached;
     if (this.pending && this.pendingFingerprint === fingerprint) return this.pending;
 
     this.pendingFingerprint = fingerprint;
     this.pending = (async () => {
-      const appState = this.api.getAppState();
       const bounds = this.ea.getBoundingBox(elements);
       // Frame outlines are intentionally omitted from thumbnails. createViewSVG can therefore
       // calculate a tighter export origin from visible child content than getBoundingBox() does.
@@ -115,6 +129,7 @@ export class SlidePreviewService {
         fingerprint,
         svgMarkup: svg.outerHTML,
         sceneBounds: { topX: bounds.topX, topY: bounds.topY },
+        backgroundColor,
       };
       this.cached = cached;
       return cached;
@@ -154,6 +169,7 @@ export class SlidePreviewService {
     clone.setAttribute("height", "100%");
     clone.setAttribute("preserveAspectRatio", "xMidYMid meet");
     clone.setAttribute("aria-hidden", "true");
+    clone.style.backgroundColor = cached.backgroundColor;
     return clone;
   }
 }

@@ -25,12 +25,14 @@ export interface SlideshowControllerOptions {
   hostView: ScriptExcalidrawView;
   statusBarElement: HTMLElement | null;
   setup: PresentationSetup;
+  alternatePresentationType: "line" | "frame" | null;
   config: SlideshowConfig;
   icons: SlideshowIcons;
   initialSlide: number;
   startFullscreen: boolean;
   t: SlideshowTranslator;
   openSidepanel(): Promise<void>;
+  switchPresentation(presentationType: "line" | "frame", startFullscreen: boolean): Promise<void>;
 }
 
 /** Owns one active presentation from setup through restoration. */
@@ -43,12 +45,17 @@ export class SlideshowController {
   private readonly ownerDocument: Document;
   private readonly contentElement: ScriptContentElement;
   private readonly setup: PresentationSetup;
+  private readonly alternatePresentationType: "line" | "frame" | null;
   private readonly config: SlideshowConfig;
   private readonly icons: SlideshowIcons;
   private readonly statusBarElement: HTMLElement | null;
   private readonly shouldStartFullscreen: boolean;
   private readonly t: SlideshowTranslator;
   private readonly openSidepanel: () => Promise<void>;
+  private readonly switchPresentation: (
+    presentationType: "line" | "frame",
+    startFullscreen: boolean,
+  ) => Promise<void>;
   private controls: PresentationControls | null = null;
   private slide: number;
   private isFullscreen = false;
@@ -66,6 +73,7 @@ export class SlideshowController {
     this.ownerDocument = options.hostView.ownerDocument;
     this.contentElement = options.hostView.contentEl;
     this.setup = options.setup;
+    this.alternatePresentationType = options.alternatePresentationType;
     this.config = options.config;
     this.icons = options.icons;
     this.statusBarElement = options.statusBarElement;
@@ -73,6 +81,7 @@ export class SlideshowController {
     this.shouldStartFullscreen = options.startFullscreen;
     this.t = options.t;
     this.openSidepanel = options.openSidepanel;
+    this.switchPresentation = options.switchPresentation;
   }
 
   /** Starts the presentation and installs all temporary UI and handlers. */
@@ -115,6 +124,7 @@ export class SlideshowController {
       contentElement: this.contentElement,
       slidesCount: this.setup.slides.length,
       pathType: this.setup.pathType,
+      alternatePresentationType: this.alternatePresentationType,
       slideTitles: this.setup.slideTitles,
       shouldOfferPathVisibility: this.setup.shouldHidePathAfterPresentation,
       isPathHidden: this.setup.isHidden,
@@ -149,6 +159,7 @@ export class SlideshowController {
           }
           void this.exit(true);
         },
+        switchPresentation: () => void this.switchToAlternatePresentation(),
         openSidepanel: () => {
           void this.exit().then(() => this.openSidepanel());
         },
@@ -157,6 +168,14 @@ export class SlideshowController {
       },
     });
     this.controls.create();
+  }
+
+  private async switchToAlternatePresentation(): Promise<void> {
+    if (!this.alternatePresentationType) return;
+    const startFullscreen = this.isFullscreen;
+    const alternate = this.alternatePresentationType;
+    await this.exit();
+    await this.switchPresentation(alternate, startFullscreen);
   }
 
   private toggleLaser(): boolean {

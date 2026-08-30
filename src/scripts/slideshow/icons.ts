@@ -38,5 +38,6 @@ export function getSlideshowIcons(ea: ExcalidrawAutomate): SlideshowIcons {
     trash: iconMarkup(ea, "lucide-trash-2"),
     close: iconMarkup(ea, "lucide-x"),
     settings: iconMarkup(ea, "lucide-settings"),
+    switchPresentation: iconMarkup(ea, "lucide-repeat-2"),
   };
 }

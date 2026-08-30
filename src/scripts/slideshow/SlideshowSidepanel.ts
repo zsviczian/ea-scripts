@@ -5,12 +5,18 @@
 
 /* eslint-disable complexity, max-lines-per-function -- Sidepanel rendering keeps lifecycle state and controls together. */
 
+import type { EventRef, WorkspaceLeaf } from "obsidian";
+
 import { getNavigationRect } from "../../sharedUtils/presentationGeometry";
 import type { SlideDeckSlide } from "./SlideDeck";
 import { SlidePreviewService, getSceneVisualFingerprint } from "./SlidePreviewService";
 import { SlideSorter } from "./SlideSorter";
 import type { SlideshowTranslator } from "./lang";
-import { resolveSlideDeckChoices, type SlideDeckChoices } from "./presentationPath";
+import {
+  isPresentationPathHidden,
+  resolveSlideDeckChoices,
+  type SlideDeckChoices,
+} from "./presentationPath";
 import {
   hasBoundLineEndpoint,
   reorderFrameSlides,
@@ -18,13 +24,15 @@ import {
   saveFrameNotes,
   saveLineNotes,
   setFrameExcluded,
+  setLinePresentationPathHidden,
 } from "./slideDeckMutations";
 import { SLIDESHOW_SIDEPANEL_STYLES } from "./styles";
-import type {
-  PresentationPathType,
-  ResolvedSlideDeck,
-  SlideshowConfig,
-  SlideshowIcons,
+import {
+  isLinearPathElement,
+  type PresentationPathType,
+  type ResolvedSlideDeck,
+  type SlideshowConfig,
+  type SlideshowIcons,
 } from "./types";
 
 export interface SlideshowSidepanelOptions {
@@ -52,6 +60,22 @@ function getDeckFingerprint(resolved: ResolvedSlideDeck | null): string {
   });
 }
 
+function getExcalidrawViewFromLeaf(leaf: WorkspaceLeaf | null): ScriptExcalidrawView | null {
+  if (!leaf) return null;
+  const candidate = leaf.view as unknown as Partial<ScriptExcalidrawView>;
+  if (
+    typeof candidate.isDirty !== "function" ||
+    typeof candidate.forceSave !== "function" ||
+    typeof candidate.preventAutozoom !== "function" ||
+    typeof candidate.refreshCanvasOffset !== "function" ||
+    !candidate.file ||
+    !candidate.contentEl
+  ) {
+    return null;
+  }
+  return candidate as ScriptExcalidrawView;
+}
+
 /** Manages one non-persistent slideshow sidepanel across Excalidraw view focus changes. */
 export class SlideshowSidepanel {
   private sorter: SlideSorter | null = null;
@@ -66,12 +90,13 @@ export class SlideshowSidepanel {
   private pendingRefresh = false;
   private closed = false;
   private bindGeneration = 0;
+  private activeLeafChangeRef: EventRef | null = null;
 
   public constructor(private readonly options: SlideshowSidepanelOptions) {
     this.ownerWindow = options.tab.contentEl.ownerDocument.defaultView ?? window;
   }
 
-  /** Installs lifecycle hooks and scene-change tracking. */
+  /** Installs lifecycle hooks, workspace focus tracking, and scene-change tracking. */
   public initialize(): void {
     const { ea, tab } = this.options;
     tab.onOpen = () => void this.refresh(true);
@@ -88,15 +113,23 @@ export class SlideshowSidepanel {
       this.closed = true;
       if (this.refreshTimer) this.ownerWindow.clearTimeout(this.refreshTimer);
       this.refreshTimer = 0;
-      void this.sorter?.flushNotes();
-      this.sorter?.destroy();
+      const sorter = this.sorter;
       this.sorter = null;
+      void sorter?.flushNotes().finally(() => sorter.destroy());
       this.previewService?.clear();
       this.previewService = null;
       ea.onSceneChangeHook = null;
+      if (this.activeLeafChangeRef) {
+        app.workspace.offref(this.activeLeafChangeRef);
+        this.activeLeafChangeRef = null;
+      }
     };
+    this.activeLeafChangeRef = app.workspace.on("active-leaf-change", (leaf: WorkspaceLeaf | null) => {
+      if (this.closed || leaf === ea.getSidepanelLeaf()) return;
+      this.bindView(getExcalidrawViewFromLeaf(leaf));
+    });
     ea.onSceneChangeHook = {
-      appStateKeys: ["selectedElementIds"],
+      appStateKeys: ["selectedElementIds", "viewBackgroundColor", "theme"],
       trackElements: true,
       triggerWhenInvisible: false,
       callback: (_elements, _appState, _files, view) => {
@@ -115,6 +148,7 @@ export class SlideshowSidepanel {
     if (this.closed) return;
     if (view === this.options.ea.targetView) {
       if (view) void this.refresh();
+      else this.renderUnavailable();
       return;
     }
     const generation = ++this.bindGeneration;
@@ -160,7 +194,7 @@ export class SlideshowSidepanel {
 
   private renderUnavailable(): void {
     const { tab, t } = this.options;
-    tab.setDisabled(true);
+    tab.setDisabled(false);
     tab.contentEl.replaceChildren();
     const style = tab.contentEl.ownerDocument.createElement("style");
     style.textContent = SLIDESHOW_SIDEPANEL_STYLES;
@@ -170,7 +204,7 @@ export class SlideshowSidepanel {
     tab.contentEl.appendChild(root);
     const empty = tab.contentEl.ownerDocument.createElement("div");
     empty.className = "slideshow-empty";
-    empty.textContent = t("noActiveDrawing");
+    empty.textContent = t("noEligibleSlides");
     root.appendChild(empty);
   }
 
@@ -189,13 +223,11 @@ export class SlideshowSidepanel {
     const choices = resolveSlideDeckChoices(ea);
     const drawingKey = ea.targetView.file.path;
     const storedType = this.presentationTypeByDrawing.get(drawingKey);
-    const presentationType =
-      storedType && choices[storedType]
-        ? storedType
-        : choices.defaultType;
+    const presentationType = storedType && choices[storedType] ? storedType : choices.defaultType;
     if (presentationType) this.presentationTypeByDrawing.set(drawingKey, presentationType);
     const resolved = presentationType ? choices[presentationType] : null;
-    const compositeFingerprint = `${presentationType ?? "none"}|${getDeckFingerprint(choices.frame)}|${getDeckFingerprint(choices.line)}|${getSceneVisualFingerprint(ea.getViewElements())}`;
+    const appState = api.getAppState();
+    const compositeFingerprint = `${presentationType ?? "none"}|${getDeckFingerprint(choices.frame)}|${getDeckFingerprint(choices.line)}|${appState.theme}|${appState.viewBackgroundColor}|${getSceneVisualFingerprint(ea.getViewElements())}`;
     if (!force && compositeFingerprint === this.lastFingerprint) return;
 
     const selectedId = this.sorter?.getSelectedSlideId() ?? null;
@@ -250,15 +282,18 @@ export class SlideshowSidepanel {
     header.appendChild(refreshButton);
     refreshButton.innerHTML = icons.refresh;
     refreshButton.addEventListener("click", () => {
-      this.previewService?.clear();
-      this.lastFingerprint = "";
-      void this.refresh(true);
+      void (async () => {
+        await this.sorter?.flushNotes();
+        this.previewService?.clear();
+        this.lastFingerprint = "";
+        await this.refresh(true);
+      })();
     });
 
     if (!this.resolved || !this.previewService) {
       const empty = doc.createElement("div");
       empty.className = "slideshow-empty";
-      empty.textContent = t("noSlides");
+      empty.textContent = t("noEligibleSlides");
       root.appendChild(empty);
       return;
     }
@@ -298,6 +333,23 @@ export class SlideshowSidepanel {
         ? `${t("frameDeck")} · ${t("visibleSlideCount", { visible: deck.visibleSlides.length, total: deck.slides.length })}`
         : `${t("lineDeck")} · ${t("slideCount", { count: deck.slides.length })}`;
 
+    if (
+      deck.kind === "path" &&
+      this.resolved.pathElement &&
+      isPresentationPathHidden(this.resolved.pathElement)
+    ) {
+      const pathActions = doc.createElement("div");
+      pathActions.className = "slideshow-sidepanel__path-actions";
+      root.appendChild(pathActions);
+      const showPathButton = doc.createElement("button");
+      showPathButton.type = "button";
+      showPathButton.innerHTML = `${icons.eye}<span>${t("showPresentationPath")}</span>`;
+      showPathButton.setAttribute("aria-label", t("showPresentationPath"));
+      showPathButton.title = t("showPresentationPath");
+      showPathButton.addEventListener("click", () => void this.showPresentationPath());
+      pathActions.appendChild(showPathButton);
+    }
+
     const reorderEnabled =
       !this.resolved.pathElement || !hasBoundLineEndpoint(this.resolved.pathElement);
     if (!reorderEnabled) {
@@ -331,6 +383,7 @@ export class SlideshowSidepanel {
         zoomToSlide: (slide) => this.zoomToSlide(slide),
         saveNotes: (slide, notes) => this.saveNotes(slide, notes),
         requestAnimationEditor: (slide) => this.requestAnimationEditor(slide),
+        editLineSlide: (slide, index) => this.editLineSlide(slide, index),
         notesBlurred: () => {
           if (this.pendingRefresh) this.scheduleRefresh();
         },
@@ -347,6 +400,20 @@ export class SlideshowSidepanel {
     this.presentationTypeByDrawing.set(view.file.path, presentationType);
     this.lastFingerprint = "";
     await this.refresh(true);
+  }
+
+  private async showPresentationPath(): Promise<void> {
+    const path = this.resolved?.pathElement;
+    if (!path) return;
+    try {
+      await this.sorter?.flushNotes();
+      await setLinePresentationPathHidden(this.options.ea, path.id, false);
+      this.lastFingerprint = "";
+      await this.refresh(true);
+    } catch (error) {
+      console.error("Slideshow presentation path visibility update failed", error);
+      new Notice(this.options.t("metadataSaveFailed"));
+    }
   }
 
   private async moveSlide(fromIndex: number, toIndex: number): Promise<void> {
@@ -416,6 +483,56 @@ export class SlideshowSidepanel {
         zoom: { value: rect.nextZoom as typeof appState.zoom.value },
       },
     });
+  }
+
+  private async editLineSlide(slide: SlideDeckSlide, index: number): Promise<void> {
+    if (slide.kind !== "path") return;
+    const { ea } = this.options;
+    const api = ea.getExcalidrawAPI();
+    const view = ea.targetView;
+    if (!api || !view) return;
+    try {
+      await this.sorter?.flushNotes();
+      const currentPath = ea.getViewElements().find((element) => element.id === slide.pathId);
+      if (!isLinearPathElement(currentPath)) return;
+      if (isPresentationPathHidden(currentPath)) {
+        await setLinePresentationPathHidden(ea, currentPath.id, false);
+      }
+      const path = ea.getViewElements().find((element) => element.id === slide.pathId);
+      if (!isLinearPathElement(path)) return;
+
+      app.workspace.setActiveLeaf(view.leaf, { focus: true });
+      view.preventAutozoom();
+      ea.selectElementsInView([path]);
+      const appState = api.getAppState();
+      let rect = getNavigationRect(
+        slide.rect,
+        { width: appState.width, height: appState.height },
+        this.options.config.maxZoom,
+      );
+      const offsetWidth = ((rect.right - rect.left) * (1 - this.options.config.editZoomOut)) / 2;
+      const offsetHeight = ((rect.bottom - rect.top) * (1 - this.options.config.editZoomOut)) / 2;
+      rect = {
+        left: rect.left - offsetWidth,
+        right: rect.right + offsetWidth,
+        top: rect.top - offsetHeight,
+        bottom: rect.bottom + offsetHeight,
+        nextZoom: Math.max(rect.nextZoom * this.options.config.editZoomOut, 0.1),
+      };
+      api.updateScene({
+        appState: {
+          scrollX: -rect.left,
+          scrollY: -rect.top,
+          zoom: { value: rect.nextZoom as typeof appState.zoom.value },
+        },
+      });
+      api.setActiveTool({ type: "selection" });
+      api.startLineEditor(ea.getViewSelectedElement(), [index * 2, index * 2 + 1]);
+      this.lastFingerprint = "";
+    } catch (error) {
+      console.error("Slideshow line-slide editing failed", error);
+      new Notice(this.options.t("editLineSlideFailed"));
+    }
   }
 
   private requestAnimationEditor(slide: SlideDeckSlide): void {

@@ -17,6 +17,7 @@ export interface PresentationControlCallbacks {
   toggleFullscreen(): void;
   togglePathVisibility(hidden: boolean): void;
   editSlide(): void;
+  switchPresentation(): void;
   openSidepanel(): void;
   print(event: MouseEvent): void;
   finish(): void;
@@ -29,6 +30,7 @@ export interface PresentationControlsOptions {
   contentElement: ScriptContentElement;
   slidesCount: number;
   pathType: PresentationPathType;
+  alternatePresentationType: PresentationPathType | null;
   slideTitles: readonly string[];
   shouldOfferPathVisibility: boolean;
   isPathHidden: boolean;
@@ -61,6 +63,7 @@ export class PresentationControls {
       contentElement,
       slidesCount,
       pathType,
+      alternatePresentationType,
       slideTitles,
       shouldOfferPathVisibility,
       isPathHidden,
@@ -216,6 +219,21 @@ export class PresentationControls {
             (button) => {
               button.innerHTML = icons.edit;
               button.onclick = callbacks.editSlide;
+            },
+          );
+        }
+
+        if (alternatePresentationType) {
+          const switchLabel =
+            alternatePresentationType === "frame"
+              ? t("switchToFrameSlideshow")
+              : t("switchToLineSlideshow");
+          buttonList.createEl(
+            "button",
+            { attr: { title: switchLabel, "aria-label": switchLabel } },
+            (button) => {
+              button.innerHTML = icons.switchPresentation;
+              button.onclick = callbacks.switchPresentation;
             },
           );
         }

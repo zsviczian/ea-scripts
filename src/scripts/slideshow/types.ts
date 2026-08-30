@@ -50,6 +50,7 @@ export interface SlideshowIcons {
   trash: string;
   close: string;
   settings: string;
+  switchPresentation: string;
 }
 
 export interface OriginalPathProperties {

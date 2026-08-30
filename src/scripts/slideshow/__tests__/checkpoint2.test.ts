@@ -1,8 +1,14 @@
 import { describe, expect, it } from "vitest";
 
-import { getPreviewNavigationRect, getSceneVisualFingerprint } from "../SlidePreviewService";
+import {
+  getPreviewNavigationRect,
+  getSceneVisualFingerprint,
+  SlidePreviewService,
+} from "../SlidePreviewService";
+import { isDoubleSlideshowInvocation, SLIDESHOW_DOUBLE_INVOCATION_MS } from "../slideshowLauncher";
 import { createSlideshowTranslator } from "../lang";
 import {
+  getAlternatePresentationType,
   resolvePresentationSetup,
   resolveSlideDeck,
   resolveSlideDeckChoices,
@@ -14,6 +20,7 @@ import {
   saveFrameNotes,
   saveLineNotes,
   setFrameExcluded,
+  setLinePresentationPathHidden,
 } from "../slideDeckMutations";
 import { readFrameSlideshowData, readLineSlideshowDataV2 } from "../slideshowMetadata";
 
@@ -125,6 +132,20 @@ describe("slideshow checkpoint 2 mutations", () => {
     expect(readFrameSlideshowData(updatedA?.customData)?.notes).toBeUndefined();
   });
 
+  it("force-saves presenter-note metadata after the debounced edit commit", async () => {
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha")];
+    const ea = createFakeEa(elements);
+    let saves = 0;
+    ea.targetView = {
+      forceSave: async () => {
+        saves += 1;
+      },
+    } as unknown as ScriptExcalidrawView;
+    await saveFrameNotes(ea, "a", "Persist me");
+    expect(saves).toBe(1);
+    expect(readFrameSlideshowData(elements[0]?.customData)?.notes).toBe("Persist me");
+  });
+
   it("moves a line point-pair and its stable notes record together", async () => {
     const path = line({
       untouched: "yes",
@@ -172,6 +193,29 @@ describe("slideshow checkpoint 2 mutations", () => {
     expect(readLineSlideshowDataV2(elements[0]?.customData)?.slides[1]?.notes).toBeUndefined();
   });
 
+  it("restores a persistently hidden line path and clears its hidden flag", async () => {
+    const path = line({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "path",
+        hidden: true,
+        originalProps: { strokeColor: "#123", backgroundColor: "#fed", locked: false },
+        slides: [{ id: "one" }, { id: "two" }, { id: "three" }],
+      },
+    }) as Mutable<ExcalidrawLinearElement>;
+    path.strokeColor = "transparent";
+    path.backgroundColor = "transparent";
+    path.locked = true;
+    const elements: ExcalidrawElement[] = [path];
+    const ea = createFakeEa(elements);
+    await setLinePresentationPathHidden(ea, "path", false);
+    const updated = elements[0] as ExcalidrawLinearElement;
+    expect(updated.strokeColor).toBe("#123");
+    expect(updated.backgroundColor).toBe("#fed");
+    expect(updated.locked).toBe(false);
+    expect(readLineSlideshowDataV2(updated.customData)?.hidden).toBe(false);
+  });
+
   it("detects bound endpoints before line reordering", () => {
     const path = line() as ExcalidrawLinearElement & { startBinding: unknown };
     path.startBinding = { elementId: "box" };
@@ -204,6 +248,41 @@ describe("slideshow checkpoint 2 deck consumption", () => {
       "Alpha",
     ]);
     expect(resolveSlideDeck(ea, "line")?.pathElement?.id).toBe("path");
+  });
+
+  it("defaults to frames when a remembered line path is visible and unselected", () => {
+    const rememberedPath = line({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "path",
+        hidden: false,
+        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+        slides: [{ id: "one" }, { id: "two" }, { id: "three" }],
+      },
+    });
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha"), rememberedPath];
+    const ea = {
+      getViewElements: () => elements,
+      getViewSelectedElement: () => null,
+      cloneElement: <T extends ExcalidrawElement>(element: T) =>
+        structuredClone(element) as Mutable<T>,
+    } as unknown as ExcalidrawAutomate;
+    const choices = resolveSlideDeckChoices(ea);
+    expect(choices.defaultType).toBe("frame");
+    expect(choices.line?.pathElement?.id).toBe("path");
+    expect(getAlternatePresentationType(choices, "frame")).toBe("line");
+  });
+
+  it("defaults to a selected visible line even when frames exist", () => {
+    const selectedPath = line();
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha"), selectedPath];
+    const ea = {
+      getViewElements: () => elements,
+      getViewSelectedElement: () => selectedPath,
+      cloneElement: <T extends ExcalidrawElement>(element: T) =>
+        structuredClone(element) as Mutable<T>,
+    } as unknown as ExcalidrawAutomate;
+    expect(resolveSlideDeckChoices(ea).defaultType).toBe("line");
   });
 
   it("presentation setup uses explicit frame order and omits excluded frames", () => {
@@ -296,6 +375,15 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(rect.bottom - rect.top).toBe(1080);
   });
 
+  it("uses the Excalidraw scene background behind preview crop overflow", () => {
+    const service = new SlidePreviewService(
+      {} as ExcalidrawAutomate,
+      { getAppState: () => ({ viewBackgroundColor: "#f7f1e8" }) } as unknown as ExcalidrawAPI,
+      30,
+    );
+    expect(service.getBackgroundColor()).toBe("#f7f1e8");
+  });
+
   it("formats presentation slide titles with current and total slide numbers", () => {
     const t = createSlideshowTranslator("en");
     expect(t("presentationSlideTitle", { title: "Alpha", number: 1, total: 2 })).toBe(
@@ -322,3 +410,19 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     );
   });
 });
+
+describe("slideshow checkpoint 2 launcher", () => {
+  it("recognizes a practical double invocation window and rejects later clicks", () => {
+    const session = { script: "Slideshow.md", timestamp: 1000, slide: {} };
+    expect(isDoubleSlideshowInvocation(session, "Slideshow.md", 1000 + 500)).toBe(true);
+    expect(
+      isDoubleSlideshowInvocation(
+        session,
+        "Slideshow.md",
+        1000 + SLIDESHOW_DOUBLE_INVOCATION_MS,
+      ),
+    ).toBe(false);
+    expect(isDoubleSlideshowInvocation(session, "Other.md", 1200)).toBe(false);
+  });
+});
+

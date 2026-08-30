@@ -37,11 +37,19 @@ function moveId(ids: string[], fromIndex: number, toIndex: number): void {
   ids.splice(toIndex, 0, id);
 }
 
+async function commitWorkbench(ea: ExcalidrawAutomate, forceSave = false): Promise<void> {
+  await ea.addElementsToView(false, true, false, false, "IMMEDIATELY");
+  if (forceSave && ea.targetView) {
+    await ea.targetView.forceSave(true);
+  }
+}
+
 async function writeFrameMetadataSet(
   ea: ExcalidrawAutomate,
   orderedIds: readonly string[],
   targetId: string | null,
   mutateTarget?: (data: ReturnType<typeof withNormalizedFrameOrder>) => void,
+  forceSave = false,
 ): Promise<void> {
   const frames = getFrameElements(ea);
   const byId = new Map(frames.map((frame) => [frame.id, frame]));
@@ -58,7 +66,7 @@ async function writeFrameMetadataSet(
     if (frameId === targetId) mutateTarget?.(data);
     writeSlideshowMetadata(ea, frameId, data);
   });
-  await ea.addElementsToView();
+  await commitWorkbench(ea, forceSave);
 }
 
 /** Reorders frame slides and writes normalized 0..n-1 order metadata in one scene transaction. */
@@ -95,11 +103,17 @@ export async function saveFrameNotes(
 ): Promise<void> {
   const frames = getFrameElements(ea);
   const orderedIds = buildFrameSlideDeck(frames).slides.map((slide) => slide.id);
-  await writeFrameMetadataSet(ea, orderedIds, frameId, (data) => {
-    const normalized = normalizeNotes(notes);
-    if (normalized === undefined) delete data.notes;
-    else data.notes = normalized;
-  });
+  await writeFrameMetadataSet(
+    ea,
+    orderedIds,
+    frameId,
+    (data) => {
+      const normalized = normalizeNotes(notes);
+      if (normalized === undefined) delete data.notes;
+      else data.notes = normalized;
+    },
+    true,
+  );
 }
 
 /** Returns whether line-slide reordering must be disabled for endpoint binding safety. */
@@ -167,7 +181,7 @@ export async function reorderLineSlides(
   element.y = reordered.y;
   element.points = reordered.points as unknown as typeof element.points;
   writeSlideshowMetadata(ea, element.id, metadata);
-  await ea.addElementsToView();
+  await commitWorkbench(ea);
 }
 
 /** Saves presenter notes on the stable record associated with one line slide. */
@@ -197,7 +211,41 @@ export async function saveLineNotes(
   if (normalized === undefined) delete record.notes;
   else record.notes = normalized;
   writeSlideshowMetadata(ea, element.id, metadata);
-  await ea.addElementsToView();
+  await commitWorkbench(ea, true);
+}
+
+/** Shows or hides a remembered line presentation path while preserving its original styling. */
+export async function setLinePresentationPathHidden(
+  ea: ExcalidrawAutomate,
+  pathId: string,
+  hidden: boolean,
+): Promise<void> {
+  const source = ea.getViewElements().find((element) => element.id === pathId);
+  if (!isLinearPathElement(source)) throw new Error("The presentation path no longer exists.");
+
+  ea.clear();
+  ea.copyViewElementsToEAforEditing([source]);
+  const element = ea.getElement<ExcalidrawLinearElement>(pathId) as EditableLinearElement | null;
+  if (!element) throw new Error("The presentation path could not be edited.");
+
+  const metadata = upgradeLineSlideshowData(
+    element.customData,
+    element.id,
+    Math.floor(element.points.length / 2),
+    fallbackPathProperties(source),
+  );
+  metadata.hidden = hidden;
+  if (hidden) {
+    element.strokeColor = "transparent";
+    element.backgroundColor = "transparent";
+    element.locked = true;
+  } else {
+    element.strokeColor = metadata.originalProps.strokeColor;
+    element.backgroundColor = metadata.originalProps.backgroundColor;
+    element.locked = metadata.originalProps.locked;
+  }
+  writeSlideshowMetadata(ea, element.id, metadata);
+  await commitWorkbench(ea, true);
 }
 
 /** Reads whether a frame is currently excluded without treating invalid metadata as authoritative. */

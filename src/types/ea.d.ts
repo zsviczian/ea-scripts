@@ -20,6 +20,7 @@ declare global {
   type ExcalidrawLinearElement = ForkExcalidrawLinearElement;
   type ExcalidrawAPI = ExcalidrawImperativeAPI;
   type Mutable<T> = { -readonly [Key in keyof T]: T[Key] };
+  type CaptureUpdateActionType = "NEVER" | "EVENTUALLY" | "IMMEDIATELY";
 
   interface ModifierKeyState {
     shiftKey: boolean;
@@ -190,8 +191,11 @@ declare global {
     ): ExcalidrawElement | undefined;
     addElementsToView(
       repositionToCursor?: boolean,
-      finalizeWhenFallbackIsAvailable?: boolean,
-    ): Promise<void>;
+      save?: boolean,
+      newElementsOnTop?: boolean,
+      shouldRestoreElements?: boolean,
+      captureUpdate?: CaptureUpdateActionType,
+    ): Promise<boolean>;
     selectElementsInView(elements: readonly ExcalidrawElement[]): void;
     setViewModeEnabled(enabled: boolean): void;
     viewToggleFullScreen(forceViewMode?: boolean): void;

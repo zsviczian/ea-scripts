@@ -11,6 +11,8 @@ export const SLIDESHOW_SIDEPANEL_STYLES = `
 .slideshow-sidepanel__deck-picker label { color:var(--text-muted); font-size:var(--font-ui-smaller); }
 .slideshow-sidepanel__deck-picker select { min-width:0; flex:1; }
 .slideshow-sidepanel__summary { color:var(--text-muted); font-size:var(--font-ui-smaller); }
+.slideshow-sidepanel__path-actions { display:flex; gap:8px; }
+.slideshow-sidepanel__path-actions button { display:inline-flex; align-items:center; gap:6px; }
 .slideshow-sorter { display:flex; flex-direction:column; gap:8px; min-height:0; overflow:auto; padding-right:2px; }
 .slideshow-sorter__row { display:flex; flex-direction:column; gap:7px; border:1px solid var(--background-modifier-border); border-radius:8px; padding:8px; background:var(--background-primary); outline:none; }
 .slideshow-sorter__row:focus, .slideshow-sorter__row.is-selected { border-color:var(--interactive-accent); box-shadow:0 0 0 1px var(--interactive-accent); }

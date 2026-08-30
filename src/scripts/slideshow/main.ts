@@ -6,7 +6,12 @@
  */
 
 import { createSlideshowTranslator } from "./lang";
-import { openSlideshowSidepanel, startSlideshowPresentation } from "./slideshowLauncher";
+import {
+  isDoubleSlideshowInvocation,
+  openSlideshowSidepanel,
+  SLIDESHOW_SINGLE_START_DELAY_MS,
+  startSlideshowPresentation,
+} from "./slideshowLauncher";
 import type { SlideshowConfig } from "./types";
 
 const CONFIG: SlideshowConfig = {
@@ -38,10 +43,11 @@ export async function runSlideshow(
   }
   const timestamp = Date.now();
   const session = window.ExcalidrawSlideshow;
-  const isDoubleInvocation =
-    session !== undefined &&
-    session.script === scriptUtils.scriptFile.path &&
-    timestamp - session.timestamp < 400;
+  const isDoubleInvocation = isDoubleSlideshowInvocation(
+    session,
+    scriptUtils.scriptFile.path,
+    timestamp,
+  );
 
   if (isDoubleInvocation) {
     if (window.ExcalidrawSlideshowStartTimer) {
@@ -77,7 +83,7 @@ export async function runSlideshow(
       initialSlide: shouldStartWithLastSlide ? savedSlide : 0,
       startFullscreen,
     });
-  }, 500);
+  }, SLIDESHOW_SINGLE_START_DELAY_MS);
 }
 
 void runSlideshow(ea, utils);

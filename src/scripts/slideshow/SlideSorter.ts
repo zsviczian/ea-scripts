@@ -16,6 +16,7 @@ export interface SlideSorterCallbacks {
   zoomToSlide(slide: SlideDeckSlide): void;
   saveNotes(slide: SlideDeckSlide, notes: string): Promise<void>;
   requestAnimationEditor(slide: SlideDeckSlide): void;
+  editLineSlide(slide: SlideDeckSlide, index: number): Promise<void>;
   notesBlurred(): void;
 }
 
@@ -214,6 +215,7 @@ export class SlideSorter {
 
     const preview = doc.createElement("div");
     preview.className = "slideshow-sorter__preview";
+    preview.style.backgroundColor = this.options.previewService.getBackgroundColor();
     content.appendChild(preview);
 
     const actions = doc.createElement("div");
@@ -254,6 +256,12 @@ export class SlideSorter {
         this.createIconButton(doc, icons.sparkles, t("editAnimations"), true, () =>
           this.options.callbacks.requestAnimationEditor(slide),
         ),
+      );
+    } else {
+      actions.appendChild(
+        this.createIconButton(doc, icons.edit, t("editLineSlide"), false, () => {
+          void this.options.callbacks.editLineSlide(slide, index);
+        }),
       );
     }
     const notesExpanded = this.expandedNotesSlideId === slide.id;
