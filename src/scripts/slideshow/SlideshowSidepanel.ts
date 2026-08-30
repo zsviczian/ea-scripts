@@ -9,7 +9,7 @@ import type { EventRef, WorkspaceLeaf } from "obsidian";
 
 import { getNavigationRect } from "../../sharedUtils/presentationGeometry";
 import { AnimationEditor } from "./AnimationEditor";
-import type { FrameDeckSlide, SlideDeckSlide } from "./SlideDeck";
+import { getVisibleSlideIndex, type FrameDeckSlide, type SlideDeckSlide } from "./SlideDeck";
 import { SlidePreviewService, getSceneVisualFingerprint } from "./SlidePreviewService";
 import { SlideSorter } from "./SlideSorter";
 import type { SlideshowTranslator } from "./lang";
@@ -43,7 +43,10 @@ export interface SlideshowSidepanelOptions {
   t: SlideshowTranslator;
   icons: SlideshowIcons;
   config: SlideshowConfig;
-  startPresentation(presentationType: PresentationPathType): Promise<void>;
+  startPresentation(
+    presentationType: PresentationPathType,
+    initialSlide?: number,
+  ): Promise<void>;
   onClosed(): void;
 }
 
@@ -383,15 +386,26 @@ export class SlideshowSidepanel {
     startButton.disabled = !this.resolved || noVisibleSlides;
     if (noVisibleSlides) startButton.title = t("allSlidesExcluded");
     startButton.addEventListener("click", () => {
-      void (async () => {
-        await this.sorter?.flushNotes();
-        await this.animationEditor?.destroy();
-        this.animationEditor = null;
-        this.animationEditingSlideId = null;
-        if (this.presentationType) {
-          await this.options.startPresentation(this.presentationType);
-        }
-      })();
+      void this.startPresentation();
+    });
+
+    const startSelectedButton = doc.createElement("button");
+    startSelectedButton.type = "button";
+    startSelectedButton.setAttribute("aria-label", t("startFromSelectedSlide"));
+    startSelectedButton.title = t("startFromSelectedSlide");
+    startSelectedButton.innerHTML = icons.presentation;
+    startSelectedButton.disabled = !this.resolved || noVisibleSlides;
+    header.appendChild(startSelectedButton);
+    startSelectedButton.addEventListener("click", () => {
+      const selectedId = this.sorter?.getSelectedSlideId() ?? null;
+      const initialSlide = this.resolved
+        ? getVisibleSlideIndex(this.resolved.deck, selectedId)
+        : null;
+      if (initialSlide === null) {
+        new Notice(t("selectedSlideNotPresentable"));
+        return;
+      }
+      void this.startPresentation(initialSlide);
     });
 
     const refreshButton = doc.createElement("button");
@@ -514,6 +528,16 @@ export class SlideshowSidepanel {
     });
     this.sorter.render(preferredSlideId, preferredNotesSlideId);
     return this.sorter;
+  }
+
+  private async startPresentation(initialSlide?: number): Promise<void> {
+    await this.sorter?.flushNotes();
+    await this.animationEditor?.destroy();
+    this.animationEditor = null;
+    this.animationEditingSlideId = null;
+    if (this.presentationType) {
+      await this.options.startPresentation(this.presentationType, initialSlide);
+    }
   }
 
   private async selectPresentationType(presentationType: PresentationPathType): Promise<void> {

@@ -4,10 +4,11 @@ import {
   AnimationRuntime,
   captureAnimationTargets,
   elementOverlapsFrame,
+  getAnimationOverlayPlacement,
   removeAnimationTargetConflicts,
   resolveAnimationTargetElementIds,
 } from "../AnimationRuntime";
-import { buildLineSlideDeck } from "../SlideDeck";
+import { buildLineSlideDeck, getVisibleSlideIndex } from "../SlideDeck";
 import { resolvePresentationSetup } from "../presentationPath";
 import {
   reorderLineSlides,
@@ -96,6 +97,23 @@ function createFakeEa(elements: ExcalidrawElement[]): ExcalidrawAutomate {
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("checkpoint 3 animation preview geometry", () => {
+  it("positions editor overlays relative to the Excalidraw host instead of the browser viewport", () => {
+    const placement = getAnimationOverlayPlacement(
+      { topX: 100, topY: 70, width: 20, height: 10 },
+      {
+        offsetLeft: 120,
+        offsetTop: 60,
+        scrollX: -50,
+        scrollY: -20,
+        zoom: { value: 2 },
+      },
+      { left: 200, top: 100 },
+    );
+    expect(placement).toEqual({ left: 20, top: 60, width: 40, height: 20 });
+  });
 });
 
 describe("checkpoint 3 animation target resolution", () => {
@@ -508,6 +526,27 @@ describe("checkpoint 3 animation metadata and runtime", () => {
     });
     expect((elements.find((candidate) => candidate.id === "shape") as { opacity: number }).opacity).toBe(0);
     await runtime.leaveSlide();
+  });
+});
+
+describe("checkpoint 3 start-from-selected resolution", () => {
+  it("maps a selected slide id to the visible presentation index and rejects excluded slides", () => {
+    const path = line({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "path",
+        hidden: false,
+        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+        slides: [
+          { id: "one", excluded: true },
+          { id: "two" },
+        ],
+      },
+    });
+    const deck = buildLineSlideDeck(path);
+    expect(getVisibleSlideIndex(deck, "one")).toBeNull();
+    expect(getVisibleSlideIndex(deck, "two")).toBe(0);
+    expect(getVisibleSlideIndex(deck, null)).toBeNull();
   });
 });
 

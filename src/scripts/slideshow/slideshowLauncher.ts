@@ -174,12 +174,15 @@ export async function openSlideshowSidepanel(
     onClosed: () => {
       if (runtime.sidepanel?.activate === handle.activate) runtime.sidepanel = null;
     },
-    startPresentation: async (presentationType) => {
+    startPresentation: async (presentationType, initialSlide) => {
       const boundView = sidepanel.getBoundView();
       if (!boundView) return;
       const boundContext = getSlideshowViewContext(boundView);
       if (!boundContext) return;
-      await startSlideshowPresentation(boundContext, { presentationType });
+      await startSlideshowPresentation(
+        boundContext,
+        initialSlide === undefined ? { presentationType } : { presentationType, initialSlide },
+      );
     },
   });
   const handle = {

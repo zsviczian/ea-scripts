@@ -56,6 +56,41 @@ interface ElementRect {
   bottom: number;
 }
 
+interface AnimationOverlayBounds {
+  topX: number;
+  topY: number;
+  width: number;
+  height: number;
+}
+
+interface AnimationOverlayViewState {
+  offsetLeft: number;
+  offsetTop: number;
+  scrollX: number;
+  scrollY: number;
+  zoom: { value: number };
+}
+
+/**
+ * Converts scene bounds to coordinates local to the Excalidraw host element.
+ * AppState offsets are viewport coordinates; an absolutely-positioned overlay appended inside
+ * `.excalidraw` must subtract that host element's viewport origin. This distinction is invisible
+ * in fullscreen (where the host normally begins at 0,0) but is essential in editor previews.
+ */
+export function getAnimationOverlayPlacement(
+  bounds: AnimationOverlayBounds,
+  state: AnimationOverlayViewState,
+  hostViewportOrigin: { left: number; top: number },
+): { left: number; top: number; width: number; height: number } {
+  const zoom = state.zoom.value;
+  return {
+    left: state.offsetLeft + (bounds.topX + state.scrollX) * zoom - hostViewportOrigin.left,
+    top: state.offsetTop + (bounds.topY + state.scrollY) * zoom - hostViewportOrigin.top,
+    width: Math.max(bounds.width * zoom, 1),
+    height: Math.max(bounds.height * zoom, 1),
+  };
+}
+
 function getElementRect(element: ExcalidrawElement): ElementRect {
   const x1 = element.x;
   const y1 = element.y;
@@ -663,16 +698,20 @@ export class AnimationRuntime {
     if (!excalidraw) return null;
     const bounds = this.ea.getBoundingBox(originals);
     const state = this.api.getAppState();
-    const zoom = state.zoom.value;
+    const hostRect = excalidraw.getBoundingClientRect();
+    const placement = getAnimationOverlayPlacement(bounds, state, {
+      left: hostRect.left + excalidraw.clientLeft,
+      top: hostRect.top + excalidraw.clientTop,
+    });
     const overlay = this.hostView.ownerDocument.createElement("div");
     overlay.className = "slideshow-animation-overlay";
     overlay.style.position = "absolute";
     overlay.style.pointerEvents = "none";
     overlay.style.zIndex = "4";
-    overlay.style.left = `${state.offsetLeft + (bounds.topX + state.scrollX) * zoom}px`;
-    overlay.style.top = `${state.offsetTop + (bounds.topY + state.scrollY) * zoom}px`;
-    overlay.style.width = `${Math.max(bounds.width * zoom, 1)}px`;
-    overlay.style.height = `${Math.max(bounds.height * zoom, 1)}px`;
+    overlay.style.left = `${placement.left}px`;
+    overlay.style.top = `${placement.top}px`;
+    overlay.style.width = `${placement.width}px`;
+    overlay.style.height = `${placement.height}px`;
     overlay.style.transformOrigin = "center center";
     overlay.innerHTML = svg.outerHTML;
     const child = overlay.firstElementChild as SVGSVGElement | null;

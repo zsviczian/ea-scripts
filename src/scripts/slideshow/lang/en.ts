@@ -12,6 +12,8 @@ export const en = {
   allSlidesExcluded: "All slides are excluded. Include at least one slide before presenting.",
   sidepanelTitle: "Slideshow",
   startPresentation: "Start presentation",
+  startFromSelectedSlide: "Start presentation from selected slide",
+  selectedSlideNotPresentable: "The selected slide is excluded from this presentation.",
   refreshSlides: "Refresh slides",
   noSlides: "No slideshow is available in this drawing.",
   noActiveDrawing: "Focus an Excalidraw drawing to edit its slideshow.",

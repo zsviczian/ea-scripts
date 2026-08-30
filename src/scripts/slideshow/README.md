@@ -27,7 +27,7 @@ script is emitted to `build/slideshow/slideshow.md`.
 - Select an arrow or line to use its consecutive point pairs as slides.
 - With no selection, a previously remembered presentation path is reused.
 - If no line path is available, frames are used.
-- If both frames and a remembered/selected line path are available, the sidepanel shows a presentation-type dropdown. Frame and line configurations remain independent, and **Start presentation** runs the type currently selected in the sidepanel.
+- If both frames and a remembered/selected line path are available, the sidepanel shows a presentation-type dropdown. Frame and line configurations remain independent, and **Start presentation** runs the type currently selected in the sidepanel. A separate presentation button starts from the currently selected included slide for quick animation testing.
 - Frames without slideshow metadata retain alphabetical ordering.
 - The first sorter mutation writes explicit normalized `order` metadata; after that, frame renames do not change presentation order.
 - Excluded frame and line slides remain visible and editable in the sorter, but are omitted from presentation and PDF output.
@@ -55,7 +55,7 @@ Frame slides support a build sequence stored on the frame's slideshow metadata. 
 - **Slide in:** animate an SVG overlay from the chosen direction.
 - **Zoom in:** animate an SVG overlay from approximately 5% scale at the target center.
 
-Steps can trigger on presenter advance or sequentially after a delay. Fade, slide, and zoom default to 350 ms; timed steps default to a 1000 ms delay. Steps can be reordered with drag/drop, buttons, or `Alt+Arrow Up/Down`, previewed, edited, and deleted.
+Steps can trigger on presenter advance or sequentially after a delay. Fade, slide, and zoom default to 350 ms; timed steps default to a 1000 ms delay. Steps can be reordered with drag/drop, buttons, or `Alt+Arrow Up/Down`, previewed, edited, and deleted. Editor previews position SVG motion overlays in the drawing host coordinate space, matching presentation geometry even when the Excalidraw leaf is offset by sidepanels or other workspace chrome.
 
 Groups are stored by group ID and resolved dynamically when the presentation runs. Bound text and its container are treated as one visual unit. Marker frames do not own their contents, so animation eligibility is determined by geometric overlap between each element rectangle and the marker-frame rectangle rather than by `frameId`. Adding a target that already belongs to another animation step moves it to the new step instead of creating conflicting builds.
 

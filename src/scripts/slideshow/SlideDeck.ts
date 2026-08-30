@@ -59,6 +59,13 @@ export interface SlideDeck {
   hasExplicitFrameOrder: boolean;
 }
 
+/** Returns the zero-based presentation index of a stable slide id, excluding hidden slides. */
+export function getVisibleSlideIndex(deck: SlideDeck, slideId: string | null): number | null {
+  if (!slideId) return null;
+  const index = deck.visibleSlides.findIndex((slide) => slide.id === slideId);
+  return index >= 0 ? index : null;
+}
+
 interface IndexedFrame {
   source: FrameDeckSource;
   sourceIndex: number;
