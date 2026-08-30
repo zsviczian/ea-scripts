@@ -140,7 +140,11 @@ export class PresentationControls {
           (selectElement) => {
             for (let index = 0; index < slidesCount; index += 1) {
               const option = ownerDocument.createElement("option");
-              option.text = `${slideTitles[index] ?? t("slideLabel", { number: index + 1 })}/${slidesCount}`;
+              option.text = t("presentationSlideTitle", {
+                title: slideTitles[index] ?? t("slideLabel", { number: index + 1 }),
+                number: index + 1,
+                total: slidesCount,
+              });
               option.value = String(index + 1);
               selectElement.add(option);
             }

@@ -14,9 +14,16 @@ import {
   isLinearPathElement,
   type NamedFrame,
   type OriginalPathProperties,
+  type PresentationPathType,
   type PresentationSetup,
   type ResolvedSlideDeck,
 } from "./types";
+
+export interface SlideDeckChoices {
+  frame: ResolvedSlideDeck | null;
+  line: ResolvedSlideDeck | null;
+  defaultType: PresentationPathType | null;
+}
 
 function getNamedFrames(ea: ExcalidrawAutomate, elements: readonly ExcalidrawElement[]): NamedFrame[] {
   return elements.filter(isFrameElement).map((frame, index) => {
@@ -42,24 +49,10 @@ function findRememberedPath(elements: readonly ExcalidrawElement[]): ExcalidrawL
   );
 }
 
-/** Resolves the current canonical deck without mutating app state or showing notices. */
-export function resolveSlideDeck(ea: ExcalidrawAutomate): ResolvedSlideDeck | null {
-  const viewElements = ea.getViewElements();
-  const frames = getNamedFrames(ea, viewElements);
-  const selectedElement = ea.getViewSelectedElement();
-  const rememberedPath = findRememberedPath(viewElements);
-  const pathElement = isLinearPathElement(selectedElement) ? selectedElement : rememberedPath;
-
-  if (pathElement) {
-    return {
-      deck: buildLineSlideDeck(pathElement),
-      pathElement,
-      frames,
-    };
-  }
-  if (frames.length === 0) {
-    return null;
-  }
+function resolveFrameDeck(
+  frames: NamedFrame[],
+): ResolvedSlideDeck | null {
+  if (frames.length === 0) return null;
   return {
     deck: buildFrameSlideDeck(frames),
     pathElement: null,
@@ -67,18 +60,64 @@ export function resolveSlideDeck(ea: ExcalidrawAutomate): ResolvedSlideDeck | nu
   };
 }
 
+function resolveLineDeck(
+  selectedElement: ExcalidrawElement | null,
+  rememberedPath: ExcalidrawLinearElement | null,
+  frames: NamedFrame[],
+): ResolvedSlideDeck | null {
+  const pathElement = isLinearPathElement(selectedElement) ? selectedElement : rememberedPath;
+  if (!pathElement) return null;
+  return {
+    deck: buildLineSlideDeck(pathElement),
+    pathElement,
+    frames,
+  };
+}
+
+/** Resolves every slideshow type currently available in the drawing without mutating app state. */
+export function resolveSlideDeckChoices(ea: ExcalidrawAutomate): SlideDeckChoices {
+  const viewElements = ea.getViewElements();
+  const frames = getNamedFrames(ea, viewElements);
+  const selectedElement = ea.getViewSelectedElement();
+  const rememberedPath = findRememberedPath(viewElements);
+  const frame = resolveFrameDeck(frames);
+  const line = resolveLineDeck(selectedElement, rememberedPath, frames);
+  return {
+    frame,
+    line,
+    // Preserve legacy behavior when no explicit sidepanel choice is supplied: a selected or
+    // remembered presentation path takes precedence over frames.
+    defaultType: line ? "line" : frame ? "frame" : null,
+  };
+}
+
+/** Resolves the current canonical deck without mutating app state or showing notices. */
+export function resolveSlideDeck(
+  ea: ExcalidrawAutomate,
+  presentationType?: PresentationPathType,
+): ResolvedSlideDeck | null {
+  const choices = resolveSlideDeckChoices(ea);
+  if (presentationType) return choices[presentationType];
+  return choices.defaultType ? choices[choices.defaultType] : null;
+}
+
 /** Resolves the active presentation setup with the same path precedence as Slideshow.md. */
 export function resolvePresentationSetup(
   ea: ExcalidrawAutomate,
   api: ExcalidrawAPI,
   t?: SlideshowTranslator,
+  presentationType?: PresentationPathType,
 ): PresentationSetup | null {
   const viewElements = ea.getViewElements();
   const rememberedPath = findRememberedPath(viewElements);
   const selectedElement = ea.getViewSelectedElement();
   let shouldHidePathAfterPresentation = true;
 
-  if (rememberedPath && isLinearPathElement(selectedElement)) {
+  if (
+    presentationType !== "frame" &&
+    rememberedPath &&
+    isLinearPathElement(selectedElement)
+  ) {
     api.setToast({
       message:
         t?.("selectedPathOverridesHidden") ??
@@ -89,7 +128,7 @@ export function resolvePresentationSetup(
     shouldHidePathAfterPresentation = false;
   }
 
-  const resolved = resolveSlideDeck(ea);
+  const resolved = resolveSlideDeck(ea, presentationType);
   const frameRenderingOriginalState = api.getAppState().frameRendering;
   if (!resolved) {
     api.setToast({

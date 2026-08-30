@@ -8,11 +8,12 @@ import type { SlideshowTranslator } from "./lang";
 import { resolvePresentationSetup } from "./presentationPath";
 import { SlideshowController } from "./SlideshowController";
 import { SlideshowSidepanel } from "./SlideshowSidepanel";
-import type { SlideshowConfig } from "./types";
+import type { PresentationPathType, SlideshowConfig } from "./types";
 
 interface PresentationLaunchOptions {
   initialSlide?: number;
   startFullscreen?: boolean;
+  presentationType?: PresentationPathType;
 }
 
 function resolveLaunchModifiers(view: ScriptExcalidrawView): { startFullscreen: boolean } {
@@ -42,8 +43,11 @@ export async function startSlideshowPresentation(
   }
 
   window.removePresentationEventHandlers?.();
-  const setup = resolvePresentationSetup(scriptEa, api, t);
+  const setup = resolvePresentationSetup(scriptEa, api, t, launch.presentationType);
   if (!setup || setup.slides.length === 0) return;
+  // Starting from a sidepanel leaves the sidepanel leaf active. Return keyboard focus to the
+  // drawing before the controller installs its shortcuts so navigation works immediately.
+  app.workspace.setActiveLeaf(targetView.leaf, { focus: true });
   const modifierDefaults = resolveLaunchModifiers(targetView);
   const controller = new SlideshowController({
     ea: scriptEa,
@@ -83,7 +87,8 @@ export async function openSlideshowSidepanel(
     t,
     icons: getSlideshowIcons(scriptEa),
     config,
-    startPresentation: () => startSlideshowPresentation(scriptEa, scriptUtils, config, t),
+    startPresentation: (presentationType) =>
+      startSlideshowPresentation(scriptEa, scriptUtils, config, t, { presentationType }),
   });
   sidepanel.initialize();
   tab.open();

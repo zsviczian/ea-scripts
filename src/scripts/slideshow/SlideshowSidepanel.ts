@@ -10,7 +10,7 @@ import type { SlideDeckSlide } from "./SlideDeck";
 import { SlidePreviewService, getSceneVisualFingerprint } from "./SlidePreviewService";
 import { SlideSorter } from "./SlideSorter";
 import type { SlideshowTranslator } from "./lang";
-import { resolveSlideDeck } from "./presentationPath";
+import { resolveSlideDeckChoices, type SlideDeckChoices } from "./presentationPath";
 import {
   hasBoundLineEndpoint,
   reorderFrameSlides,
@@ -20,7 +20,12 @@ import {
   setFrameExcluded,
 } from "./slideDeckMutations";
 import { SLIDESHOW_SIDEPANEL_STYLES } from "./styles";
-import type { ResolvedSlideDeck, SlideshowConfig, SlideshowIcons } from "./types";
+import type {
+  PresentationPathType,
+  ResolvedSlideDeck,
+  SlideshowConfig,
+  SlideshowIcons,
+} from "./types";
 
 export interface SlideshowSidepanelOptions {
   ea: ExcalidrawAutomate;
@@ -28,7 +33,7 @@ export interface SlideshowSidepanelOptions {
   t: SlideshowTranslator;
   icons: SlideshowIcons;
   config: SlideshowConfig;
-  startPresentation(): Promise<void>;
+  startPresentation(presentationType: PresentationPathType): Promise<void>;
 }
 
 function getDeckFingerprint(resolved: ResolvedSlideDeck | null): string {
@@ -52,6 +57,9 @@ export class SlideshowSidepanel {
   private sorter: SlideSorter | null = null;
   private previewService: SlidePreviewService | null = null;
   private resolved: ResolvedSlideDeck | null = null;
+  private choices: SlideDeckChoices = { frame: null, line: null, defaultType: null };
+  private presentationType: PresentationPathType | null = null;
+  private readonly presentationTypeByDrawing = new Map<string, PresentationPathType>();
   private refreshTimer = 0;
   private ownerWindow: Window;
   private lastFingerprint = "";
@@ -125,6 +133,8 @@ export class SlideshowSidepanel {
     this.previewService?.clear();
     this.previewService = null;
     this.resolved = null;
+    this.choices = { frame: null, line: null, defaultType: null };
+    this.presentationType = null;
     this.lastFingerprint = "";
     this.options.ea.setView(view);
     this.options.ea.clear();
@@ -176,21 +186,32 @@ export class SlideshowSidepanel {
       this.renderUnavailable();
       return;
     }
-    const resolved = resolveSlideDeck(ea);
-    const compositeFingerprint = `${getDeckFingerprint(resolved)}|${getSceneVisualFingerprint(ea.getViewElements())}`;
+    const choices = resolveSlideDeckChoices(ea);
+    const drawingKey = ea.targetView.file.path;
+    const storedType = this.presentationTypeByDrawing.get(drawingKey);
+    const presentationType =
+      storedType && choices[storedType]
+        ? storedType
+        : choices.defaultType;
+    if (presentationType) this.presentationTypeByDrawing.set(drawingKey, presentationType);
+    const resolved = presentationType ? choices[presentationType] : null;
+    const compositeFingerprint = `${presentationType ?? "none"}|${getDeckFingerprint(choices.frame)}|${getDeckFingerprint(choices.line)}|${getSceneVisualFingerprint(ea.getViewElements())}`;
     if (!force && compositeFingerprint === this.lastFingerprint) return;
 
     const selectedId = this.sorter?.getSelectedSlideId() ?? null;
+    const expandedNotesId = this.sorter?.getExpandedNotesSlideId() ?? null;
     this.sorter?.destroy();
     this.sorter = null;
+    this.choices = choices;
+    this.presentationType = presentationType;
     this.resolved = resolved;
     this.lastFingerprint = compositeFingerprint;
     this.pendingRefresh = false;
     this.previewService ??= new SlidePreviewService(ea, api, this.options.config.maxZoom);
-    this.render(selectedId);
+    this.render(selectedId, expandedNotesId);
   }
 
-  private render(preferredSlideId: string | null): void {
+  private render(preferredSlideId: string | null, preferredNotesSlideId: string | null): void {
     const { tab, t, icons, ea } = this.options;
     tab.setDisabled(false);
     tab.contentEl.replaceChildren();
@@ -216,7 +237,9 @@ export class SlideshowSidepanel {
     startButton.addEventListener("click", () => {
       void (async () => {
         await this.sorter?.flushNotes();
-        await this.options.startPresentation();
+        if (this.presentationType) {
+          await this.options.startPresentation(this.presentationType);
+        }
       })();
     });
 
@@ -238,6 +261,32 @@ export class SlideshowSidepanel {
       empty.textContent = t("noSlides");
       root.appendChild(empty);
       return;
+    }
+
+    if (this.choices.frame && this.choices.line) {
+      const deckPicker = doc.createElement("div");
+      deckPicker.className = "slideshow-sidepanel__deck-picker";
+      root.appendChild(deckPicker);
+      const label = doc.createElement("label");
+      label.textContent = t("presentationType");
+      deckPicker.appendChild(label);
+      const select = doc.createElement("select");
+      select.setAttribute("aria-label", t("presentationType"));
+      select.title = t("presentationTypeHint");
+      const frameOption = doc.createElement("option");
+      frameOption.value = "frame";
+      frameOption.textContent = t("frameDeck");
+      select.appendChild(frameOption);
+      const lineOption = doc.createElement("option");
+      lineOption.value = "line";
+      lineOption.textContent = t("lineDeck");
+      select.appendChild(lineOption);
+      select.value = this.presentationType ?? this.choices.defaultType ?? "frame";
+      select.addEventListener("change", () => {
+        const nextType = select.value === "line" ? "line" : "frame";
+        void this.selectPresentationType(nextType);
+      });
+      deckPicker.appendChild(select);
     }
 
     const deck = this.resolved.deck;
@@ -287,7 +336,17 @@ export class SlideshowSidepanel {
         },
       },
     });
-    this.sorter.render(preferredSlideId);
+    this.sorter.render(preferredSlideId, preferredNotesSlideId);
+  }
+
+  private async selectPresentationType(presentationType: PresentationPathType): Promise<void> {
+    if (!this.choices[presentationType] || presentationType === this.presentationType) return;
+    await this.sorter?.flushNotes();
+    const view = this.options.ea.targetView;
+    if (!view) return;
+    this.presentationTypeByDrawing.set(view.file.path, presentationType);
+    this.lastFingerprint = "";
+    await this.refresh(true);
   }
 
   private async moveSlide(fromIndex: number, toIndex: number): Promise<void> {

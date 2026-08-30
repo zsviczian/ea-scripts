@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { getSceneVisualFingerprint } from "../SlidePreviewService";
-import { resolvePresentationSetup } from "../presentationPath";
+import { getPreviewNavigationRect, getSceneVisualFingerprint } from "../SlidePreviewService";
+import { createSlideshowTranslator } from "../lang";
+import {
+  resolvePresentationSetup,
+  resolveSlideDeck,
+  resolveSlideDeckChoices,
+} from "../presentationPath";
 import {
   hasBoundLineEndpoint,
   reorderFrameSlides,
@@ -175,6 +180,32 @@ describe("slideshow checkpoint 2 mutations", () => {
 });
 
 describe("slideshow checkpoint 2 deck consumption", () => {
+  it("keeps frame and remembered line decks independently selectable", () => {
+    const rememberedPath = line({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "path",
+        hidden: true,
+        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+        slides: [{ id: "one" }, { id: "two" }, { id: "three" }],
+      },
+    });
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha"), rememberedPath];
+    const ea = {
+      getViewElements: () => elements,
+      getViewSelectedElement: () => null,
+      cloneElement: <T extends ExcalidrawElement>(element: T) => structuredClone(element) as Mutable<T>,
+    } as unknown as ExcalidrawAutomate;
+    const choices = resolveSlideDeckChoices(ea);
+    expect(choices.defaultType).toBe("line");
+    expect(choices.frame?.deck.kind).toBe("frame");
+    expect(choices.line?.deck.kind).toBe("path");
+    expect(resolveSlideDeck(ea, "frame")?.deck.slides.map((slide) => slide.title)).toEqual([
+      "Alpha",
+    ]);
+    expect(resolveSlideDeck(ea, "line")?.pathElement?.id).toBe("path");
+  });
+
   it("presentation setup uses explicit frame order and omits excluded frames", () => {
     const elements: ExcalidrawElement[] = [
       frame("a", "Alpha", { slideshow: { schemaVersion: 2, kind: "frame", order: 1 } }),
@@ -221,6 +252,55 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     } as unknown as ExcalidrawAPI;
     expect(resolvePresentationSetup(ea, api)).toBeNull();
     expect(toast).toContain("excluded");
+  });
+
+  it("explicit frame presentation ignores a remembered line path", () => {
+    const rememberedPath = line({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "path",
+        hidden: true,
+        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+        slides: [{ id: "one" }, { id: "two" }, { id: "three" }],
+      },
+    });
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha"), rememberedPath];
+    const ea = {
+      getViewElements: () => elements,
+      getViewSelectedElement: () => null,
+      cloneElement: <T extends ExcalidrawElement>(element: T) => structuredClone(element) as Mutable<T>,
+    } as unknown as ExcalidrawAutomate;
+    const api = {
+      getAppState: () => ({ frameRendering: { enabled: false } }),
+      setToast: () => undefined,
+      updateScene: () => undefined,
+    } as unknown as ExcalidrawAPI;
+    const setup = resolvePresentationSetup(ea, api, undefined, "frame");
+    expect(setup?.pathType).toBe("frame");
+    expect(setup?.slideTitles).toEqual(["Alpha"]);
+  });
+
+  it("calculates preview crops against an HD presentation viewport", () => {
+    const slide = {
+      id: "a",
+      kind: "frame",
+      frameId: "a",
+      title: "Alpha",
+      rect: { x1: 100, y1: 200, x2: 200, y2: 300 },
+      excluded: false,
+      order: 0,
+      animationSteps: [],
+    } as const;
+    const rect = getPreviewNavigationRect(slide, 1);
+    expect(rect.right - rect.left).toBe(1920);
+    expect(rect.bottom - rect.top).toBe(1080);
+  });
+
+  it("formats presentation slide titles with current and total slide numbers", () => {
+    const t = createSlideshowTranslator("en");
+    expect(t("presentationSlideTitle", { title: "Alpha", number: 1, total: 2 })).toBe(
+      "Alpha (1/2)",
+    );
   });
 
   it("thumbnail fingerprint ignores slideshow metadata-only edits", () => {

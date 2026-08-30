@@ -33,6 +33,7 @@ export interface SlideSorterOptions {
 /** Owns one rendered sorter instance and pending presenter-note edits. */
 export class SlideSorter {
   private selectedSlideId: string | null = null;
+  private expandedNotesSlideId: string | null = null;
   private notesTextarea: HTMLTextAreaElement | null = null;
   private notesTimer = 0;
   private ownerWindow: Window;
@@ -60,23 +61,38 @@ export class SlideSorter {
     return this.selectedSlideId;
   }
 
+  /** Returns the slide whose inline notes editor is expanded, if any. */
+  public getExpandedNotesSlideId(): string | null {
+    return this.expandedNotesSlideId;
+  }
+
   /** Returns whether notes currently have keyboard focus. */
   public isEditingNotes(): boolean {
     return this.notesTextarea?.ownerDocument.activeElement === this.notesTextarea;
   }
 
-  /** Selects the prior slide id when still present, then renders the sorter. */
-  public render(preferredSlideId = this.selectedSlideId): void {
+  /** Selects prior stable ids when still present, then renders the sorter. */
+  public render(
+    preferredSlideId = this.selectedSlideId,
+    preferredNotesSlideId = this.expandedNotesSlideId,
+  ): void {
     this.renderGeneration += 1;
     const generation = this.renderGeneration;
     const { container, deck } = this.options;
     container.replaceChildren();
+    this.notesTextarea = null;
     if (deck.slides.length === 0) return;
 
     this.selectedSlideId =
       preferredSlideId && deck.slides.some((slide) => slide.id === preferredSlideId)
         ? preferredSlideId
         : (deck.slides[0]?.id ?? null);
+    this.expandedNotesSlideId =
+      preferredNotesSlideId &&
+      preferredNotesSlideId === this.selectedSlideId &&
+      deck.slides.some((slide) => slide.id === preferredNotesSlideId)
+        ? preferredNotesSlideId
+        : null;
 
     deck.slides.forEach((slide, index) => {
       const row = this.createRow(slide, index);
@@ -93,7 +109,6 @@ export class SlideSorter {
           .catch(() => undefined);
       }
     });
-    this.renderNotesEditor();
   }
 
   private createIconButton(
@@ -130,53 +145,14 @@ export class SlideSorter {
     row.addEventListener("dblclick", () => this.options.callbacks.zoomToSlide(slide));
     row.addEventListener("keydown", (event) => this.handleRowKeydown(event, slide, index));
 
-    const drag = doc.createElement("div");
-    drag.className = "slideshow-sorter__drag";
-    const dragButton = this.createIconButton(
-      doc,
-      icons.gripVertical,
-      t("dragSlide"),
-      !reorderEnabled,
-      () => undefined,
-    );
-    drag.appendChild(dragButton);
-    row.appendChild(drag);
-
-    if (ea.DEVICE.isDesktop && reorderEnabled) {
-      row.draggable = true;
-      row.addEventListener("dragstart", (event) => {
-        this.draggedIndex = index;
-        row.classList.add("is-dragging");
-        event.dataTransfer?.setData("text/plain", String(index));
-        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
-      });
-      row.addEventListener("dragend", () => {
-        this.draggedIndex = null;
-        row.classList.remove("is-dragging");
-      });
-      row.addEventListener("dragover", (event) => {
-        event.preventDefault();
-        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-      });
-      row.addEventListener("drop", (event) => {
-        event.preventDefault();
-        const fromIndex = this.draggedIndex ?? Number.parseInt(event.dataTransfer?.getData("text/plain") ?? "", 10);
-        if (Number.isInteger(fromIndex) && fromIndex !== index) {
-          void this.options.callbacks.move(fromIndex, index);
-        }
-      });
-    }
-
-    const preview = doc.createElement("div");
-    preview.className = "slideshow-sorter__preview";
-    row.appendChild(preview);
-
-    const body = doc.createElement("div");
-    body.className = "slideshow-sorter__body";
+    const top = doc.createElement("div");
+    top.className = "slideshow-sorter__top";
     const title = doc.createElement("div");
     title.className = "slideshow-sorter__title";
-    title.textContent = t("slideNumberAndTitle", { number: index + 1, title: slide.title });
-    body.appendChild(title);
+    const titleText = t("slideNumberAndTitle", { number: index + 1, title: slide.title });
+    title.textContent = titleText;
+    title.title = titleText;
+    top.appendChild(title);
     const badges = doc.createElement("div");
     badges.className = "slideshow-sorter__badges";
     if (slide.notes) {
@@ -191,15 +167,67 @@ export class SlideSorter {
       badge.innerHTML = `${icons.sparkles}<span>${t("animationCount", { count: slide.animationSteps.length })}</span>`;
       badges.appendChild(badge);
     }
-    body.appendChild(badges);
-    row.appendChild(body);
+    top.appendChild(badges);
+    row.appendChild(top);
+
+    const content = doc.createElement("div");
+    content.className = "slideshow-sorter__content";
+    row.appendChild(content);
+
+    const drag = doc.createElement("div");
+    drag.className = "slideshow-sorter__drag";
+    const dragButton = this.createIconButton(
+      doc,
+      icons.gripVertical,
+      t("dragSlide"),
+      !reorderEnabled,
+      () => undefined,
+    );
+    drag.appendChild(dragButton);
+    content.appendChild(drag);
+
+    if (ea.DEVICE.isDesktop && reorderEnabled) {
+      drag.draggable = true;
+      drag.addEventListener("dragstart", (event) => {
+        this.draggedIndex = index;
+        row.classList.add("is-dragging");
+        event.dataTransfer?.setData("text/plain", String(index));
+        if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+      });
+      drag.addEventListener("dragend", () => {
+        this.draggedIndex = null;
+        row.classList.remove("is-dragging");
+      });
+      row.addEventListener("dragover", (event) => {
+        event.preventDefault();
+        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+      });
+      row.addEventListener("drop", (event) => {
+        event.preventDefault();
+        const dataIndex = Number.parseInt(event.dataTransfer?.getData("text/plain") ?? "", 10);
+        const fromIndex = this.draggedIndex ?? dataIndex;
+        if (Number.isInteger(fromIndex) && fromIndex !== index) {
+          void this.options.callbacks.move(fromIndex, index);
+        }
+      });
+    }
+
+    const preview = doc.createElement("div");
+    preview.className = "slideshow-sorter__preview";
+    content.appendChild(preview);
 
     const actions = doc.createElement("div");
     actions.className = "slideshow-sorter__actions";
     actions.appendChild(
-      this.createIconButton(doc, icons.chevronUp, t("moveSlideUp"), !reorderEnabled || index === 0, () => {
-        void this.options.callbacks.move(index, index - 1);
-      }),
+      this.createIconButton(
+        doc,
+        icons.chevronUp,
+        t("moveSlideUp"),
+        !reorderEnabled || index === 0,
+        () => {
+          void this.options.callbacks.move(index, index - 1);
+        },
+      ),
     );
     actions.appendChild(
       this.createIconButton(
@@ -228,7 +256,20 @@ export class SlideSorter {
         ),
       );
     }
-    row.appendChild(actions);
+    const notesExpanded = this.expandedNotesSlideId === slide.id;
+    const notesButton = this.createIconButton(
+      doc,
+      icons.notebookPen,
+      notesExpanded ? t("hidePresenterNotes") : t("showPresenterNotes"),
+      false,
+      () => void this.toggleNotes(slide.id),
+    );
+    notesButton.classList.toggle("is-active", notesExpanded);
+    notesButton.setAttribute("aria-expanded", String(notesExpanded));
+    actions.appendChild(notesButton);
+    content.appendChild(actions);
+
+    if (notesExpanded) this.renderNotesEditor(slide, row);
     return row;
   }
 
@@ -267,7 +308,7 @@ export class SlideSorter {
       case "n":
       case "N":
         event.preventDefault();
-        void this.selectSlide(slide.id, true);
+        void this.openNotes(slide.id, true);
         break;
       case "a":
       case "A":
@@ -277,27 +318,45 @@ export class SlideSorter {
     }
   }
 
-  private async selectSlide(slideId: string, focusNotes = false): Promise<void> {
-    if (slideId !== this.selectedSlideId) {
+  private async selectSlide(slideId: string): Promise<void> {
+    if (slideId === this.selectedSlideId) return;
+    await this.flushNotes();
+    this.selectedSlideId = slideId;
+    this.expandedNotesSlideId = null;
+    this.render(slideId);
+  }
+
+  private async toggleNotes(slideId: string): Promise<void> {
+    if (this.expandedNotesSlideId === slideId) {
       await this.flushNotes();
-      this.selectedSlideId = slideId;
-      this.render(slideId);
+      this.expandedNotesSlideId = null;
+      this.render(this.selectedSlideId);
+      return;
     }
+    await this.openNotes(slideId, false);
+  }
+
+  private async openNotes(slideId: string, focusNotes: boolean): Promise<void> {
+    await this.flushNotes();
+    this.selectedSlideId = slideId;
+    this.expandedNotesSlideId = slideId;
+    this.render(slideId, slideId);
     if (focusNotes) this.notesTextarea?.focus();
   }
 
-  private renderNotesEditor(): void {
-    const slide = this.options.deck.slides.find((candidate) => candidate.id === this.selectedSlideId);
-    if (!slide) return;
+  private renderNotesEditor(slide: SlideDeckSlide, row: HTMLElement): void {
     const doc = this.options.container.ownerDocument;
     const notes = doc.createElement("div");
     notes.className = "slideshow-notes";
+    notes.addEventListener("click", (event) => event.stopPropagation());
     const heading = doc.createElement("strong");
     heading.textContent = this.options.t("notesHeading");
     notes.appendChild(heading);
     const textarea = doc.createElement("textarea");
     textarea.placeholder = this.options.t("notesPlaceholder");
     textarea.value = slide.notes ?? "";
+    textarea.addEventListener("click", (event) => event.stopPropagation());
+    textarea.addEventListener("keydown", (event) => event.stopPropagation());
     textarea.addEventListener("input", () => this.scheduleNotesSave());
     textarea.addEventListener("blur", () => {
       void this.flushNotes().finally(() => this.options.callbacks.notesBlurred());
@@ -307,12 +366,12 @@ export class SlideSorter {
     hint.className = "slideshow-notes__hint";
     hint.textContent = this.options.t("notesHint");
     notes.appendChild(hint);
-    this.options.container.appendChild(notes);
+    row.appendChild(notes);
     this.notesTextarea = textarea;
   }
 
   private scheduleNotesSave(): void {
-    if (!this.notesTextarea || !this.selectedSlideId) return;
+    if (!this.notesTextarea || !this.expandedNotesSlideId) return;
     if (this.notesTimer) this.ownerWindow.clearTimeout(this.notesTimer);
     this.notesTimer = this.ownerWindow.setTimeout(() => {
       this.notesTimer = 0;
@@ -327,7 +386,9 @@ export class SlideSorter {
       this.notesTimer = 0;
     }
     if (this.notesSaveInFlight) await this.notesSaveInFlight;
-    const slide = this.options.deck.slides.find((candidate) => candidate.id === this.selectedSlideId);
+    const slide = this.options.deck.slides.find(
+      (candidate) => candidate.id === this.expandedNotesSlideId,
+    );
     if (!slide || !this.notesTextarea) return;
     const current = this.notesTextarea.value;
     if (current === (slide.notes ?? "")) return;

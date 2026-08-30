@@ -10,14 +10,26 @@ import {
 } from "../../sharedUtils/presentationGeometry";
 import type { SlideDeckSlide } from "./SlideDeck";
 
-const PREVIEW_WIDTH = 320;
-const PREVIEW_HEIGHT = 180;
+const PRESENTATION_WIDTH = 1920;
+const PRESENTATION_HEIGHT = 1080;
 const EXPORT_PADDING = 10;
 
 interface CachedSceneSvg {
   fingerprint: string;
   svgMarkup: string;
   sceneBounds: SceneBounds;
+}
+
+/** Calculates sorter crops using the fixed HD presentation viewport. */
+export function getPreviewNavigationRect(
+  slide: SlideDeckSlide,
+  maxZoom: number,
+): ReturnType<typeof getNavigationRect> {
+  return getNavigationRect(
+    slide.rect,
+    { width: PRESENTATION_WIDTH, height: PRESENTATION_HEIGHT },
+    maxZoom,
+  );
 }
 
 function cloneWithoutMetadata(element: ExcalidrawElement): Record<string, unknown> {
@@ -67,6 +79,21 @@ export class SlidePreviewService {
     this.pendingFingerprint = fingerprint;
     this.pending = (async () => {
       const appState = this.api.getAppState();
+      const bounds = this.ea.getBoundingBox(elements);
+      // Frame outlines are intentionally omitted from thumbnails. createViewSVG can therefore
+      // calculate a tighter export origin from visible child content than getBoundingBox() does.
+      // Anchor the export to the complete scene bounds with an invisible rectangle so cropping
+      // and scene-coordinate translation share the same origin.
+      this.ea.clear();
+      const anchorId = this.ea.addRect(bounds.topX, bounds.topY, bounds.width, bounds.height);
+      const anchor = this.ea.getElement(anchorId);
+      if (anchor) {
+        anchor.opacity = 0;
+        anchor.strokeWidth = 0.01;
+        anchor.roughness = 0;
+      }
+      const anchorElements = this.ea.getElements().map((element) => this.ea.cloneElement(element));
+      this.ea.clear();
       const svg = await this.ea.createViewSVG({
         withBackground: true,
         theme: appState.theme,
@@ -80,8 +107,10 @@ export class SlidePreviewService {
         selectedOnly: false,
         skipInliningFonts: false,
         embedScene: false,
+        ...(anchorElements.length > 0
+          ? { elementsOverride: elements.concat(anchorElements) }
+          : {}),
       });
-      const bounds = this.ea.getBoundingBox(elements);
       const cached = {
         fingerprint,
         svgMarkup: svg.outerHTML,
@@ -114,11 +143,7 @@ export class SlidePreviewService {
     if (!clone || clone.tagName.toLowerCase() !== "svg") return null;
 
     const rect = translateNavigationRect(
-      getNavigationRect(
-        slide.rect,
-        { width: PREVIEW_WIDTH, height: PREVIEW_HEIGHT },
-        this.maxZoom,
-      ),
+      getPreviewNavigationRect(slide, this.maxZoom),
       cached.sceneBounds,
       EXPORT_PADDING,
     );

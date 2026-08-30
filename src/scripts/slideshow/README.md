@@ -19,27 +19,28 @@ script is emitted to `build/slideshow/slideshow.md`.
 - Select an arrow or line to use its consecutive point pairs as slides.
 - With no selection, a previously remembered presentation path is reused.
 - If no line path is available, frames are used.
+- If both frames and a remembered/selected line path are available, the sidepanel shows a presentation-type dropdown. Frame and line configurations remain independent, and **Start presentation** runs the type currently selected in the sidepanel.
 - Frames without slideshow metadata retain alphabetical ordering.
 - The first sorter mutation writes explicit normalized `order` metadata; after that, frame renames do not change presentation order.
 - Excluded frames remain visible and editable in the sorter, but are omitted from presentation and PDF output.
 
 ## Slide sorter
 
-The sidepanel shows a thumbnail and controls for every slide.
+The sidepanel shows a title, thumbnail, and controls for every slide. Titles occupy their own top row so long frame names remain readable.
 
 - Desktop: drag rows to reorder them.
 - All platforms: use the up/down buttons or `Alt+Arrow Up/Down`.
 - `Arrow Up/Down`: move sorter focus.
 - `Enter`: zoom the drawing editor to the focused slide.
 - `Space`: toggle inclusion for frame slides.
-- `N`: focus presenter notes.
+- `N`: expand and focus presenter notes for the selected slide.
 - `A`: reserved for the Checkpoint 3 animation editor.
 
 Line slides reorder consecutive point pairs in absolute scene coordinates and normalize the line origin afterward. Stable line-slide metadata records are reordered in the same transaction so presenter notes remain attached to the correct slide. Reordering is disabled when the presentation line/arrow has an active start or end binding.
 
 ## Presenter notes
 
-Each sorter row can own Markdown presenter notes.
+Each sorter row can own Markdown presenter notes. Use the notes icon on that row to expand/collapse its editor directly beneath the slide instead of using a shared editor at the bottom of the sorter.
 
 - Frame notes are stored in `frame.customData.slideshow.notes`.
 - Line-slide notes are stored in the corresponding stable record on the presentation-path element.
@@ -50,11 +51,11 @@ The separate presenter popout and rendered Markdown notes are planned for Checkp
 
 ## Thumbnails
 
-`SlidePreviewService` exports the drawing once as SVG for a visual scene fingerprint and crops per-slide clones in the sidepanel's current owner document. Slideshow metadata-only changes do not invalidate the visual SVG cache.
+`SlidePreviewService` exports the drawing once as SVG for a visual scene fingerprint and crops per-slide clones in the sidepanel's current owner document. The export is anchored to the full scene bounds with an invisible sizing element so hidden frame chrome cannot shift the crop origin. Preview navigation assumes a fixed 1920×1080 presentation viewport. Slideshow metadata-only changes do not invalidate the visual SVG cache.
 
 ## Presentation and PDF behavior
 
-Presentation navigation, the toolbar slide picker, and PDF export consume the canonical visible deck. Frame order and exclusions therefore match the sorter. PDF pages use the normal fully visible scene state; animation-aware final-state rendering is completed with the animation runtime in Checkpoint 3.
+Presentation navigation, the toolbar slide picker, and PDF export consume the canonical visible deck. Frame order and exclusions therefore match the sorter. The presentation slide picker labels entries as `Title (current/total)`. Starting from the sidepanel returns focus to the drawing leaf before keyboard handlers are installed, so arrow-key navigation is immediately active. PDF pages use the normal fully visible scene state; animation-aware final-state rendering is completed with the animation runtime in Checkpoint 3.
 
 ## Keyboard shortcuts and modifier keys during presentation
 
