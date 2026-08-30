@@ -37,11 +37,9 @@ function moveId(ids: string[], fromIndex: number, toIndex: number): void {
   ids.splice(toIndex, 0, id);
 }
 
-async function commitWorkbench(ea: ExcalidrawAutomate, forceSave = false): Promise<void> {
-  await ea.addElementsToView(false, true, false, false, "IMMEDIATELY");
-  if (forceSave && ea.targetView) {
-    await ea.targetView.forceSave(true);
-  }
+async function commitWorkbench(ea: ExcalidrawAutomate): Promise<void> {
+  const committed = await ea.addElementsToView(false, true, false, false, "IMMEDIATELY");
+  if (!committed) throw new Error("The slideshow metadata could not be applied to the drawing.");
 }
 
 async function writeFrameMetadataSet(
@@ -49,7 +47,6 @@ async function writeFrameMetadataSet(
   orderedIds: readonly string[],
   targetId: string | null,
   mutateTarget?: (data: ReturnType<typeof withNormalizedFrameOrder>) => void,
-  forceSave = false,
 ): Promise<void> {
   const frames = getFrameElements(ea);
   const byId = new Map(frames.map((frame) => [frame.id, frame]));
@@ -66,7 +63,7 @@ async function writeFrameMetadataSet(
     if (frameId === targetId) mutateTarget?.(data);
     writeSlideshowMetadata(ea, frameId, data);
   });
-  await commitWorkbench(ea, forceSave);
+  await commitWorkbench(ea);
 }
 
 /** Reorders frame slides and writes normalized 0..n-1 order metadata in one scene transaction. */
@@ -102,18 +99,21 @@ export async function saveFrameNotes(
   notes: string,
 ): Promise<void> {
   const frames = getFrameElements(ea);
-  const orderedIds = buildFrameSlideDeck(frames).slides.map((slide) => slide.id);
-  await writeFrameMetadataSet(
-    ea,
-    orderedIds,
-    frameId,
-    (data) => {
-      const normalized = normalizeNotes(notes);
-      if (normalized === undefined) delete data.notes;
-      else data.notes = normalized;
-    },
-    true,
-  );
+  const deck = buildFrameSlideDeck(frames);
+  const order = deck.slides.findIndex((slide) => slide.id === frameId);
+  const source = frames.find((frame) => frame.id === frameId);
+  if (!source || order < 0) {
+    throw new Error("The selected frame slide no longer exists.");
+  }
+
+  ea.clear();
+  ea.copyViewElementsToEAforEditing([source]);
+  const data = withNormalizedFrameOrder(source.customData, order);
+  const normalized = normalizeNotes(notes);
+  if (normalized === undefined) delete data.notes;
+  else data.notes = normalized;
+  writeSlideshowMetadata(ea, frameId, data);
+  await commitWorkbench(ea);
 }
 
 /** Returns whether line-slide reordering must be disabled for endpoint binding safety. */
@@ -122,7 +122,10 @@ export function hasBoundLineEndpoint(path: ExcalidrawLinearElement): boolean {
     startBinding?: unknown;
     endBinding?: unknown;
   };
-  return bindingPath.startBinding != null || bindingPath.endBinding != null;
+  return (
+    (bindingPath.startBinding !== null && bindingPath.startBinding !== undefined) ||
+    (bindingPath.endBinding !== null && bindingPath.endBinding !== undefined)
+  );
 }
 
 function fallbackPathProperties(path: ExcalidrawLinearElement): {
@@ -211,7 +214,7 @@ export async function saveLineNotes(
   if (normalized === undefined) delete record.notes;
   else record.notes = normalized;
   writeSlideshowMetadata(ea, element.id, metadata);
-  await commitWorkbench(ea, true);
+  await commitWorkbench(ea);
 }
 
 /** Shows or hides a remembered line presentation path while preserving its original styling. */
@@ -245,7 +248,7 @@ export async function setLinePresentationPathHidden(
     element.locked = metadata.originalProps.locked;
   }
   writeSlideshowMetadata(ea, element.id, metadata);
-  await commitWorkbench(ea, true);
+  await commitWorkbench(ea);
 }
 
 /** Reads whether a frame is currently excluded without treating invalid metadata as authoritative. */

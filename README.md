@@ -120,6 +120,20 @@ language-specific catalogs. Lookup tries the exact locale, its base language,
 then English. Use named placeholders for dynamic values and obtain the runtime
 locale with `ea.obsidian.moment.locale()`.
 
+## Excalidraw Automate API conventions
+
+- Use `verifyMinimumPluginVersion()` for plugin requirements and
+  `verifyMinAppVersion()` only for Obsidian application requirements.
+- Use `ea.setView()` for automatic view selection, `ea.setView(view)` for an
+  explicit binding, and `ea.setView(null)` to represent an unbound sidepanel.
+- Branch on `utils.executionSource` when autostart/restore executions should
+  only register lifecycle behavior while manual invocation performs the action.
+- Use `ea.registerAutostart(message)` to explain what autostart registers. The
+  message appears between the permission question and permission-management hint.
+- Element-action providers receive an icon name; custom DOM buttons should use
+  `ea.obsidian.getIcon()`.
+- Prefer awaited EA mutation/save operations over direct unpublished view APIs.
+
 ## Publishing model
 
 This template supports multiple scripts in one workspace, but publication is still script-by-script.

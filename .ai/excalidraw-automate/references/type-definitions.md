@@ -18,10 +18,12 @@ type ExcalidrawAutomateHelpTarget = ((...args: unknown[]) => unknown) | string;
 /**
  * ExcalidrawAutomate is a utility class that provides a simplified API to interact with Excalidraw elements and the Excalidraw canvas.
  * Elements in the Excalidraw Scene are immutable. You should never directly change element properties in the scene object.
- * ExcalidrawAutomate provides a "workbench" where you can create, modify, and delete elements before committing them to the Excalidraw Scene.
- * The basic workflow is to create elements in ExcalidrawAutomate and once ready commit them to the Excalidraw Scene using addElementsToView().
- * To modify elements in the scene, you should first copy them over to EA using copyViewElementsToEAforEditing, make the necessary modifications,
- * then commit them back to the scene using addElementsToView().
+ * ExcalidrawAutomate provides a stateful, in-memory "workbench" where you can create, modify, and delete elements independently of the Excalidraw Scene.
+ * Begin each independent transaction with clear(). To modify existing scene elements while preserving their identity, copy them to the workbench with
+ * copyViewElementsToEAforEditing() and modify the copies returned by getElement(originalId). Commit persistent edits with addElementsToView(),
+ * or use the modified workbench elements for a temporary EA operation such as export and then discard them with clear() without committing.
+ * cloneElement() and cloneElements() deliberately generate new IDs and are only for creating genuine duplicates, never for editing an existing scene element.
+ * Do not interleave asynchronous operations that mutate the same EA workbench; await the operation, then clear before starting another transaction.
  * To delete an element from the view set element.isDeleted = true and commit the changes to the scene using addElementsToView().
  *
  * At a very high level, EA has 3 type of functions:
@@ -610,7 +612,7 @@ export declare class ExcalidrawAutomate {
      * @param {boolean} [options.selectedOnly=false] - Whether to include only the selected elements in the SVG.
      * @param {boolean} [options.skipInliningFonts=false] - Whether to skip inlining fonts in the SVG.
      * @param {boolean} [options.embedScene=false] - Whether to embed the scene in the SVG.
-     * @param {ExcalidrawElement[]} [options.elementsOverride] - Optional override for the elements to include in the SVG. Primary to support the Printable Layout Wizard script
+     * @param {readonly ExcalidrawElement[]} [options.elementsOverride] - Optional complete replacement for the view's exported elements. This array is not merged with the current scene or treated as a patch by ID: when supplied, only its non-deleted elements are exported. Include every element that should appear in the SVG.
      * @returns {Promise<SVGSVGElement>} A promise that resolves to the SVG element.
      */
     createViewSVG({ withBackground, theme, frameRendering, padding, selectedOnly, skipInliningFonts, embedScene, elementsOverride, }: {
@@ -621,7 +623,7 @@ export declare class ExcalidrawAutomate {
         selectedOnly?: boolean;
         skipInliningFonts?: boolean;
         embedScene?: boolean;
-        elementsOverride?: ExcalidrawElement[];
+        elementsOverride?: readonly ExcalidrawElement[];
     }): Promise<SVGSVGElement>;
     /**
      * Creates an SVG image from the ExcalidrawAutomate elements and the template provided.
@@ -936,7 +938,9 @@ export declare class ExcalidrawAutomate {
      */
     addLabelToLine(lineId: string, label: string): string;
     /**
-     * Clears elementsDict and imagesDict only.
+     * Clears the EA workbench (`elementsDict` and `imagesDict`) without changing
+     * the scene, target view, or current style. Call this before each independent
+     * workbench transaction and before repurposing an EA instance.
      */
     clear(): void;
     /**
@@ -949,7 +953,7 @@ export declare class ExcalidrawAutomate {
      * @returns {boolean} True if the file is an Excalidraw file, false otherwise.
      */
     isExcalidrawFile(f: TFile): boolean;
-    targetView: ExcalidrawView;
+    targetView: ExcalidrawView | null;
     /**
      * Sets the target view for EA. All view operations and all access to the Excalidraw API
      * will be performed on this view.
@@ -957,12 +961,15 @@ export declare class ExcalidrawAutomate {
      * Typical usage:
      * - `setView()` to pick a sensible default automatically
      * - `setView(excalidrawView)` to explicitly target a specific view
+     * - `setView(null)` to explicitly clear `targetView`
      *
      * Selectors:
-     * - If `view` is `null` or `undefined` (or `"auto"`), EA will pick a sensible default:
+     * - If `view` is `undefined` (or `"auto"`), EA will pick a sensible default:
      *   1) the currently active Excalidraw view (if any),
      *   2) otherwise the last active Excalidraw view (if it is still available),
      *   3) otherwise the `"first"` Excalidraw view in the workspace.
+     * - If `view` is explicitly `null`, EA clears `targetView`. This is useful for
+     *   sidepanels when focus moves to a Markdown view or no drawing is eligible.
      * - If `show` is `true`, the view will be revealed (brought to front) and focused.
      *
      * Deprecated selectors (kept for backward compatibility):
@@ -974,11 +981,11 @@ export declare class ExcalidrawAutomate {
      *   necessarily match what a user would consider the “first”/“leftmost”/“topmost” view;
      *   from a user's perspective it may appear effectively random.**
      *
-     * @param {ExcalidrawView | "auto" | "first" | "active" | null | undefined} [view] - The view (or selector) to set as target.
+     * @param {ExcalidrawView | "auto" | "first" | "active" | null | undefined} [view] - The view or selector to set as target. Pass `null` to clear the target.
      * @param {boolean} [show=false] - Whether to reveal/focus the target view.
-     * @returns {ExcalidrawView} The ExcalidrawView that was set as `targetView` (or `null` if none found).
+     * @returns {ExcalidrawView | null} The ExcalidrawView that was set as `targetView`, or `null` when cleared or none was found.
      */
-    setView(view?: ExcalidrawView | "auto" | "first" | "active" | null, show?: boolean): ExcalidrawView;
+    setView(view?: ExcalidrawView | "auto" | "first" | "active" | null, show?: boolean): ExcalidrawView | null;
     /**
      * Returns the Excalidraw API for the current view.
      * @returns {ExcalidrawImperativeAPI} The Excalidraw API.
@@ -1067,11 +1074,14 @@ export declare class ExcalidrawAutomate {
      */
     getColorsFromSVGString(svgString: string): SVGColorInfo;
     /**
-     * Copies elements from the view to elementsDict for editing.
+     * Copies existing scene elements to the workbench as mutable, identity-preserving copies.
+     * The copies can be committed with `addElementsToView()` to update the original
+     * scene elements, or used temporarily by another EA operation and discarded with
+     * `clear()` without modifying the scene.
      * @param {ExcalidrawElement[]} elements - Array of elements to copy.
      * @param {boolean} [copyImages=false] - Whether to copy images as well.
      */
-    copyViewElementsToEAforEditing(elements: ExcalidrawElement[], copyImages?: boolean): void;
+    copyViewElementsToEAforEditing(elements: readonly ExcalidrawElement[], copyImages?: boolean): void;
     /**
      * Toggles full screen mode for the target view.
      * @param {boolean} [forceViewMode=false] - Whether to force view mode.
@@ -1177,11 +1187,12 @@ export declare class ExcalidrawAutomate {
      * A fresh "allow" also immediately re-runs the script in every other
      * currently-open Excalidraw view, so it attaches everywhere right away
      * instead of only the next time each view is opened.
+     * @param {string} [message] - Optional script-provided explanation displayed as the second paragraph of the permission prompt.
      * @returns "allow" if the script is permitted to autostart, "deny" if
      * the user has denied it, or "pending" if there is no active script or
      * the user has not yet made a decision.
      */
-    registerAutostart(): Promise<"allow" | "deny" | "pending">;
+    registerAutostart(message?: string): Promise<"allow" | "deny" | "pending">;
     /**
      * If set, this callback is triggered when the user closes an Excalidraw view.
      */
@@ -1572,7 +1583,10 @@ export declare class ExcalidrawAutomate {
      */
     generateElementId(): string;
     /**
-     * Clones the specified element with a new ID.
+     * Clones the specified element with a new ID for insertion as a genuine duplicate.
+     * Do not use this to edit an existing scene element; use
+     * `copyViewElementsToEAforEditing()` and retrieve the workbench copy by its
+     * original ID instead.
      * @param {ExcalidrawElement} element - The element to clone.
      * @returns {ExcalidrawElement} The cloned element with a new ID.
      */

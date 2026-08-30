@@ -48,6 +48,36 @@ When preparing a script for obsidian-excalidraw-plugin:
 - Prefer ea methods first.
 - Use ea.getExcalidrawAPI() for scene-level reads/writes.
 - Use window.ExcalidrawLib only when needed for low-level helpers.
+- Use `verifyMinimumPluginVersion()` for the Excalidraw plugin and
+  `verifyMinAppVersion()` only for the Obsidian application version.
+- `ea.setView()` and `ea.setView("auto")` select a sensible default;
+  `ea.setView(view)` binds explicitly; `ea.setView(null)` deliberately clears
+  `ea.targetView`. Clear the target when a multi-view sidepanel becomes unbound.
+- Use `utils.executionSource` to distinguish manual, autostart,
+  sidepanel-restore, and drawing-onload runs. Autostart should register
+  view-local behavior and return without launching interactive work.
+- Pass a concise explanation to `ea.registerAutostart(message)` when autostart
+  only registers tools or providers; state explicitly that the main action will
+  not start when a drawing opens.
+- `registerElementActionProvider()` expects an Obsidian/Lucide icon name, not
+  SVG markup. Use `ea.obsidian.getIcon()` for buttons rendered by the script.
+- Pass known typed elements to element-specific Excalidraw API calls such as
+  `startLineEditor()` instead of re-reading selection state.
+- Prefer awaited EA mutation/save operations over unpublished view methods.
+- Treat EA as a stateful workbench: `ea.clear()`, read scene elements, use
+  `ea.copyViewElementsToEAforEditing()` to preserve their IDs, edit the
+  workbench copies, then either commit persistent changes once with
+  `await ea.addElementsToView()` or use them for a temporary EA operation and
+  discard them with `ea.clear()` without committing.
+- `ea.cloneElement()` and `ea.cloneElements()` deliberately create new IDs and
+  are only for genuine duplicates. Never use them to edit an existing element,
+  normalize read-only data, or prepare a temporary preview override.
+- Do not overlap independent async operations through one EA workbench. Await
+  the operation, then clear the workbench before starting another transaction.
+- Treat `createViewSVG({ elementsOverride })` as a complete replacement for the
+  exported scene elements, never as an additive list or a patch by ID. Include
+  every element that should appear in the SVG; for temporary scene changes,
+  copying the complete export set into EA is usually the simplest safe path.
 
 ## Auto-discovery files
 

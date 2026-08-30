@@ -42,6 +42,7 @@ export interface SlideshowSidepanelOptions {
   icons: SlideshowIcons;
   config: SlideshowConfig;
   startPresentation(presentationType: PresentationPathType): Promise<void>;
+  onClosed(): void;
 }
 
 function getDeckFingerprint(resolved: ResolvedSlideDeck | null): string {
@@ -60,20 +61,57 @@ function getDeckFingerprint(resolved: ResolvedSlideDeck | null): string {
   });
 }
 
-function getExcalidrawViewFromLeaf(leaf: WorkspaceLeaf | null): ScriptExcalidrawView | null {
-  if (!leaf) return null;
-  const candidate = leaf.view as unknown as Partial<ScriptExcalidrawView>;
-  if (
-    typeof candidate.isDirty !== "function" ||
-    typeof candidate.forceSave !== "function" ||
-    typeof candidate.preventAutozoom !== "function" ||
-    typeof candidate.refreshCanvasOffset !== "function" ||
-    !candidate.file ||
-    !candidate.contentEl
-  ) {
-    return null;
+/** Chooses the sorter deck, giving an explicitly selected line priority over remembered UI state. */
+export function chooseSidepanelPresentationType(
+  choices: SlideDeckChoices,
+  storedType: PresentationPathType | undefined,
+  selectedElement: ExcalidrawElement | null,
+): PresentationPathType | null {
+  if (isLinearPathElement(selectedElement) && choices.line) return "line";
+  return storedType && choices[storedType] ? storedType : choices.defaultType;
+}
+
+/** Clears selected line intent when the user explicitly switches to the frame deck. */
+export function clearLineSelectionForDeckSwitch(
+  presentationType: PresentationPathType,
+  selectedElement: ExcalidrawElement | null,
+  api: ExcalidrawAPI,
+): void {
+  if (presentationType === "frame" && isLinearPathElement(selectedElement)) {
+    api.selectElements([]);
   }
-  return candidate as ScriptExcalidrawView;
+}
+
+interface SorterSceneSelection {
+  selectedElementIds: Readonly<Record<string, true>>;
+  selectedLinearElement: {
+    elementId: string;
+    selectedPointsIndices: readonly number[] | null;
+    isEditing: boolean;
+  } | null;
+}
+
+/** Resolves a canvas selection to one sorter slide, or null when it is ambiguous. */
+export function getSceneSelectedSlideId(
+  resolved: ResolvedSlideDeck | null,
+  appState: SorterSceneSelection,
+): string | null {
+  if (!resolved) return null;
+  if (resolved.deck.kind === "frame") {
+    const selectedSlides = resolved.deck.slides.filter(
+      (slide) => slide.kind === "frame" && appState.selectedElementIds[slide.frameId],
+    );
+    return selectedSlides.length === 1 ? (selectedSlides[0]?.id ?? null) : null;
+  }
+
+  const editor = appState.selectedLinearElement;
+  if (!editor?.isEditing || editor.elementId !== resolved.pathElement?.id) return null;
+  const pointIndices = editor.selectedPointsIndices;
+  if (!pointIndices || pointIndices.length === 0) return null;
+  const pairIndices = new Set(pointIndices.map((pointIndex) => Math.floor(pointIndex / 2)));
+  if (pairIndices.size !== 1) return null;
+  const pairIndex = pairIndices.values().next().value as number | undefined;
+  return pairIndex === undefined ? null : (resolved.deck.slides[pairIndex]?.id ?? null);
 }
 
 /** Manages one non-persistent slideshow sidepanel across Excalidraw view focus changes. */
@@ -91,9 +129,45 @@ export class SlideshowSidepanel {
   private closed = false;
   private bindGeneration = 0;
   private activeLeafChangeRef: EventRef | null = null;
+  private boundView: ScriptExcalidrawView | null;
+  private requestedSlideId: string | null = null;
 
   public constructor(private readonly options: SlideshowSidepanelOptions) {
     this.ownerWindow = options.tab.contentEl.ownerDocument.defaultView ?? window;
+    this.boundView = null;
+  }
+
+  /** Returns the drawing currently edited by this sidepanel. */
+  public getBoundView(): ScriptExcalidrawView | null {
+    return this.boundView;
+  }
+
+  /** Focuses and reveals the slide requested by an element action after the tab is visible. */
+  public revealRequestedSlide(): void {
+    const slideId = this.requestedSlideId;
+    if (!slideId) return;
+    this.sorter?.scrollToSlide(slideId);
+    this.ownerWindow.setTimeout(() => {
+      if (this.requestedSlideId === slideId) this.requestedSlideId = null;
+    }, 500);
+  }
+
+  /** Rebinds the panel to a concrete view and optionally selects its deck type. */
+  public async activate(
+    view: ScriptExcalidrawView,
+    preferredType?: PresentationPathType,
+    preferredSlideId?: string,
+  ): Promise<void> {
+    if (preferredType) this.presentationTypeByDrawing.set(view.file.path, preferredType);
+    if (preferredSlideId) this.requestedSlideId = preferredSlideId;
+    if (view === this.boundView) {
+      this.options.ea.setView(view);
+      this.lastFingerprint = "";
+      await this.refresh(true);
+      return;
+    }
+    const generation = ++this.bindGeneration;
+    await this.applyViewBinding(view, generation);
   }
 
   /** Installs lifecycle hooks, workspace focus tracking, and scene-change tracking. */
@@ -123,30 +197,37 @@ export class SlideshowSidepanel {
         app.workspace.offref(this.activeLeafChangeRef);
         this.activeLeafChangeRef = null;
       }
+      this.options.onClosed();
     };
-    this.activeLeafChangeRef = app.workspace.on("active-leaf-change", (leaf: WorkspaceLeaf | null) => {
-      if (this.closed || leaf === ea.getSidepanelLeaf()) return;
-      this.bindView(getExcalidrawViewFromLeaf(leaf));
-    });
+    this.activeLeafChangeRef = app.workspace.on(
+      "active-leaf-change",
+      (leaf: WorkspaceLeaf | null) => {
+        if (this.closed || leaf === ea.getSidepanelLeaf()) return;
+        this.bindView(
+          leaf && ea.isExcalidrawView(leaf.view)
+            ? (leaf.view as unknown as ScriptExcalidrawView)
+            : null,
+        );
+      },
+    );
     ea.onSceneChangeHook = {
-      appStateKeys: ["selectedElementIds", "viewBackgroundColor", "theme"],
+      appStateKeys: ["selectedElementIds", "selectedLinearElement", "viewBackgroundColor", "theme"],
       trackElements: true,
       triggerWhenInvisible: false,
-      callback: (_elements, _appState, _files, view) => {
-        if (view && view !== ea.targetView) {
-          this.bindView(view);
-          return;
-        }
+      callback: (_elements, appState, _files, view) => {
+        if (!this.boundView || view !== this.boundView) return;
+        const selectedSlideId = getSceneSelectedSlideId(this.resolved, appState);
+        if (selectedSlideId) void this.sorter?.selectFromScene(selectedSlideId);
         this.scheduleRefresh();
       },
     };
-    if (ea.targetView) void this.refresh(true);
+    if (this.boundView) void this.refresh(true);
     else this.renderUnavailable();
   }
 
   private bindView(view: ScriptExcalidrawView | null): void {
     if (this.closed) return;
-    if (view === this.options.ea.targetView) {
+    if (view === this.boundView) {
       if (view) void this.refresh();
       else this.renderUnavailable();
       return;
@@ -170,6 +251,7 @@ export class SlideshowSidepanel {
     this.choices = { frame: null, line: null, defaultType: null };
     this.presentationType = null;
     this.lastFingerprint = "";
+    this.boundView = view;
     this.options.ea.setView(view);
     this.options.ea.clear();
     if (!view) {
@@ -211,26 +293,32 @@ export class SlideshowSidepanel {
   /** Refreshes deck data and previews only when the debounced scene fingerprint changes. */
   public async refresh(force = false): Promise<void> {
     const { ea } = this.options;
-    if (this.closed || !ea.targetView) {
+    const view = this.boundView;
+    if (this.closed || !view) {
       this.renderUnavailable();
       return;
     }
+    if (ea.targetView !== view) ea.setView(view);
     const api = ea.getExcalidrawAPI();
     if (!api) {
       this.renderUnavailable();
       return;
     }
     const choices = resolveSlideDeckChoices(ea);
-    const drawingKey = ea.targetView.file.path;
+    const drawingKey = view.file.path;
     const storedType = this.presentationTypeByDrawing.get(drawingKey);
-    const presentationType = storedType && choices[storedType] ? storedType : choices.defaultType;
+    const selectedElement = ea.getViewSelectedElement();
+    const presentationType = chooseSidepanelPresentationType(choices, storedType, selectedElement);
     if (presentationType) this.presentationTypeByDrawing.set(drawingKey, presentationType);
     const resolved = presentationType ? choices[presentationType] : null;
     const appState = api.getAppState();
     const compositeFingerprint = `${presentationType ?? "none"}|${getDeckFingerprint(choices.frame)}|${getDeckFingerprint(choices.line)}|${appState.theme}|${appState.viewBackgroundColor}|${getSceneVisualFingerprint(ea.getViewElements())}`;
     if (!force && compositeFingerprint === this.lastFingerprint) return;
 
-    const selectedId = this.sorter?.getSelectedSlideId() ?? null;
+    const requestedSlideId = this.requestedSlideId;
+    const sceneSelectedSlideId = getSceneSelectedSlideId(resolved, appState);
+    const selectedId =
+      requestedSlideId ?? sceneSelectedSlideId ?? this.sorter?.getSelectedSlideId() ?? null;
     const expandedNotesId = this.sorter?.getExpandedNotesSlideId() ?? null;
     this.sorter?.destroy();
     this.sorter = null;
@@ -240,10 +328,16 @@ export class SlideshowSidepanel {
     this.lastFingerprint = compositeFingerprint;
     this.pendingRefresh = false;
     this.previewService ??= new SlidePreviewService(ea, api, this.options.config.maxZoom);
-    this.render(selectedId, expandedNotesId);
+    const renderedSorter = this.render(selectedId, expandedNotesId);
+    if (requestedSlideId) {
+      renderedSorter?.scrollToSlide(requestedSlideId);
+    }
   }
 
-  private render(preferredSlideId: string | null, preferredNotesSlideId: string | null): void {
+  private render(
+    preferredSlideId: string | null,
+    preferredNotesSlideId: string | null,
+  ): SlideSorter | null {
     const { tab, t, icons, ea } = this.options;
     tab.setDisabled(false);
     tab.contentEl.replaceChildren();
@@ -295,7 +389,7 @@ export class SlideshowSidepanel {
       empty.className = "slideshow-empty";
       empty.textContent = t("noEligibleSlides");
       root.appendChild(empty);
-      return;
+      return null;
     }
 
     if (this.choices.frame && this.choices.line) {
@@ -390,14 +484,23 @@ export class SlideshowSidepanel {
       },
     });
     this.sorter.render(preferredSlideId, preferredNotesSlideId);
+    return this.sorter;
   }
 
   private async selectPresentationType(presentationType: PresentationPathType): Promise<void> {
     if (!this.choices[presentationType] || presentationType === this.presentationType) return;
     await this.sorter?.flushNotes();
-    const view = this.options.ea.targetView;
+    const view = this.boundView;
     if (!view) return;
     this.presentationTypeByDrawing.set(view.file.path, presentationType);
+    const api = this.options.ea.getExcalidrawAPI();
+    if (api) {
+      clearLineSelectionForDeckSwitch(
+        presentationType,
+        this.options.ea.getViewSelectedElement(),
+        api,
+      );
+    }
     this.lastFingerprint = "";
     await this.refresh(true);
   }
@@ -452,6 +555,9 @@ export class SlideshowSidepanel {
 
   private async saveNotes(slide: SlideDeckSlide, notes: string): Promise<void> {
     try {
+      const view = this.boundView;
+      if (!view) throw new Error("The slideshow sidepanel is not bound to a drawing.");
+      if (this.options.ea.targetView !== view) this.options.ea.setView(view);
       if (slide.kind === "frame") {
         await saveFrameNotes(this.options.ea, slide.frameId, notes);
       } else {
@@ -467,7 +573,7 @@ export class SlideshowSidepanel {
 
   private zoomToSlide(slide: SlideDeckSlide): void {
     const api = this.options.ea.getExcalidrawAPI();
-    const view = this.options.ea.targetView;
+    const view = this.boundView;
     if (!api || !view) return;
     view.preventAutozoom();
     const appState = api.getAppState();
@@ -489,7 +595,7 @@ export class SlideshowSidepanel {
     if (slide.kind !== "path") return;
     const { ea } = this.options;
     const api = ea.getExcalidrawAPI();
-    const view = ea.targetView;
+    const view = this.boundView;
     if (!api || !view) return;
     try {
       await this.sorter?.flushNotes();
@@ -527,7 +633,7 @@ export class SlideshowSidepanel {
         },
       });
       api.setActiveTool({ type: "selection" });
-      api.startLineEditor(ea.getViewSelectedElement(), [index * 2, index * 2 + 1]);
+      api.startLineEditor(path, [index * 2, index * 2 + 1]);
       this.lastFingerprint = "";
     } catch (error) {
       console.error("Slideshow line-slide editing failed", error);

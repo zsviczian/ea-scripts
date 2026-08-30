@@ -1,11 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   getPreviewNavigationRect,
   getSceneVisualFingerprint,
   SlidePreviewService,
 } from "../SlidePreviewService";
-import { isDoubleSlideshowInvocation, SLIDESHOW_DOUBLE_INVOCATION_MS } from "../slideshowLauncher";
+import { hasSlideshowMetadata, registerSlideshowElementActionProvider } from "../slideshowLauncher";
 import { createSlideshowTranslator } from "../lang";
 import {
   getAlternatePresentationType,
@@ -23,8 +23,26 @@ import {
   setLinePresentationPathHidden,
 } from "../slideDeckMutations";
 import { readFrameSlideshowData, readLineSlideshowDataV2 } from "../slideshowMetadata";
+import {
+  getSlideshowProgress,
+  getSlideshowRuntime,
+  resetSlideshowRuntimeForTests,
+  setSlideshowProgress,
+} from "../slideshowRuntime";
+import { runSlideshow } from "../run";
+import { buildFrameSlideDeck } from "../SlideDeck";
+import { SlideSorter } from "../SlideSorter";
+import {
+  chooseSidepanelPresentationType,
+  clearLineSelectionForDeckSwitch,
+  getSceneSelectedSlideId,
+} from "../SlideshowSidepanel";
 
-function frame(id: string, name: string, customData?: Record<string, unknown>): ExcalidrawFrameElement {
+function frame(
+  id: string,
+  name: string,
+  customData?: Record<string, unknown>,
+): ExcalidrawFrameElement {
   return {
     id,
     type: "frame",
@@ -60,15 +78,20 @@ function line(customData?: Record<string, unknown>): ExcalidrawLinearElement {
   } as unknown as ExcalidrawLinearElement;
 }
 
-function createFakeEa(elements: ExcalidrawElement[]): ExcalidrawAutomate & { commits: number } {
+function createFakeEa(elements: ExcalidrawElement[]): ExcalidrawAutomate & {
+  commits: number;
+  saveRequests: number;
+} {
   let workbench = new Map<string, Mutable<ExcalidrawElement>>();
   const api = {
     targetView: null,
     sidepanelTab: null,
     commits: 0,
+    saveRequests: 0,
     getViewElements: () => elements,
     getViewSelectedElement: () => null,
-    cloneElement: <T extends ExcalidrawElement>(element: T) => structuredClone(element) as Mutable<T>,
+    cloneElement: <T extends ExcalidrawElement>(element: T) =>
+      structuredClone(element) as Mutable<T>,
     clear: () => {
       workbench = new Map();
     },
@@ -77,7 +100,8 @@ function createFakeEa(elements: ExcalidrawElement[]): ExcalidrawAutomate & { com
         workbench.set(element.id, structuredClone(element) as Mutable<ExcalidrawElement>);
       }
     },
-    getElement: <T extends ExcalidrawElement>(id: string) => (workbench.get(id) as Mutable<T>) ?? null,
+    getElement: <T extends ExcalidrawElement>(id: string) =>
+      (workbench.get(id) as Mutable<T>) ?? null,
     addAppendUpdateCustomData: (id: string, patch: Record<string, unknown | undefined>) => {
       const element = workbench.get(id);
       if (!element) return undefined;
@@ -85,14 +109,19 @@ function createFakeEa(elements: ExcalidrawElement[]): ExcalidrawAutomate & { com
       element.customData = { ...current, ...patch };
       return element;
     },
-    addElementsToView: async () => {
+    addElementsToView: async (_repositionToCursor?: boolean, save = true) => {
       for (const [id, edited] of workbench) {
         const index = elements.findIndex((element) => element.id === id);
         if (index >= 0) elements[index] = structuredClone(edited);
       }
       api.commits += 1;
+      if (save) api.saveRequests += 1;
+      return true;
     },
-  } as unknown as ExcalidrawAutomate & { commits: number };
+  } as unknown as ExcalidrawAutomate & {
+    commits: number;
+    saveRequests: number;
+  };
   return api;
 }
 
@@ -132,17 +161,12 @@ describe("slideshow checkpoint 2 mutations", () => {
     expect(readFrameSlideshowData(updatedA?.customData)?.notes).toBeUndefined();
   });
 
-  it("force-saves presenter-note metadata after the debounced edit commit", async () => {
+  it("persists presenter notes through the awaited EA save path", async () => {
     const elements: ExcalidrawElement[] = [frame("a", "Alpha")];
     const ea = createFakeEa(elements);
-    let saves = 0;
-    ea.targetView = {
-      forceSave: async () => {
-        saves += 1;
-      },
-    } as unknown as ScriptExcalidrawView;
     await saveFrameNotes(ea, "a", "Persist me");
-    expect(saves).toBe(1);
+    expect(ea.commits).toBe(1);
+    expect(ea.saveRequests).toBe(1);
     expect(readFrameSlideshowData(elements[0]?.customData)?.notes).toBe("Persist me");
   });
 
@@ -191,6 +215,7 @@ describe("slideshow checkpoint 2 mutations", () => {
     expect(readLineSlideshowDataV2(elements[0]?.customData)?.slides[1]?.notes).toBe("Second note");
     await saveLineNotes(ea, "path", "slideshow-path-2", "");
     expect(readLineSlideshowDataV2(elements[0]?.customData)?.slides[1]?.notes).toBeUndefined();
+    expect(ea.saveRequests).toBe(2);
   });
 
   it("restores a persistently hidden line path and clears its hidden flag", async () => {
@@ -217,8 +242,8 @@ describe("slideshow checkpoint 2 mutations", () => {
   });
 
   it("detects bound endpoints before line reordering", () => {
-    const path = line() as ExcalidrawLinearElement & { startBinding: unknown };
-    path.startBinding = { elementId: "box" };
+    const path = line() as Mutable<ExcalidrawLinearElement>;
+    path.startBinding = { elementId: "box", fixedPoint: [0.5, 0.5], mode: "orbit" };
     expect(hasBoundLineEndpoint(path)).toBe(true);
   });
 });
@@ -238,7 +263,8 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     const ea = {
       getViewElements: () => elements,
       getViewSelectedElement: () => null,
-      cloneElement: <T extends ExcalidrawElement>(element: T) => structuredClone(element) as Mutable<T>,
+      cloneElement: <T extends ExcalidrawElement>(element: T) =>
+        structuredClone(element) as Mutable<T>,
     } as unknown as ExcalidrawAutomate;
     const choices = resolveSlideDeckChoices(ea);
     expect(choices.defaultType).toBe("line");
@@ -282,7 +308,71 @@ describe("slideshow checkpoint 2 deck consumption", () => {
       cloneElement: <T extends ExcalidrawElement>(element: T) =>
         structuredClone(element) as Mutable<T>,
     } as unknown as ExcalidrawAutomate;
-    expect(resolveSlideDeckChoices(ea).defaultType).toBe("line");
+    const choices = resolveSlideDeckChoices(ea);
+    expect(choices.defaultType).toBe("line");
+    expect(chooseSidepanelPresentationType(choices, "frame", selectedPath)).toBe("line");
+  });
+
+  it("preserves scene frame ids instead of using cloneElement's generated ids", () => {
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha"), frame("b", "Bravo")];
+    let cloneCalls = 0;
+    const ea = {
+      getViewElements: () => elements,
+      getViewSelectedElement: () => null,
+      cloneElement: <T extends ExcalidrawElement>(element: T) => {
+        cloneCalls += 1;
+        return { ...element, id: `generated-${cloneCalls}` } as T;
+      },
+    } as unknown as ExcalidrawAutomate;
+
+    const choices = resolveSlideDeckChoices(ea);
+
+    expect(choices.frame?.deck.slides.map((slide) => slide.id)).toEqual(["a", "b"]);
+    expect(cloneCalls).toBe(0);
+  });
+
+  it("maps one selected frame to its sorter slide and rejects ambiguous frame selections", () => {
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha"), frame("b", "Bravo")];
+    const ea = {
+      getViewElements: () => elements,
+      getViewSelectedElement: () => null,
+      cloneElement: <T extends ExcalidrawElement>(element: T) =>
+        structuredClone(element) as Mutable<T>,
+    } as unknown as ExcalidrawAutomate;
+    const resolved = resolveSlideDeckChoices(ea).frame;
+    const selection = (
+      ids: Record<string, true>,
+    ): Parameters<typeof getSceneSelectedSlideId>[1] => ({
+      selectedElementIds: ids,
+      selectedLinearElement: null,
+    });
+
+    expect(getSceneSelectedSlideId(resolved, selection({ b: true }))).toBe("b");
+    expect(getSceneSelectedSlideId(resolved, selection({ a: true, b: true }))).toBeNull();
+  });
+
+  it("maps selected line points only when every point belongs to one slide pair", () => {
+    const path = line();
+    const ea = {
+      getViewElements: () => [path],
+      getViewSelectedElement: () => path,
+      cloneElement: <T extends ExcalidrawElement>(element: T) =>
+        structuredClone(element) as Mutable<T>,
+    } as unknown as ExcalidrawAutomate;
+    const resolved = resolveSlideDeckChoices(ea).line;
+    const selection = (
+      selectedPointsIndices: number[],
+    ): Parameters<typeof getSceneSelectedSlideId>[1] => ({
+      selectedElementIds: { path: true } as const,
+      selectedLinearElement: {
+        elementId: "path",
+        selectedPointsIndices,
+        isEditing: true,
+      },
+    });
+
+    expect(getSceneSelectedSlideId(resolved, selection([2, 3]))).toBe("slideshow-path-2");
+    expect(getSceneSelectedSlideId(resolved, selection([1, 2]))).toBeNull();
   });
 
   it("presentation setup uses explicit frame order and omits excluded frames", () => {
@@ -295,7 +385,8 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     const ea = {
       getViewElements: () => elements,
       getViewSelectedElement: () => null,
-      cloneElement: <T extends ExcalidrawElement>(element: T) => structuredClone(element) as Mutable<T>,
+      cloneElement: <T extends ExcalidrawElement>(element: T) =>
+        structuredClone(element) as Mutable<T>,
     } as unknown as ExcalidrawAutomate;
     const api = {
       getAppState: () => ({ frameRendering: { enabled: false } }),
@@ -318,7 +409,8 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     const ea = {
       getViewElements: () => elements,
       getViewSelectedElement: () => null,
-      cloneElement: <T extends ExcalidrawElement>(element: T) => structuredClone(element) as Mutable<T>,
+      cloneElement: <T extends ExcalidrawElement>(element: T) =>
+        structuredClone(element) as Mutable<T>,
     } as unknown as ExcalidrawAutomate;
     const api = {
       getAppState: () => ({ frameRendering: { enabled: true } }),
@@ -347,7 +439,8 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     const ea = {
       getViewElements: () => elements,
       getViewSelectedElement: () => null,
-      cloneElement: <T extends ExcalidrawElement>(element: T) => structuredClone(element) as Mutable<T>,
+      cloneElement: <T extends ExcalidrawElement>(element: T) =>
+        structuredClone(element) as Mutable<T>,
     } as unknown as ExcalidrawAutomate;
     const api = {
       getAppState: () => ({ frameRendering: { enabled: false } }),
@@ -384,6 +477,59 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(service.getBackgroundColor()).toBe("#f7f1e8");
   });
 
+  it("uses the EA workbench to hide a line presentation path for preview export", async () => {
+    const path = line();
+    const other = frame("a", "Alpha");
+    let workbench: ExcalidrawElement[] = [];
+    let exported: ExcalidrawElement[] = [];
+    let copiedIds: string[] = [];
+    let clearCalls = 0;
+    const ea = {
+      clear: () => {
+        clearCalls += 1;
+        workbench = [];
+      },
+      copyViewElementsToEAforEditing: (elements: readonly ExcalidrawElement[]) => {
+        copiedIds = elements.map((element) => element.id);
+        workbench = structuredClone(elements) as ExcalidrawElement[];
+      },
+      getBoundingBox: () => ({ topX: 0, topY: 0, width: 100, height: 100 }),
+      getElement: (id: string) => workbench.find((element) => element.id === id),
+      addRect: () => {
+        const anchor = frame("anchor", "Anchor");
+        workbench.push(anchor);
+        return anchor.id;
+      },
+      getElements: () => workbench,
+      createViewSVG: ({ elementsOverride }: { elementsOverride: ExcalidrawElement[] }) => {
+        exported = structuredClone(elementsOverride) as ExcalidrawElement[];
+        return Promise.resolve({ outerHTML: "<svg></svg>" });
+      },
+    } as unknown as ExcalidrawAutomate;
+    const api = {
+      getAppState: () => ({ theme: "light", viewBackgroundColor: "#fff" }),
+    } as unknown as ExcalidrawAPI;
+    const service = new SlidePreviewService(ea, api, 30);
+
+    await (
+      service as unknown as {
+        ensureSceneSvg: (
+          elements: readonly ExcalidrawElement[],
+          hiddenPathId?: string,
+        ) => Promise<unknown>;
+      }
+    ).ensureSceneSvg([path, other], path.id);
+
+    expect(exported.find((element) => element.id === path.id)?.opacity).toBe(0);
+    expect(exported.find((element) => element.id === path.id)?.id).toBe(path.id);
+    expect(exported.some((element) => element.id === other.id)).toBe(true);
+    expect(new Set(exported.map((element) => element.id)).size).toBe(exported.length);
+    expect(copiedIds).toEqual([path.id, other.id]);
+    expect(path.opacity).not.toBe(0);
+    expect(clearCalls).toBe(2);
+    expect(workbench).toEqual([]);
+  });
+
   it("formats presentation slide titles with current and total slide numbers", () => {
     const t = createSlideshowTranslator("en");
     expect(t("presentationSlideTitle", { title: "Alpha", number: 1, total: 2 })).toBe(
@@ -392,7 +538,9 @@ describe("slideshow checkpoint 2 deck consumption", () => {
   });
 
   it("thumbnail fingerprint ignores slideshow metadata-only edits", () => {
-    const before = frame("a", "Alpha", { slideshow: { schemaVersion: 2, kind: "frame", order: 0 } });
+    const before = frame("a", "Alpha", {
+      slideshow: { schemaVersion: 2, kind: "frame", order: 0 },
+    });
     const after = {
       ...(before as unknown as Record<string, unknown>),
       version: 99,
@@ -411,18 +559,290 @@ describe("slideshow checkpoint 2 deck consumption", () => {
   });
 });
 
-describe("slideshow checkpoint 2 launcher", () => {
-  it("recognizes a practical double invocation window and rejects later clicks", () => {
-    const session = { script: "Slideshow.md", timestamp: 1000, slide: {} };
-    expect(isDoubleSlideshowInvocation(session, "Slideshow.md", 1000 + 500)).toBe(true);
-    expect(
-      isDoubleSlideshowInvocation(
-        session,
-        "Slideshow.md",
-        1000 + SLIDESHOW_DOUBLE_INVOCATION_MS,
-      ),
-    ).toBe(false);
-    expect(isDoubleSlideshowInvocation(session, "Other.md", 1200)).toBe(false);
+describe("slideshow checkpoint 2 element actions", () => {
+  it("offers slideshow editing only for elements with valid slideshow metadata", () => {
+    const slideshowFrame = frame("a", "Alpha", {
+      slideshow: { schemaVersion: 2, kind: "frame", order: 0 },
+    });
+    const slideshowLine = line({
+      slideshow: {
+        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+        hidden: false,
+      },
+    });
+    expect(hasSlideshowMetadata(slideshowFrame)).toBe(true);
+    expect(hasSlideshowMetadata(slideshowLine)).toBe(true);
+    expect(hasSlideshowMetadata(frame("b", "Bravo"))).toBe(false);
+    expect(hasSlideshowMetadata(line())).toBe(false);
+  });
+
+  it("opens the clicked frame's deck and requests its sorter row", async () => {
+    vi.stubGlobal("app", {});
+    const holder: {
+      provider?: (element: ExcalidrawElement) => readonly SelectedElementMenuAction[];
+    } = {};
+    const activations: Array<[ScriptExcalidrawView, string | undefined, string | undefined]> = [];
+    const view = {} as ScriptExcalidrawView;
+    const ea = {
+      registerElementActionProvider: (
+        getActions: (element: ExcalidrawElement) => readonly SelectedElementMenuAction[],
+      ) => {
+        holder.provider = getActions;
+        return () => undefined;
+      },
+      setView: () => view,
+    } as unknown as ExcalidrawAutomate;
+    getSlideshowRuntime().sidepanel = {
+      activate: async (activatedView, presentationType, slideId) => {
+        activations.push([activatedView, presentationType, slideId]);
+      },
+    };
+    const unregister = registerSlideshowElementActionProvider({
+      ea,
+      utils: {} as ScriptUtils,
+      view,
+      config: {} as never,
+      t: createSlideshowTranslator("en"),
+    });
+    const actions = holder.provider?.(
+      frame("a", "Alpha", {
+        slideshow: { schemaVersion: 2, kind: "frame", order: 0 },
+      }),
+    );
+    expect(unregister).toBeTypeOf("function");
+    expect(actions).toEqual([
+      expect.objectContaining({
+        id: "edit-slideshow",
+        title: "Edit slideshow",
+        icon: "presentation",
+      }),
+    ]);
+    actions?.[0]?.action();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(activations).toEqual([[view, "frame", "a"]]);
+    resetSlideshowRuntimeForTests();
+    vi.unstubAllGlobals();
+  });
+
+  it("clears a selected line when the dropdown explicitly switches to frames", () => {
+    const selectElements = vi.fn();
+    clearLineSelectionForDeckSwitch(
+      "frame",
+      line(),
+      { selectElements } as unknown as ExcalidrawAPI,
+    );
+    expect(selectElements).toHaveBeenCalledOnce();
+    expect(selectElements).toHaveBeenCalledWith([]);
+  });
+
+  it("focuses and scrolls the requested sorter row after the panel becomes visible", () => {
+    const focus = vi.fn();
+    const scrollIntoView = vi.fn();
+    const row = {
+      dataset: { slideId: "b" },
+      isConnected: true,
+      focus,
+      scrollIntoView,
+    };
+    const ownerWindow = {
+      clearTimeout: vi.fn(),
+      setTimeout: (callback: () => void) => {
+        callback();
+        return 1;
+      },
+    };
+    const sorter = new SlideSorter({
+      ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
+      container: {
+        ownerDocument: { defaultView: ownerWindow },
+        querySelectorAll: () => [row],
+      } as unknown as HTMLElement,
+      deck: buildFrameSlideDeck([frame("a", "Alpha"), frame("b", "Bravo")]),
+      previewService: {} as SlidePreviewService,
+      icons: {} as never,
+      t: createSlideshowTranslator("en"),
+      reorderEnabled: true,
+      callbacks: {
+        move: async () => undefined,
+        toggleInclusion: async () => undefined,
+        zoomToSlide: () => undefined,
+        saveNotes: async () => undefined,
+        requestAnimationEditor: () => undefined,
+        editLineSlide: async () => undefined,
+        notesBlurred: () => undefined,
+      },
+    });
+
+    sorter.scrollToSlide("b");
+
+    expect(focus).toHaveBeenCalledWith({ preventScroll: true });
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "center" });
   });
 });
 
+describe("slideshow checkpoint 2 temporary progress", () => {
+  beforeEach(() => vi.stubGlobal("app", {}));
+
+  afterEach(() => {
+    resetSlideshowRuntimeForTests();
+    vi.unstubAllGlobals();
+  });
+
+  it("remembers progress independently for concrete views of the same drawing", () => {
+    const firstView = {} as ScriptExcalidrawView;
+    const secondView = {} as ScriptExcalidrawView;
+    setSlideshowProgress(firstView, 2);
+    setSlideshowProgress(secondView, 5);
+    expect(getSlideshowProgress(firstView)).toBe(2);
+    expect(getSlideshowProgress(secondView)).toBe(5);
+  });
+
+  it("keeps autostart registration-only and launches on the first manual invocation", async () => {
+    vi.stubGlobal("Notice", class {});
+    const view = {
+      modifierKeyDown: { shiftKey: false, altKey: false, ctrlKey: false, metaKey: false },
+      isDirty: () => false,
+      forceSave: async () => undefined,
+    } as ScriptExcalidrawView;
+    let apiAccesses = 0;
+    let providerRegistrations = 0;
+    let autostartRegistrations = 0;
+    const autostartMessages: Array<string | undefined> = [];
+    const scriptEa = {
+      targetView: view,
+      obsidian: { moment: { locale: () => "en" } },
+      verifyMinimumPluginVersion: () => true,
+      skipSidepanelScriptRestore: () => false,
+      setView: () => view,
+      registerElementActionProvider: () => {
+        providerRegistrations += 1;
+        return () => undefined;
+      },
+      registerAutostart: async (message?: string) => {
+        autostartRegistrations += 1;
+        autostartMessages.push(message);
+        return "allow" as const;
+      },
+      getExcalidrawAPI: () => {
+        apiAccesses += 1;
+        return null;
+      },
+    } as unknown as ExcalidrawAutomate;
+
+    await runSlideshow(scriptEa, { executionSource: "autostart" } as ScriptUtils, {} as never);
+
+    expect(providerRegistrations).toBe(1);
+    expect(autostartRegistrations).toBe(1);
+    expect(apiAccesses).toBe(0);
+
+    await runSlideshow(scriptEa, { executionSource: "manual" } as ScriptUtils, {} as never);
+
+    expect(providerRegistrations).toBe(2);
+    expect(autostartRegistrations).toBe(2);
+    expect(apiAccesses).toBe(1);
+    expect(autostartMessages).toEqual([
+      'Autostart is required for registering the "Edit Slide" button. Autostart does not mean slideshows will autostart when opening a drawing.',
+      'Autostart is required for registering the "Edit Slide" button. Autostart does not mean slideshows will autostart when opening a drawing.',
+    ]);
+  });
+});
+
+describe("slideshow checkpoint 2 presenter-note lifecycle", () => {
+  it("keeps the latest textarea draft when an earlier save is still in flight", async () => {
+    const deck = buildFrameSlideDeck([frame("a", "Alpha")]);
+    const saved: string[] = [];
+    const sorter = new SlideSorter({
+      ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
+      container: {
+        ownerDocument: { defaultView: { clearTimeout: () => undefined } },
+      } as unknown as HTMLElement,
+      deck,
+      previewService: {} as SlidePreviewService,
+      icons: {} as never,
+      t: createSlideshowTranslator("en"),
+      reorderEnabled: true,
+      callbacks: {
+        move: async () => undefined,
+        toggleInclusion: async () => undefined,
+        zoomToSlide: () => undefined,
+        saveNotes: async (_slide, notes) => {
+          saved.push(notes);
+        },
+        requestAnimationEditor: () => undefined,
+        editLineSlide: async () => undefined,
+        notesBlurred: () => undefined,
+      },
+    });
+    let finishEarlierSave!: () => void;
+    const earlierSave = new Promise<void>((resolve) => {
+      finishEarlierSave = resolve;
+    });
+    const internals = sorter as unknown as {
+      expandedNotesSlideId: string | null;
+      notesTextarea: { value: string } | null;
+      notesSaveInFlight: Promise<void> | null;
+    };
+    internals.expandedNotesSlideId = "a";
+    internals.notesTextarea = { value: "Latest draft" };
+    internals.notesSaveInFlight = earlierSave;
+
+    const flush = sorter.flushNotes();
+    sorter.destroy();
+    finishEarlierSave();
+    await flush;
+
+    expect(saved).toEqual(["Latest draft"]);
+    expect(deck.slides[0]?.notes).toBe("Latest draft");
+  });
+
+  it("serializes rapid note drafts so the newest value is persisted last", async () => {
+    const deck = buildFrameSlideDeck([frame("a", "Alpha")]);
+    const saved: string[] = [];
+    let finishFirstSave!: () => void;
+    const firstSaveGate = new Promise<void>((resolve) => {
+      finishFirstSave = resolve;
+    });
+    const sorter = new SlideSorter({
+      ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
+      container: {
+        ownerDocument: { defaultView: { clearTimeout: () => undefined } },
+      } as unknown as HTMLElement,
+      deck,
+      previewService: {} as SlidePreviewService,
+      icons: {} as never,
+      t: createSlideshowTranslator("en"),
+      reorderEnabled: true,
+      callbacks: {
+        move: async () => undefined,
+        toggleInclusion: async () => undefined,
+        zoomToSlide: () => undefined,
+        saveNotes: async (_slide, notes) => {
+          saved.push(notes);
+          if (notes === "First draft") await firstSaveGate;
+        },
+        requestAnimationEditor: () => undefined,
+        editLineSlide: async () => undefined,
+        notesBlurred: () => undefined,
+      },
+    });
+    const textarea = { value: "First draft" };
+    const internals = sorter as unknown as {
+      expandedNotesSlideId: string | null;
+      notesTextarea: { value: string } | null;
+    };
+    internals.expandedNotesSlideId = "a";
+    internals.notesTextarea = textarea;
+
+    const firstFlush = sorter.flushNotes();
+    await Promise.resolve();
+    textarea.value = "Latest draft";
+    const latestFlush = sorter.flushNotes();
+    finishFirstSave();
+    await Promise.all([firstFlush, latestFlush]);
+
+    expect(saved).toEqual(["First draft", "Latest draft"]);
+    expect(deck.slides[0]?.notes).toBe("Latest draft");
+  });
+});

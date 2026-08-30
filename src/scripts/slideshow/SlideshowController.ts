@@ -31,6 +31,8 @@ export interface SlideshowControllerOptions {
   initialSlide: number;
   startFullscreen: boolean;
   t: SlideshowTranslator;
+  onSlideChange(slide: number): void;
+  onExit(): void;
   openSidepanel(): Promise<void>;
   switchPresentation(presentationType: "line" | "frame", startFullscreen: boolean): Promise<void>;
 }
@@ -51,6 +53,8 @@ export class SlideshowController {
   private readonly statusBarElement: HTMLElement | null;
   private readonly shouldStartFullscreen: boolean;
   private readonly t: SlideshowTranslator;
+  private readonly onSlideChange: (slide: number) => void;
+  private readonly onExit: () => void;
   private readonly openSidepanel: () => Promise<void>;
   private readonly switchPresentation: (
     presentationType: "line" | "frame",
@@ -63,6 +67,7 @@ export class SlideshowController {
   private shouldSaveAfterPresentation = false;
   private busy = false;
   private preventFullscreenExit = true;
+  private exitPromise: Promise<void> | null = null;
 
   public constructor(options: SlideshowControllerOptions) {
     this.ea = options.ea;
@@ -77,15 +82,21 @@ export class SlideshowController {
     this.config = options.config;
     this.icons = options.icons;
     this.statusBarElement = options.statusBarElement;
-    this.slide = Math.min(Math.max(options.initialSlide, 0), Math.max(options.setup.slides.length - 1, 0));
+    this.slide = Math.min(
+      Math.max(options.initialSlide, 0),
+      Math.max(options.setup.slides.length - 1, 0),
+    );
     this.shouldStartFullscreen = options.startFullscreen;
     this.t = options.t;
+    this.onSlideChange = options.onSlideChange;
+    this.onExit = options.onExit;
     this.openSidepanel = options.openSidepanel;
     this.switchPresentation = options.switchPresentation;
   }
 
   /** Starts the presentation and installs all temporary UI and handlers. */
   public async start(): Promise<void> {
+    this.ea.setView(this.hostView);
     if (this.statusBarElement) {
       this.statusBarElement.style.display = "none";
     }
@@ -113,7 +124,12 @@ export class SlideshowController {
     if (this.setup.pathType === "line") {
       await this.togglePathVisibility(this.setup.isHidden);
     }
-    this.ea.targetView?.clearDirty();
+    this.hostView.clearDirty();
+  }
+
+  /** Advances this presentation when the script is invoked again for its view. */
+  public advance(): void {
+    void this.navigate("fwd");
   }
 
   private createControls(): void {
@@ -246,15 +262,13 @@ export class SlideshowController {
     }
   }
 
-  private async togglePathVisibility(
-    setToHidden: boolean,
-    isMetadataEdit = false,
-  ): Promise<void> {
+  private async togglePathVisibility(setToHidden: boolean, isMetadataEdit = false): Promise<void> {
     const pathElement = this.setup.pathElement;
     const originalProps = this.setup.originalPathProperties;
     if (!pathElement || !originalProps) {
       return;
     }
+    this.ea.setView(this.hostView);
     this.ea.clear();
     this.ea.copyViewElementsToEAforEditing(
       this.ea.getViewElements().filter((element) => element.id === pathElement.id),
@@ -361,14 +375,7 @@ export class SlideshowController {
     }
     this.controls?.setSelectedSlide(this.slide + 1);
     await this.scrollToRect(nextRect);
-    const targetView = this.ea.targetView;
-    if (
-      window.ExcalidrawSlideshow &&
-      targetView &&
-      typeof window.ExcalidrawSlideshow.slide[targetView.file.path] === "number"
-    ) {
-      window.ExcalidrawSlideshow.slide[targetView.file.path] = this.slide;
-    }
+    this.onSlideChange(this.slide);
   }
 
   private navigateToSlide(slideNumber: number): void {
@@ -432,38 +439,45 @@ export class SlideshowController {
 
   private initializeEventListeners(): void {
     this.ownerWindow.addEventListener("keydown", this.keydownListener);
-    window.removePresentationEventHandlers = () => {
-      this.ea.onLinkClickHook = null;
-      this.controls?.destroy();
-      this.controls = null;
-      if (!this.ea.DEVICE.isMobile) {
-        this.contentElement.removeEventListener("webkitfullscreenchange", this.fullscreenListener);
-        this.contentElement.removeEventListener("fullscreenchange", this.fullscreenListener);
-      }
-      this.ownerWindow.removeEventListener("keydown", this.keydownListener);
-      this.contentElement.querySelector(".layer-ui__wrapper")?.removeClass("excalidraw-hidden");
-      delete window.removePresentationEventHandlers;
-    };
-    this.ea.onLinkClickHook = () => {
-      void this.exit();
-      return true;
-    };
+    this.ea.onLinkClickHook = this.linkClickHook;
     if (!this.ea.DEVICE.isMobile) {
       this.contentElement.addEventListener("webkitfullscreenchange", this.fullscreenListener);
       this.contentElement.addEventListener("fullscreenchange", this.fullscreenListener);
     }
   }
 
+  private readonly linkClickHook = (): boolean => {
+    void this.exit();
+    return true;
+  };
+
+  private removeEventListeners(): void {
+    if (this.ea.onLinkClickHook === this.linkClickHook) this.ea.onLinkClickHook = null;
+    this.controls?.destroy();
+    this.controls = null;
+    if (!this.ea.DEVICE.isMobile) {
+      this.contentElement.removeEventListener("webkitfullscreenchange", this.fullscreenListener);
+      this.contentElement.removeEventListener("fullscreenchange", this.fullscreenListener);
+    }
+    this.ownerWindow.removeEventListener("keydown", this.keydownListener);
+    this.contentElement.querySelector(".layer-ui__wrapper")?.removeClass("excalidraw-hidden");
+  }
+
   /** Restores the drawing and Excalidraw UI after the presentation. */
-  public async exit(openForEdit = false): Promise<void> {
+  public exit(openForEdit = false): Promise<void> {
+    this.exitPromise ??= this.performExit(openForEdit).finally(this.onExit);
+    return this.exitPromise;
+  }
+
+  private async performExit(openForEdit: boolean): Promise<void> {
     // Other scripts can replace EA's target view while this presentation is active.
-    this.ea.targetView = this.hostView;
+    this.ea.setView(this.hostView);
     this.isLaserOn = false;
     if (this.statusBarElement) {
       this.statusBarElement.style.display = "inherit";
     }
     if (openForEdit) {
-      this.ea.targetView.preventAutozoom();
+      this.hostView.preventAutozoom();
     }
     await this.exitFullscreen();
     await this.waitForExcalidrawResize();
@@ -484,8 +498,7 @@ export class SlideshowController {
       if (element) {
         if (!this.setup.isHidden) {
           element.strokeColor = this.setup.originalPathProperties.strokeColor;
-          // This mirrors the legacy backgroundProps assignment intentionally.
-          element.backgroundProps = this.setup.originalPathProperties.backgroundColor;
+          element.backgroundColor = this.setup.originalPathProperties.backgroundColor;
           element.locked = openForEdit ? false : this.setup.originalPathProperties.locked;
         }
         await this.ea.addElementsToView();
@@ -507,10 +520,7 @@ export class SlideshowController {
             nextZoom: Math.max(nextRect.nextZoom * this.config.editZoomOut, 0.1),
           };
           await this.scrollToRect(nextRect, 1);
-          this.api.startLineEditor(this.ea.getViewSelectedElement(), [
-            this.slide * 2,
-            this.slide * 2 + 1,
-          ]);
+          this.api.startLineEditor(element, [this.slide * 2, this.slide * 2 + 1]);
         }
       }
     } else if (this.setup.frameRenderingOriginalState.enabled) {
@@ -524,17 +534,18 @@ export class SlideshowController {
       });
     }
 
-    window.removePresentationEventHandlers?.();
+    this.removeEventListeners();
     this.ownerWindow.setTimeout(() => {
       this.hostView.refreshCanvasOffset();
       this.api.setActiveTool({ type: "selection" });
     });
     if (!this.shouldSaveAfterPresentation) {
-      this.ea.targetView.clearDirty();
+      this.hostView.clearDirty();
     }
   }
 
   private async print(event: MouseEvent): Promise<void> {
+    this.ea.setView(this.hostView);
     await printSlideshowToPdf({
       event,
       ea: this.ea,

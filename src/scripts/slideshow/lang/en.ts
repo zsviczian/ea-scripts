@@ -1,6 +1,8 @@
 export const en = {
   requiresNewerVersion:
     "This script requires a newer version of Excalidraw. Please install the latest version.",
+  autostartExplanation:
+    'Autostart is required for registering the "Edit Slide" button. Autostart does not mean slideshows will autostart when opening a drawing.',
   noActiveView: "Open an Excalidraw drawing before starting the slideshow.",
   cannotAccessView: "Could not access the active Excalidraw view.",
   noPresentationPath: "Select the line or arrow for the presentation path or add frames.",
@@ -47,6 +49,7 @@ export const en = {
   slideNumberAndTitle: "{number}. {title}",
   presentationSlideTitle: "{title} ({number}/{total})",
   openSlideshowPanel: "Open slideshow panel",
+  editSlideshow: "Edit slideshow",
   openPanelEndsPresentation: "End presentation and open slideshow panel",
   switchToFrameSlideshow: "Switch to frame slideshow",
   switchToLineSlideshow: "Switch to line slideshow",

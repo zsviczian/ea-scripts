@@ -9,10 +9,18 @@ script is emitted to `build/slideshow/slideshow.md`.
 
 ## Launch behavior
 
-- A normal invocation starts the slideshow after the existing short delay.
-- A double invocation cancels that delayed start and opens/focuses the **Slideshow** sidepanel.
+- Slideshow requests Excalidraw Automate autostart permission. Its autostart pass only registers
+  the view-local **Edit slideshow** element action; it never starts a presentation.
+- Select a frame or line/arrow carrying slideshow metadata and use its Lucide presentation action
+  to open/focus the **Slideshow** sidepanel for that element's frame or line deck.
+- After a view is registered, invoking the script from its toolbar icon, Obsidian command, or
+  hotkey starts that view's presentation. Invoking it again while that presentation is active
+  advances the existing controller instead of creating another instance.
+- Slideshow uses `utils.executionSource` so autostart remains registration-only while the very
+  first manual toolbar, command, or hotkey invocation can start presenting immediately.
 - The presentation toolbar's settings button ends the active presentation and opens the sidepanel.
-- The sidepanel is non-persistent and follows the most recently focused Excalidraw drawing through its lifecycle hooks.
+- The sidepanel is a single non-persistent instance. It follows the most recently focused
+  Excalidraw drawing across main-window/popout contexts and shows an empty state for Markdown notes.
 
 ## Presentation paths and slide order
 
@@ -67,12 +75,16 @@ Presentation navigation, the toolbar slide picker, and PDF export consume the ca
 - **Return to the current slide:** Home
 - **Go to the final slide:** End
 - **Run in a window:** Hold Alt/Option while launching the script.
-- **Continue from the last slide:** Hold Shift while launching the script. This state lasts for the current Obsidian session and can be combined with Alt/Option.
+- **Continue from the last slide:** Hold Shift while launching the script. Progress is held only in
+  temporary runtime memory and is tracked independently for each concrete Excalidraw view, even
+  when two views show the same file. It can be combined with Alt/Option.
 
 ## Source structure
 
-- `main.ts`: delayed single-click / double-click bootstrap.
+- `main.ts`: executable bootstrap and editable configuration constants.
+- `run.ts`: autostart registration and later manual-invocation routing.
 - `slideshowLauncher.ts`: shared sidepanel and presentation launch orchestration.
+- `slideshowRuntime.ts`: shared temporary per-view contexts, controllers, and slide progress.
 - `SlideshowController.ts`: presentation lifecycle, navigation, fullscreen, and restoration.
 - `PresentationControls.ts`: presentation toolbar and slide picker.
 - `presentationPath.ts`: non-mutating canonical deck resolution plus presentation setup.
@@ -104,4 +116,7 @@ Run the full workspace gate with:
 npm run check
 ```
 
-Checkpoint 1 covers schema/deck foundations. Checkpoint 2 adds focused coverage for frame reorder normalization, exclusions, frame/line notes, line point-pair metadata coupling, bound-line safety, canonical presentation consumption, all-excluded prevention, and metadata-insensitive thumbnail fingerprints.
+Checkpoint 1 covers schema/deck foundations. Checkpoint 2 adds focused coverage for frame reorder
+normalization, exclusions, frame/line notes, line point-pair metadata coupling, bound-line safety,
+canonical presentation consumption, all-excluded prevention, metadata-insensitive thumbnail
+fingerprints, element-action eligibility, and per-view temporary progress isolation.

@@ -67,9 +67,34 @@ export class SlideSorter {
     return this.expandedNotesSlideId;
   }
 
+  /** Scrolls the requested slide row into the visible sorter viewport. */
+  public scrollToSlide(slideId: string, focus = true): void {
+    const row = Array.from(
+      this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__row"),
+    ).find((candidate) => candidate.dataset.slideId === slideId);
+    if (!row) return;
+    if (focus) row.focus({ preventScroll: true });
+    row.scrollIntoView({ block: "center" });
+    this.ownerWindow.setTimeout(() => {
+      if (row.isConnected) row.scrollIntoView({ block: "center" });
+    }, 50);
+  }
+
   /** Returns whether notes currently have keyboard focus. */
   public isEditingNotes(): boolean {
     return this.notesTextarea?.ownerDocument.activeElement === this.notesTextarea;
+  }
+
+  /** Mirrors an unambiguous canvas selection without taking keyboard focus from the drawing. */
+  public async selectFromScene(slideId: string): Promise<void> {
+    if (!this.options.deck.slides.some((slide) => slide.id === slideId)) return;
+    if (slideId !== this.selectedSlideId) {
+      await this.flushNotes();
+      this.selectedSlideId = slideId;
+      this.expandedNotesSlideId = null;
+      this.render(slideId);
+    }
+    this.scrollToSlide(slideId, false);
   }
 
   /** Selects prior stable ids when still present, then renders the sorter. */
@@ -103,7 +128,8 @@ export class SlideSorter {
         void this.options.previewService
           .createPreview(slide, row.ownerDocument)
           .then((preview) => {
-            if (!preview || generation !== this.renderGeneration || !previewHost.isConnected) return;
+            if (!preview || generation !== this.renderGeneration || !previewHost.isConnected)
+              return;
             previewHost.replaceChildren();
             previewHost.appendChild(preview);
           })
@@ -393,14 +419,14 @@ export class SlideSorter {
       this.ownerWindow.clearTimeout(this.notesTimer);
       this.notesTimer = 0;
     }
-    if (this.notesSaveInFlight) await this.notesSaveInFlight;
-    const slide = this.options.deck.slides.find(
-      (candidate) => candidate.id === this.expandedNotesSlideId,
-    );
-    if (!slide || !this.notesTextarea) return;
-    const current = this.notesTextarea.value;
-    if (current === (slide.notes ?? "")) return;
+    const slideId = this.expandedNotesSlideId;
+    const current = this.notesTextarea?.value;
+    if (!slideId || current === undefined) return;
+    const previousSave = this.notesSaveInFlight;
     const save = (async () => {
+      await previousSave?.catch(() => undefined);
+      const slide = this.options.deck.slides.find((candidate) => candidate.id === slideId);
+      if (!slide || current === (slide.notes ?? "")) return;
       await this.options.callbacks.saveNotes(slide, current);
       if (current.trim().length === 0) delete slide.notes;
       else slide.notes = current;

@@ -25,11 +25,12 @@ export interface SlideDeckChoices {
   defaultType: PresentationPathType | null;
 }
 
-function getNamedFrames(ea: ExcalidrawAutomate, elements: readonly ExcalidrawElement[]): NamedFrame[] {
+function getNamedFrames(elements: readonly ExcalidrawElement[]): NamedFrame[] {
   return elements.filter(isFrameElement).map((frame, index) => {
-    const clone = ea.cloneElement(frame) as NamedFrame;
-    clone.name = getPresentationFrameName(clone.name, index);
-    return clone;
+    return {
+      ...frame,
+      name: getPresentationFrameName(frame.name, index),
+    } as NamedFrame;
   });
 }
 
@@ -114,7 +115,7 @@ export function getAlternatePresentationType(
 /** Resolves every slideshow type currently available in the drawing without mutating app state. */
 export function resolveSlideDeckChoices(ea: ExcalidrawAutomate): SlideDeckChoices {
   const viewElements = ea.getViewElements();
-  const frames = getNamedFrames(ea, viewElements);
+  const frames = getNamedFrames(viewElements);
   const selectedElement = ea.getViewSelectedElement();
   const selectedPath = isLinearPathElement(selectedElement) ? selectedElement : null;
   const rememberedPath = findRememberedPath(viewElements);

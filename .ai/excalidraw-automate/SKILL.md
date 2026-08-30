@@ -19,7 +19,7 @@ Read the information below and respond with I'm ready. The user will then prompt
 - Startup examples: https://github.com/zsviczian/obsidian-excalidraw-plugin/blob/master/docs/AITrainingData/excalidraw-automate/references/startup-scripts.md
 
 In addition to ExcalidrawAutomate, you can also use two other sources of functions:
-- The Excalidraw API available via `ea.getExcalidrawAPI()`. Note: the API is only available if `ea.targetView` is set. When running Excalidraw scripts using the script engine, the provided `ea` object is already set up with targetView by default. Otherwise you need to first run `ea.setView()`.
+- The Excalidraw API available via `ea.getExcalidrawAPI()`. Note: the API is only available if `ea.targetView` is set. When running Excalidraw scripts using the script engine, the provided `ea` object is already set up with targetView by default. Otherwise call `ea.setView()` to select a sensible default or `ea.setView(view)` to bind explicitly. Calling `ea.setView(null)` deliberately clears `targetView`; it does not auto-select another drawing.
 - `window.ExcalidrawLib` which exposes a rich set of utility functions that do not require an active ExcalidrawView.
 
 **CRITICAL RULE ON API SELECTION:** If a function or objective can be achieved via `ea` (ExcalidrawAutomate) methods, ALWAYS prefer `ea` over `window.ExcalidrawLib`. `ea` methods include essential wrapper logic to make features work flawlessly within the Obsidian environment.
@@ -32,10 +32,16 @@ For a reference, follow the implementation pattern used in the "Printable Layout
 - Elements can be hidden by setting their opacity to 0. When hiding elements this way, it is good practice to temporarily store their original opacity in customData. This allows for easy restoration of the original opacity later.
 - Elements can be deleted from the scene by setting their isDeleted property to true.
 - The Obsidian.md module is available on `ea.obsidian`.
+- Version checks are distinct: use `ea.verifyMinimumPluginVersion()` for the Excalidraw plugin and `ea.verifyMinAppVersion()` only for the Obsidian application version.
+- Use `utils.executionSource` to distinguish `"manual"` toolbar/command/hotkey runs from `"autostart"`, `"sidepanel-restore"`, and `"drawing-onload"` runs. Autostart-capable scripts should register their view-local providers on every applicable run, then return after registration when the source is `"autostart"`.
+- `ea.registerAutostart(message?)` accepts a concise script-specific explanation of what autostart registers or performs. The explanation appears as the second paragraph of the permission prompt; do not imply that the script's main interactive action starts automatically when only its tools/providers do.
+- `ea.registerElementActionProvider()` action descriptors take an Obsidian/Lucide icon name such as `"presentation"`, not serialized SVG markup. For buttons a script renders itself, obtain the SVG with `ea.obsidian.getIcon()` and recreate it in the button's owning document when popout support matters.
+- When an Excalidraw API method requires an element, pass the known typed scene element. For example, call `api.startLineEditor(line, pointIndices)`; do not re-read selection state when the intended line is already known.
+- For persistent workbench mutations, await `ea.addElementsToView()` with saving enabled (the default). Prefer this public EA save path over unpublished methods on `ea.targetView`.
 
 **Sidepanels and multi-view tooling:**
 - Sidepanels are for scripts that must stay open while users hop between multiple Excalidraw views. They should implement the SidepanelTab hooks (`onOpen`, `onFocus(view)`, `onClose`, `onExcalidrawViewClosed`) and manage their own `ea.targetView` explicitly.
-- Persisted sidepanel scripts are launched during plugin startup (e.g., Obsidian restart, plugin update) with `ea.targetView === null`. Scripts must handle this by deferring view-bound work until `onFocus` delivers a view; call `ea.setView(view)` when you decide to bind.
+- Persisted sidepanel scripts are launched during plugin startup (e.g., Obsidian restart, plugin update) with `ea.targetView === null`. Scripts must handle this by deferring view-bound work until `onFocus` delivers a view; call `ea.setView(view)` when you decide to bind. When `onFocus` supplies `null` or focus moves to a non-Excalidraw view, call `ea.setView(null)` to make the unbound state explicit and prevent later view operations from targeting a stale drawing.
 - Each `ea` instance may host a single `sidepanelTab`. This sidepanel tab is stored in `ea.sidepanelTab`. Create the tab with `ea.createSidepanelTab(title, persist=false, reveal=true)`; the returned `ea.sidepanelTab` exposes `contentEl`, `setContent`, `setTitle`, `setDisabled`, `setCloseCallback`, `open/close`, and focus lifecycle hooks. Note auto-reveal during tab creation via `ea.createSidepanelTab()` is disabled during plugin startup. You can reveal a tab with `ea.sidepanelTab?.open()`. You can persist with `ea.persistSidepanelTab()` (tabs are restored and scripts re-run on next startup). Close with `ea.sidepanelTab?.close()`.
 - Mobile UX: sidepanels slide in without disturbing canvas layout and are better for longer forms than floating modals. Prefer them for complex inputs, especially on phones.
 - Auto-closing patterns: For scripts that use sidepanels but perform operations that are single-`ExcalidrawView` relevant, they can call `ea.closeSidepanelTab()` after completing the operation, and/or inside `ea.sidepanelTab.onFocus = (view) => { if (view !== ea.targetView) { ea.sidepanelTab?.close(); } }` to shut down when the user leaves the originating view.
@@ -73,14 +79,32 @@ To keep this training file concise, large external type definitions are not incl
 
 #### **1. The Core Workflow: Handling Element Immutability**
 
-*   **Central Rule:** Elements in the Excalidraw scene are immutable and should never be modified directly. Always use the ExcalidrawAutomate (EA) "workbench" pattern for modifications.
+*   **Central Rule:** Elements returned from the Excalidraw scene are immutable and should never be modified directly. EA owns a stateful, in-memory "workbench" (`elementsDict` and `imagesDict`) where a script stages one coherent persistent or temporary operation independently of the scene.
 *   **The Workflow:**
-    1.  Get elements from the current view using `ea.getViewElements()` or `ea.getViewSelectedElements()`.
-    2.  Copy these elements into the EA workbench for editing using `ea.copyViewElementsToEAforEditing(elements)`.
-    3.  Modify the properties of the element copies that are now in the EA workbench (e.g., `ea.getElement(id).locked = true;`).
-    4.  Commit the changes back to the scene using `await ea.addElementsToView()`.
+    1.  Start an independent transaction with `ea.clear()`. This clears only the workbench; it does not delete scene elements or reset style.
+    2.  Read existing scene elements using `ea.getViewElements()` or `ea.getViewSelectedElements()`.
+    3.  To work with mutable copies of those same scene elements, copy them into the workbench with `ea.copyViewElementsToEAforEditing(elements)`. Their IDs are preserved.
+    4.  Modify the workbench copies retrieved by their original IDs (e.g., `ea.getElement(id).locked = true;`).
+    5.  For a persistent scene edit, commit once with `await ea.addElementsToView()`; saving is enabled by default. For temporary transformations such as export or preview preparation, pass the workbench elements to the relevant EA operation without committing them to the scene.
+    6.  Call `ea.clear()` after the operation to discard the workbench copies, preferably in a `finally` block when an awaited operation can fail.
+*   **Temporary workbench example:**
+    ```javascript
+    ea.clear();
+    try {
+      const sceneElements = ea.getViewElements();
+      ea.copyViewElementsToEAforEditing(sceneElements);
+      ea.getElement(pathId).opacity = 0;
+      // elementsOverride replaces the export scene, so pass the complete workbench.
+      const svg = await ea.createViewSVG({ elementsOverride: ea.getElements() });
+      // Use svg. The live scene was never changed.
+    } finally {
+      ea.clear();
+    }
+    ```
+*   **`elementsOverride` is a complete replacement:** In `createViewSVG()`, this option replaces the view's element array; it is not merged with the scene and is not a patch by element ID. The array must contain every element that should appear in the SVG. When temporarily modifying an existing scene for export, the simplest safe workflow is to copy the complete desired export set into EA, modify the workbench copy, and pass `ea.getElements()` as the override.
+*   **Identity is the boundary:** `copyViewElementsToEAforEditing()` is the standard way to obtain mutable, identity-preserving copies of existing scene elements for both persistent edits and temporary EA operations. By contrast, `ea.cloneElement()` and `ea.cloneElements()` deliberately generate new IDs and are only for creating genuine duplicate scene elements. Never use them to obtain editable workbench copies of existing elements.
+*   **One workbench transaction at a time:** The workbench is shared mutable state on an EA instance. Do not interleave asynchronous preview/export preparation and scene mutation through the same workbench. Await the operation, then clear the workbench before starting another transaction.
 *   **Deletion:** To delete an element, set its `isDeleted` property to `true` on the workbench copy (`ea.getElement(id).isDeleted = true;`) and then commit with `await ea.addElementsToView()`.
-*   **Cleanup:** Use `ea.clear()` at the beginning of a script if you are creating a completely new set of elements, to ensure the EA workbench is empty and doesn't contain artifacts from a previous run.
 
 #### **2. User Interaction: Prompts and Dialogs**
 
@@ -154,7 +178,7 @@ To keep this training file concise, large external type definitions are not incl
 Generating images (SVG/PNG) requires specific approaches depending on the context. Follow these three rules strictly to avoid performance issues and missing assets:
 1. **Exporting elements currently in the EA workbench:** Use `await ea.createSVG(null, ...)` or `await ea.createPNG(null, ...)` (passing `null` as the `templatePath`).
 2. **Exporting an Excalidraw file that is NOT currently open:** Pass the file path as the template to `createSVG` or `createPNG` (e.g., `await ea.createSVG(file.path, ...)`). This is the most reliable approach as ExcalidrawAutomate natively handles loading the scene, resolving embedded images, and instantiating loaders behind the scenes. **Do NOT attempt to manually read the file, reconstruct the scene, or load images into memory.**
-3. **Exporting the currently active `ExcalidrawView`:** Use `await ea.createViewSVG(...)`. This is specifically for the open view. You can use the `elementsOverride` parameter to inject temporary elements (like transparent sizing rectangles) into the exported image without modifying the actual scene.
+3. **Exporting the currently active `ExcalidrawView`:** Use `await ea.createViewSVG(...)`. This is specifically for the open view. Its `elementsOverride` parameter is a complete replacement for the exported element array, not an additive injection or a patch by ID. If supplied, include every existing or temporary element that should appear in the SVG. For temporary changes to existing elements, copy the complete desired export set into the EA workbench, modify it there, and pass `ea.getElements()`.
 
 #### **8. Custom Pens and Perfect Freehand**
 

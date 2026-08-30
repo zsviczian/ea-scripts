@@ -59,9 +59,7 @@ export interface OriginalPathProperties {
   locked: boolean;
 }
 
-export type AnimationTarget =
-  | { type: "element"; id: string }
-  | { type: "group"; id: string };
+export type AnimationTarget = { type: "element"; id: string } | { type: "group"; id: string };
 
 export interface AnimationStep {
   id: string;
@@ -104,19 +102,12 @@ export interface LegacyLineSlideshowData {
 }
 
 export type SlideshowElementMetadata =
-  | FrameSlideshowData
-  | LineSlideshowData
-  | LegacyLineSlideshowData;
+  FrameSlideshowData | LineSlideshowData | LegacyLineSlideshowData;
 
 export type EditableLinearElement = Mutable<ExcalidrawLinearElement> & {
   customData?: Record<string, unknown> & {
     slideshow?: SlideshowElementMetadata;
   };
-  /**
-   * Legacy Slideshow.md assigns this misspelled property during cleanup.
-   * Keeping it preserves the generated script's established behavior.
-   */
-  backgroundProps?: string;
 };
 
 export type NamedFrame = Mutable<ExcalidrawFrameElement> & { name: string };

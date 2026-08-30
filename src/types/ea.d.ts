@@ -58,6 +58,7 @@ declare global {
 
   interface ScriptUtils {
     readonly scriptFile: TFile;
+    readonly executionSource: "manual" | "autostart" | "sidepanel-restore" | "drawing-onload";
   }
 
   interface ElementStyle {
@@ -99,7 +100,8 @@ declare global {
     selectedOnly?: boolean;
     skipInliningFonts?: boolean;
     embedScene?: boolean;
-    elementsOverride?: ExcalidrawElement[];
+    /** Complete replacement export set; it is not merged with the view scene. */
+    elementsOverride?: readonly ExcalidrawElement[];
   }
 
   interface PdfPageProperties {
@@ -108,7 +110,6 @@ declare global {
     margin: { left: number; right: number; top: number; bottom: number };
     alignment: "center" | "left" | "right";
   }
-
 
   interface ScriptSidepanelTab {
     readonly id: string;
@@ -148,6 +149,13 @@ declare global {
     ) => void;
   }
 
+  interface SelectedElementMenuAction {
+    id: string;
+    title: string;
+    icon: string;
+    action(): void;
+  }
+
   interface ExcalidrawAutomate {
     targetView: ScriptExcalidrawView | null;
     sidepanelTab: ScriptSidepanelTab | null;
@@ -168,12 +176,29 @@ declare global {
         ) => boolean)
       | null;
 
+    /** Checks the Obsidian application version, not the Excalidraw plugin version. */
     verifyMinAppVersion(version: string): boolean;
+    /** Checks the installed Excalidraw plugin version. */
     verifyMinimumPluginVersion(version: string): boolean;
     getExcalidrawAPI(): ExcalidrawAPI | null;
-    setView(view: ScriptExcalidrawView | null): void;
+    /** Omit the view for auto-selection; pass a view to bind or null to clear targetView. */
+    setView(
+      view?: ScriptExcalidrawView | "auto" | "first" | "active" | null,
+      show?: boolean,
+    ): ScriptExcalidrawView | null;
+    isExcalidrawView(view: unknown): boolean;
+    /** Action icons are Obsidian/Lucide icon names, not serialized SVG markup. */
+    registerElementActionProvider(
+      getActions: (element: ExcalidrawElement) => readonly SelectedElementMenuAction[],
+    ): (() => void) | null;
+    registerAutostart(message?: string): Promise<"allow" | "deny" | "pending">;
+    skipSidepanelScriptRestore(scriptName?: string): boolean;
     checkForActiveSidepanelTabForScript(scriptName?: string): ScriptSidepanelTab | null;
-    createSidepanelTab(title: string, persist?: boolean, reveal?: boolean): Promise<ScriptSidepanelTab | null>;
+    createSidepanelTab(
+      title: string,
+      persist?: boolean,
+      reveal?: boolean,
+    ): Promise<ScriptSidepanelTab | null>;
     getSidepanelLeaf(): WorkspaceLeaf | null;
     toggleSidepanelView(): void;
     getViewElements(): ExcalidrawElement[];
@@ -223,16 +248,7 @@ declare global {
     suggestionPrompt(header: string, displayItems: string[], hint?: string): Promise<string | null>;
   }
 
-  interface SlideshowSessionState {
-    script: string;
-    timestamp: number;
-    slide: Record<string, number>;
-  }
-
   interface Window {
-    ExcalidrawSlideshow?: SlideshowSessionState;
-    ExcalidrawSlideshowStartTimer?: number;
-    removePresentationEventHandlers?: () => void;
     createDiv(options?: { cls?: string | string[] }): HTMLDivElement;
   }
 
