@@ -121,6 +121,15 @@ export interface ResolvedSlideDeck {
   frames: NamedFrame[];
 }
 
+export interface PresentationState {
+  currentSlideId: string;
+  currentIndex: number;
+  visibleSlideCount: number;
+  completedAnimationSteps: number;
+  animationStepCount: number;
+  nextSlideId: string | null;
+}
+
 export interface PresentationSetup extends ResolvedSlideDeck {
   pathType: PresentationPathType;
   slides: SlideRect[];

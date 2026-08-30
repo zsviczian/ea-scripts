@@ -10,6 +10,8 @@ import { sleepInWindow } from "../../sharedUtils/windowTiming";
 import { AnimationRuntime } from "./AnimationRuntime";
 import type { FrameDeckSlide, LineDeckSlide } from "./SlideDeck";
 import { PresentationControls } from "./PresentationControls";
+import { PresenterViewController } from "./PresenterViewController";
+import { buildPresentationState } from "./presentationState";
 import type { SlideshowTranslator } from "./lang";
 import { printSlideshowToPdf } from "./printToPdf";
 import { upgradeLineSlideshowData, writeSlideshowMetadata } from "./slideshowMetadata";
@@ -17,6 +19,7 @@ import {
   type Direction,
   type EditableLinearElement,
   type PresentationSetup,
+  type PresentationState,
   type SlideshowConfig,
   type SlideshowIcons,
 } from "./types";
@@ -64,6 +67,7 @@ export class SlideshowController {
   ) => Promise<void>;
   private readonly animationRuntime: AnimationRuntime | null;
   private controls: PresentationControls | null = null;
+  private presenter: PresenterViewController | null = null;
   private slide: number;
   private isFullscreen = false;
   private isLaserOn = false;
@@ -72,6 +76,7 @@ export class SlideshowController {
   private preventFullscreenExit = true;
   private exitPromise: Promise<void> | null = null;
   private navigationQueue: Promise<void> = Promise.resolve();
+  private stateEmissionPauseDepth = 0;
 
   public constructor(options: SlideshowControllerOptions) {
     this.ea = options.ea;
@@ -98,7 +103,12 @@ export class SlideshowController {
     this.switchPresentation = options.switchPresentation;
     this.animationRuntime =
       options.setup.pathType === "frame"
-        ? new AnimationRuntime({ ea: options.ea, api: options.api, hostView: options.hostView })
+        ? new AnimationRuntime({
+            ea: options.ea,
+            api: options.api,
+            hostView: options.hostView,
+            onStateChange: () => this.emitPresentationState(),
+          })
         : null;
   }
 
@@ -121,14 +131,85 @@ export class SlideshowController {
     if (this.shouldStartFullscreen) await this.gotoFullscreen(false);
     else this.controls?.resetPosition(false);
     if (this.setup.pathType === "line") await this.togglePathVisibility(this.setup.isHidden);
-    await this.enterSlide(this.slide, false);
+    this.stateEmissionPauseDepth += 1;
+    try {
+      await this.enterSlide(this.slide, false);
+    } finally {
+      this.stateEmissionPauseDepth -= 1;
+    }
     this.controls?.setSelectedSlide(this.slide + 1);
+    this.emitPresentationState();
     this.hostView.clearDirty();
   }
 
   /** Advances this presentation when the script is invoked again for its view. */
   public advance(): void {
     this.enqueueNavigation(() => this.navigate("fwd"));
+  }
+
+  /** Navigates backward through builds/slides from presenter-window controls. */
+  public previous(): void {
+    this.enqueueNavigation(() => this.navigate("bkwd"));
+  }
+
+  /** Jumps directly to a zero-based visible slide index. */
+  public goToSlide(index: number): void {
+    this.enqueueNavigation(() => this.jumpToSlide(index));
+  }
+
+  /** Opens or focuses the desktop presenter popout for this presentation. */
+  public async openPresenterView(): Promise<void> {
+    if (this.ea.DEVICE.isMobile) {
+      new Notice(this.t("presenterViewDesktopOnly"));
+      return;
+    }
+    if (this.presenter) {
+      await this.presenter.focus();
+      this.presenter.update(this.getPresentationState());
+      return;
+    }
+    const presenter = new PresenterViewController({
+      ea: this.ea,
+      api: this.api,
+      hostView: this.hostView,
+      setup: this.setup,
+      config: this.config,
+      icons: this.icons,
+      t: this.t,
+      callbacks: {
+        previous: () => this.previous(),
+        next: () => this.advance(),
+        first: () => this.goToSlide(0),
+        last: () => this.goToSlide(this.setup.slides.length - 1),
+        finish: () => void this.exit(),
+      },
+      onClosed: () => {
+        if (this.presenter === presenter) this.presenter = null;
+      },
+    });
+    this.presenter = presenter;
+    try {
+      await presenter.open(this.getPresentationState());
+    } catch (error) {
+      if (this.presenter === presenter) this.presenter = null;
+      await presenter.destroy(false).catch(() => undefined);
+      console.error("Slideshow presenter view failed to open", error);
+      new Notice(this.t("presenterViewOpenFailed"));
+    }
+  }
+
+  /** Returns the authoritative state shared by floating controls and presenter view. */
+  public getPresentationState(): PresentationState {
+    return buildPresentationState(
+      this.setup.deck,
+      this.slide,
+      this.animationRuntime?.getState() ?? { completedSteps: 0, stepCount: 0 },
+    );
+  }
+
+  private emitPresentationState(): void {
+    if (this.stateEmissionPauseDepth > 0) return;
+    this.presenter?.update(this.getPresentationState());
   }
 
   private enqueueNavigation(task: () => Promise<void>): void {
@@ -186,6 +267,7 @@ export class SlideshowController {
         openSidepanel: () => {
           void this.exit().then(() => this.openSidepanel());
         },
+        openPresenterView: () => void this.openPresenterView(),
         print: (event) => void this.print(event),
         finish: () => void this.exit(),
       },
@@ -257,6 +339,7 @@ export class SlideshowController {
   }
 
   private async togglePathVisibility(setToHidden: boolean, isMetadataEdit = false): Promise<void> {
+    await this.presenter?.waitForIdle();
     const pathElement = this.setup.pathElement;
     const originalProps = this.setup.originalPathProperties;
     if (!pathElement || !originalProps) return;
@@ -365,11 +448,17 @@ export class SlideshowController {
         void this.exit();
         return;
       }
-      await this.animationRuntime?.leaveSlide();
-      this.slide += 1;
-      this.controls?.setSelectedSlide(this.slide + 1);
-      await this.enterSlide(this.slide, false);
+      this.stateEmissionPauseDepth += 1;
+      try {
+        await this.animationRuntime?.leaveSlide();
+        this.slide += 1;
+        this.controls?.setSelectedSlide(this.slide + 1);
+        await this.enterSlide(this.slide, false);
+      } finally {
+        this.stateEmissionPauseDepth -= 1;
+      }
       this.onSlideChange(this.slide);
+      this.emitPresentationState();
       return;
     }
 
@@ -378,20 +467,32 @@ export class SlideshowController {
       void this.exit();
       return;
     }
-    await this.animationRuntime?.leaveSlide();
-    this.slide -= 1;
-    this.controls?.setSelectedSlide(this.slide + 1);
-    await this.enterSlide(this.slide, true);
+    this.stateEmissionPauseDepth += 1;
+    try {
+      await this.animationRuntime?.leaveSlide();
+      this.slide -= 1;
+      this.controls?.setSelectedSlide(this.slide + 1);
+      await this.enterSlide(this.slide, true);
+    } finally {
+      this.stateEmissionPauseDepth -= 1;
+    }
     this.onSlideChange(this.slide);
+    this.emitPresentationState();
   }
 
   private async jumpToSlide(index: number): Promise<void> {
     const bounded = Math.min(Math.max(index, 0), this.setup.slides.length - 1);
-    await this.animationRuntime?.leaveSlide();
-    this.slide = bounded;
-    this.controls?.setSelectedSlide(this.slide + 1);
-    await this.enterSlide(this.slide, false);
+    this.stateEmissionPauseDepth += 1;
+    try {
+      await this.animationRuntime?.leaveSlide();
+      this.slide = bounded;
+      this.controls?.setSelectedSlide(this.slide + 1);
+      await this.enterSlide(this.slide, false);
+    } finally {
+      this.stateEmissionPauseDepth -= 1;
+    }
     this.onSlideChange(this.slide);
+    this.emitPresentationState();
   }
 
   private readonly keydownListener = (event: KeyboardEvent): void => {
@@ -480,6 +581,10 @@ export class SlideshowController {
 
   private async performExit(openForEdit: boolean): Promise<void> {
     this.ea.setView(this.hostView);
+    const presenter = this.presenter;
+    this.presenter = null;
+    await presenter?.destroy(true).catch(() => undefined);
+    await presenter?.waitForIdle().catch(() => undefined);
     try {
       await this.animationRuntime?.finishActiveSlide();
       this.isLaserOn = false;
@@ -551,6 +656,7 @@ export class SlideshowController {
   }
 
   private async print(event: MouseEvent): Promise<void> {
+    await this.presenter?.waitForIdle();
     this.ea.setView(this.hostView);
     const task = () =>
       printSlideshowToPdf({

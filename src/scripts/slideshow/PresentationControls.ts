@@ -19,6 +19,7 @@ export interface PresentationControlCallbacks {
   editSlide(): void;
   switchPresentation(): void;
   openSidepanel(): void;
+  openPresenterView(): void;
   print(event: MouseEvent): void;
   finish(): void;
 }
@@ -267,6 +268,14 @@ export class PresentationControls {
         );
 
         if (ea.DEVICE.isDesktop) {
+          buttonList.createEl(
+            "button",
+            { attr: { title: t("presenterView"), "aria-label": t("presenterView") } },
+            (button) => {
+              button.innerHTML = icons.presentation;
+              button.onclick = callbacks.openPresenterView;
+            },
+          );
           buttonList.createEl(
             "button",
             {

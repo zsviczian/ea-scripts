@@ -28,6 +28,7 @@ export interface PresentationLaunchOptions {
   startFullscreen?: boolean;
   presentationType?: PresentationPathType;
   resume?: boolean;
+  openPresenterView?: boolean;
 }
 
 function resolveLaunchModifiers(view: ScriptExcalidrawView): { startFullscreen: boolean } {
@@ -138,6 +139,7 @@ export async function startSlideshowPresentation(
   setSlideshowProgress(view, initialSlide, setup.pathType);
   try {
     await controller.start();
+    if (launch.openPresenterView) await controller.openPresenterView();
   } catch (error) {
     if (runtime.presentations.get(view) === controller) {
       runtime.presentations.delete(view);
@@ -221,6 +223,18 @@ export async function openSlideshowSidepanel(
         boundContext,
         initialSlide === undefined ? { presentationType } : { presentationType, initialSlide },
       );
+    },
+    startPresenterView: async (presentationType, initialSlide) => {
+      const boundView = sidepanel.getBoundView();
+      if (!boundView) return;
+      const boundContext = getSlideshowViewContext(boundView);
+      if (!boundContext) return;
+      Object.assign(boundContext.config, context.config);
+      await startSlideshowPresentation(boundContext, {
+        presentationType,
+        ...(initialSlide === undefined ? {} : { initialSlide }),
+        openPresenterView: true,
+      });
     },
     printPresentation: async (presentationType, event) => {
       const boundView = sidepanel.getBoundView();

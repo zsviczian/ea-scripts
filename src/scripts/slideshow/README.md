@@ -73,7 +73,7 @@ Each sorter row can own Markdown presenter notes. Use the notes icon on that row
 - Empty notes are removed rather than persisted as empty strings.
 - Each persisted notes edit is followed by an immediate drawing `forceSave(true)` so the metadata is written to disk, not merely left dirty in memory.
 
-The separate presenter popout and rendered Markdown notes are planned for Checkpoint 4.
+On desktop, the presenter-view button starts/attaches to the active presentation in a script-owned Obsidian popout. The presenter window shows the current slide, a larger next-visible-slide preview, rendered Markdown notes, and live animation progress. Its Previous/Next controls and keyboard shortcuts call the same `SlideshowController` state machine as the floating presentation toolbar, so focusing the presenter window does not disable navigation. Closing only the presenter popout leaves the presentation running; ending the presentation closes the presenter popout as part of cleanup. Presenter view is disabled on mobile because Obsidian does not support popout windows there.
 
 ## Thumbnails
 
@@ -119,6 +119,8 @@ Presentation navigation, the toolbar slide picker, and PDF export consume the ca
 - `SlideDeck.ts`: canonical ordered frame/line deck and pure point-pair ordering helpers.
 - `slideDeckMutations.ts`: undoable sorter metadata/geometry transactions.
 - `SlideshowSidepanel.ts`: drawing-aware sidepanel lifecycle and refresh orchestration.
+- `PresenterViewController.ts`: desktop popout lifecycle, current/next previews, Markdown notes, and presenter navigation.
+- `presentationState.ts`: pure authoritative presenter-state construction shared with the presentation controller.
 - `SlideSorter.ts`: rows, drag/drop, keyboard controls, frame/line inclusion, notes, and animation entry UI.
 - `SlidePreviewService.ts`: cached whole-scene SVG export and slide cropping.
 - `printToPdf.ts`: PDF page generation from the canonical visible slide rectangles.
@@ -143,4 +145,4 @@ Run the full workspace gate with:
 npm run check
 ```
 
-Checkpoint 1 covers schema/deck foundations. Checkpoint 2 adds focused coverage for sorter behavior, ordering, exclusions, notes, presentation consumption, previews, launch routing, and per-view runtime state. Checkpoint 3 covers frame animation target capture/resolution, bound text and groups, conflict reconciliation, animation metadata persistence, hierarchical runtime reveal/reverse/restoration, and line-slide exclusion.
+Checkpoint 1 covers schema/deck foundations. Checkpoint 2 adds focused coverage for sorter behavior, ordering, exclusions, notes, presentation consumption, previews, launch routing, and per-view runtime state. Checkpoint 3 covers frame animation target capture/resolution, bound text and groups, conflict reconciliation, animation metadata persistence, hierarchical runtime reveal/reverse/restoration, and line-slide exclusion. Checkpoint 4 adds the desktop presenter popout, synchronized navigation/build state, Markdown notes, current/next previews, and popout teardown handling.

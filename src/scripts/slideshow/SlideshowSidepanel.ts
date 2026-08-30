@@ -49,6 +49,10 @@ export interface SlideshowSidepanelOptions {
     presentationType: PresentationPathType,
     initialSlide?: number,
   ): Promise<void>;
+  startPresenterView(
+    presentationType: PresentationPathType,
+    initialSlide?: number,
+  ): Promise<void>;
   printPresentation(presentationType: PresentationPathType, event: MouseEvent): Promise<void>;
   onClosed(): void;
 }
@@ -491,6 +495,19 @@ export class SlideshowSidepanel {
       void this.startPresentation(initialSlide);
     });
 
+    const presenterButton = doc.createElement("button");
+    presenterButton.type = "button";
+    presenterButton.className = "slideshow-sidepanel__icon-button";
+    const presenterLabel = ea.DEVICE.isMobile ? t("presenterViewDesktopOnly") : t("presenterView");
+    presenterButton.setAttribute("aria-label", presenterLabel);
+    presenterButton.title = presenterLabel;
+    presenterButton.innerHTML = icons.presentation;
+    presenterButton.disabled = ea.DEVICE.isMobile || !this.resolved || noVisibleSlides;
+    header.appendChild(presenterButton);
+    presenterButton.addEventListener("click", () => {
+      void this.startPresenterView();
+    });
+
     const printButton = doc.createElement("button");
     printButton.type = "button";
     printButton.className = "slideshow-sidepanel__icon-button";
@@ -639,6 +656,17 @@ export class SlideshowSidepanel {
     this.animationEditingSlideId = null;
     if (this.presentationType) {
       await this.options.startPresentation(this.presentationType, initialSlide);
+    }
+  }
+
+  private async startPresenterView(initialSlide?: number): Promise<void> {
+    if (this.options.ea.DEVICE.isMobile) return;
+    await this.sorter?.flushNotes();
+    await this.animationEditor?.destroy();
+    this.animationEditor = null;
+    this.animationEditingSlideId = null;
+    if (this.presentationType) {
+      await this.options.startPresenterView(this.presentationType, initialSlide);
     }
   }
 
