@@ -554,7 +554,6 @@ export class AnimationEditor {
     button.type = "button";
     button.innerHTML = icon;
     button.disabled = disabled;
-    button.title = label;
     button.setAttribute("aria-label", label);
     button.addEventListener("click", callback);
     return button;

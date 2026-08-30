@@ -10,6 +10,7 @@ import type { SlideDeck } from "./SlideDeck";
 
 export type Direction = "fwd" | "bkwd";
 export type PresentationPathType = "line" | "frame";
+export type PresentationSourceKey = "frame" | `line:${string}`;
 export type AnimationEffect = "appear" | "fade" | "slide" | "zoom";
 export type AnimationTrigger = "advance" | "after-delay";
 export type AnimationDirection = "left" | "right" | "up" | "down";
@@ -53,6 +54,7 @@ export interface SlideshowIcons {
   settings: string;
   frameSlideshow: string;
   lineSlideshow: string;
+  moreHorizontal: string;
 }
 
 export interface OriginalPathProperties {
@@ -93,6 +95,7 @@ export interface LineSlideMetadataRecord {
 export interface LineSlideshowData {
   schemaVersion: 2;
   kind: "path";
+  name?: string;
   hidden: boolean;
   originalProps: OriginalPathProperties;
   slides: LineSlideMetadataRecord[];
@@ -121,6 +124,13 @@ export interface ResolvedSlideDeck {
   frames: NamedFrame[];
 }
 
+export interface LinePresentationSource {
+  key: `line:${string}`;
+  pathId: string;
+  name: string | null;
+  resolved: ResolvedSlideDeck;
+}
+
 export type PresenterNextAction = "build" | "slide" | "end";
 
 export interface PresentationState {
@@ -135,6 +145,7 @@ export interface PresentationState {
 }
 
 export interface PresentationSetup extends ResolvedSlideDeck {
+  sourceKey: PresentationSourceKey;
   pathType: PresentationPathType;
   slides: SlideRect[];
   slideTitles: string[];

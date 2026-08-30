@@ -1,16 +1,21 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  captureWindowPlacement,
   chooseClosestNativeWindow,
   chooseDefaultDisplayTargets,
+  resolveSameNativeWindow,
+  restoreWindowPlacement,
   type SlideshowDisplay,
 } from "../desktopDisplays";
-import { getPresenterKeyboardAction } from "../PresenterViewController";
+import { getPresenterKeyboardAction, waitForPresenterOwnerWindow } from "../PresenterViewController";
 import { buildFrameSlideDeck, type FrameDeckSlide } from "../SlideDeck";
 import { getHiddenBuildElementIds } from "../SlidePreviewService";
 import { buildPresentationState } from "../presentationState";
 import {
+  loadSlideshowDisplayPreferences,
   loadSlideshowLaunchPreferences,
+  saveSlideshowDisplayPreferences,
   saveSlideshowLaunchPreferences,
 } from "../slideshowSettings";
 import type { AnimationStep } from "../types";
@@ -195,7 +200,131 @@ describe("slideshow checkpoint 4 presenter state", () => {
     ).toBe(sidecar);
   });
 
-  it("persists the most recent launch mode and fullscreen/window preference", async () => {
+
+  it("uses Electron BrowserWindow.id for native identity and immutable host placement snapshots", () => {
+    const hostNative = {
+      id: 41,
+      getBounds: () => ({ x: 0, y: 25, width: 1680, height: 1025 }),
+      isMaximized: () => true,
+    };
+    const presenterNative = {
+      id: 42,
+      getBounds: () => ({ x: 300, y: 80, width: 1024, height: 800 }),
+      isMaximized: () => false,
+    };
+    const displays = [
+      { id: 1, bounds: { x: 0, y: 0, width: 1680, height: 1050 }, workArea: { x: 0, y: 25, width: 1680, height: 1025 } },
+    ];
+    const makeWindow = (nativeWindow: typeof hostNative | typeof presenterNative, geometry: { x: number; y: number; width: number; height: number }) => ({
+      require: () => ({
+        getCurrentWindow: () => nativeWindow,
+        BrowserWindow: { getAllWindows: () => [hostNative, presenterNative] },
+        screen: {
+          getAllDisplays: () => displays,
+          getPrimaryDisplay: () => displays[0],
+          getDisplayMatching: () => displays[0],
+        },
+      }),
+      screenX: geometry.x,
+      screenY: geometry.y,
+      outerWidth: geometry.width,
+      outerHeight: geometry.height,
+      document: {},
+    }) as unknown as Window;
+    const host = makeWindow(hostNative, { x: 0, y: 25, width: 1680, height: 1025 });
+    const presenter = makeWindow(presenterNative, { x: 300, y: 80, width: 1024, height: 800 });
+
+    expect(resolveSameNativeWindow(host, presenter)).toBe(false);
+    expect(captureWindowPlacement(host)).toEqual({
+      windowId: 41,
+      sourceDisplayId: 1,
+      bounds: { x: 0, y: 25, width: 1680, height: 1025 },
+      maximized: true,
+    });
+  });
+
+  it("waits until the presenter leaf migrates away from the host DOM window", async () => {
+    const presenterWindow = {} as Window;
+    let currentWindow: Window;
+    const hostWindow = {
+      setTimeout: (callback: () => void) => {
+        currentWindow = presenterWindow;
+        callback();
+        return 1;
+      },
+    } as unknown as Window;
+    currentWindow = hostWindow;
+    const ownerDocument = {
+      get defaultView() {
+        return currentWindow;
+      },
+    };
+    const leaf = {
+      view: {
+        containerEl: { ownerDocument },
+      },
+    } as unknown as Parameters<typeof waitForPresenterOwnerWindow>[0];
+
+    const result = await waitForPresenterOwnerWindow(leaf, hostWindow, 200);
+    expect(result.win).toBe(presenterWindow);
+  });
+
+  it("restores the captured native BrowserWindow by id instead of geometry-rematching another window", () => {
+    let mainBounds = { x: 1800, y: 0, width: 1200, height: 800 };
+    let popoutBounds = { x: 0, y: 0, width: 1000, height: 700 };
+    const main = {
+      id: 1,
+      getBounds: () => ({ ...mainBounds }),
+      setBounds: (bounds: typeof mainBounds) => {
+        mainBounds = { ...bounds };
+      },
+      isMaximized: () => false,
+    };
+    const popout = {
+      id: 2,
+      getBounds: () => ({ ...popoutBounds }),
+      setBounds: (bounds: typeof popoutBounds) => {
+        popoutBounds = { ...bounds };
+      },
+      isMaximized: () => false,
+    };
+    const displays = [
+      { id: 10, bounds: { x: 0, y: 0, width: 1600, height: 900 }, workArea: { x: 0, y: 0, width: 1600, height: 860 } },
+      { id: 11, bounds: { x: 1600, y: 0, width: 1200, height: 900 }, workArea: { x: 1600, y: 0, width: 1200, height: 860 } },
+    ];
+    const remote = {
+      getCurrentWindow: () => popout,
+      BrowserWindow: {
+        getAllWindows: () => [main, popout],
+        fromId: (id: number) => (id === 1 ? main : id === 2 ? popout : null),
+      },
+      screen: {
+        getAllDisplays: () => displays,
+        getPrimaryDisplay: () => displays[0],
+        getDisplayMatching: (bounds: typeof mainBounds) =>
+          bounds.x >= 1600 ? displays[1] : displays[0],
+      },
+    };
+    const fakeWindow = {
+      require: () => remote,
+      screenX: 0,
+      screenY: 0,
+      outerWidth: 1000,
+      outerHeight: 700,
+    } as unknown as Window;
+
+    restoreWindowPlacement(fakeWindow, {
+      windowId: 1,
+      sourceDisplayId: 10,
+      bounds: { x: 100, y: 80, width: 1200, height: 760 },
+      maximized: false,
+    });
+
+    expect(mainBounds).toEqual({ x: 100, y: 80, width: 1200, height: 760 });
+    expect(popoutBounds).toEqual({ x: 0, y: 0, width: 1000, height: 700 });
+  });
+
+  it("persists independent start, window, notes, and presentation-type dropdowns", async () => {
     let settings: Record<string, unknown> = { unrelated: "keep" };
     const ea = {
       getScriptSettings: () => settings,
@@ -205,13 +334,64 @@ describe("slideshow checkpoint 4 presenter state", () => {
     } as unknown as ExcalidrawAutomate;
 
     expect(loadSlideshowLaunchPreferences(ea)).toEqual({
-      mode: "beginning",
-      startFullscreen: true,
+      startMode: "beginning",
+      windowMode: "fullscreen",
+      notesMode: "slides",
     });
-    await saveSlideshowLaunchPreferences(ea, { mode: "resume", startFullscreen: false });
+    await saveSlideshowLaunchPreferences(ea, {
+      startMode: "resume",
+      windowMode: "window",
+      notesMode: "presenter",
+      presentationType: "line",
+    });
     expect(loadSlideshowLaunchPreferences(ea)).toEqual({
-      mode: "resume",
-      startFullscreen: false,
+      startMode: "resume",
+      windowMode: "window",
+      notesMode: "presenter",
+      presentationType: "line",
+    });
+    expect(settings.unrelated).toBe("keep");
+  });
+
+  it("migrates the previous combined launch preferences when new dropdown settings are absent", () => {
+    const ea = {
+      getScriptSettings: () => ({
+        slideshowLaunchMode: "presenter",
+        slideshowStartFullscreen: false,
+      }),
+    } as unknown as ExcalidrawAutomate;
+
+    expect(loadSlideshowLaunchPreferences(ea)).toEqual({
+      startMode: "beginning",
+      windowMode: "window",
+      notesMode: "presenter",
+    });
+  });
+
+  it("stores display choices independently for each local device key", async () => {
+    let settings: Record<string, unknown> = { unrelated: "keep" };
+    const ea = {
+      getScriptSettings: () => settings,
+      setScriptSettings: async (next: Record<string, unknown>) => {
+        settings = next;
+      },
+    } as unknown as ExcalidrawAutomate;
+
+    await saveSlideshowDisplayPreferences(ea, "macbook", {
+      presentationDisplayId: 1,
+      presenterDisplayId: 2,
+    });
+    await saveSlideshowDisplayPreferences(ea, "desktop", {
+      presentationDisplayId: 10,
+      presenterDisplayId: 11,
+    });
+    expect(loadSlideshowDisplayPreferences(ea, "macbook")).toEqual({
+      presentationDisplayId: 1,
+      presenterDisplayId: 2,
+    });
+    expect(loadSlideshowDisplayPreferences(ea, "desktop")).toEqual({
+      presentationDisplayId: 10,
+      presenterDisplayId: 11,
     });
     expect(settings.unrelated).toBe("keep");
   });

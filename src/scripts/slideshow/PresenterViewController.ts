@@ -5,7 +5,13 @@
 
 import type { Component, WorkspaceLeaf } from "obsidian";
 
-import { moveWindowToDisplay } from "./desktopDisplays";
+import {
+  logDisplayDiagnostics,
+  logWindowIdentityDiagnostics,
+  moveWindowToDisplay,
+  resolveSameNativeWindow,
+  waitForWindowOnDisplay,
+} from "./desktopDisplays";
 import { sleepInWindow } from "../../sharedUtils/windowTiming";
 import { SlidePreviewService } from "./SlidePreviewService";
 import type { SlideDeckSlide } from "./SlideDeck";
@@ -15,7 +21,7 @@ import type { PresentationSetup, PresentationState, SlideshowConfig, SlideshowIc
 
 export type PresenterKeyboardAction = "next" | "previous" | "first" | "last" | "finish" | null;
 
-interface PresenterLeaf extends WorkspaceLeaf {
+export interface PresenterLeaf extends WorkspaceLeaf {
   readonly view: WorkspaceLeaf["view"] & { containerEl: HTMLElement };
 }
 
@@ -39,6 +45,22 @@ export interface PresenterViewControllerOptions {
   targetDisplayId?: number;
   getAnimationOriginalOpacities?(): ReadonlyMap<string, number>;
   onClosed(): void;
+}
+
+
+/** Waits until Obsidian migrates a newly opened popout leaf into a distinct DOM window. */
+export async function waitForPresenterOwnerWindow(
+  leaf: PresenterLeaf,
+  hostWindow: Window,
+  timeoutMs = 3000,
+): Promise<{ win: Window | null; elapsedMs: number }> {
+  const started = Date.now();
+  while (Date.now() - started <= timeoutMs) {
+    const win = leaf.view.containerEl.ownerDocument.defaultView;
+    if (win && win !== hostWindow) return { win, elapsedMs: Date.now() - started };
+    await sleepInWindow(hostWindow, 50);
+  }
+  return { win: null, elapsedMs: Date.now() - started };
 }
 
 /** Maps presenter-window keyboard input to the authoritative slideshow actions. */
@@ -91,7 +113,7 @@ export class PresenterViewController {
     this.previewService = new SlidePreviewService(options.ea, options.api, options.config);
   }
 
-  /** Opens the popout and renders its initial synchronized state. */
+  /** Opens the popout, waits for real window migration, and renders its initial state. */
   public async open(initialState: PresentationState): Promise<void> {
     if (this.leaf) {
       this.update(initialState);
@@ -101,11 +123,24 @@ export class PresenterViewController {
     }
     const leaf = app.workspace.openPopoutLeaf() as PresenterLeaf;
     this.leaf = leaf;
+    await app.workspace.revealLeaf(leaf);
+    // Give Obsidian a chance to actually migrate the new leaf into its popout document before
+    // reading ownerDocument/defaultView. Without this, the leaf can still report the host window.
+    app.workspace.setActiveLeaf(leaf, { focus: true });
+    const migrated = await waitForPresenterOwnerWindow(leaf, this.options.hostView.ownerWindow);
+    console.log(
+      `[Slideshow display debug] presenter migration elapsed=${migrated.elapsedMs}ms,distinct=${Boolean(migrated.win)}`,
+    );
+    const win = migrated.win;
+    if (!win) {
+      leaf.detach();
+      this.leaf = null;
+      throw new Error("Presenter popout did not migrate to a distinct window.");
+    }
     const container = leaf.view.containerEl;
     const doc = container.ownerDocument;
-    const win = doc.defaultView;
-    if (!win) throw new Error("Presenter popout has no owner window.");
     this.ownerWindow = win;
+    logWindowIdentityDiagnostics(this.options.hostView.ownerWindow, win, "presenter identity after migration");
     doc.title = this.options.t("presenterViewTitle");
     const headerTitle = container.querySelector(".view-header-title") as HTMLElement | null;
     if (headerTitle) headerTitle.textContent = this.options.t("presenterViewTitle");
@@ -115,12 +150,27 @@ export class PresenterViewController {
     win.addEventListener("keydown", this.keydownListener, true);
     win.addEventListener("beforeunload", this.windowClosingListener, { once: true });
     this.update(initialState);
-    await app.workspace.revealLeaf(leaf);
-    if (this.options.targetDisplayId !== undefined) {
-      const moved = moveWindowToDisplay(win, this.options.targetDisplayId, true);
-      if (moved) await sleepInWindow(win, 200);
-    }
     app.workspace.setActiveLeaf(leaf, { focus: true });
+    await sleepInWindow(win, 100);
+    logDisplayDiagnostics(win, `presenter opened target=${this.options.targetDisplayId ?? "none"}`);
+    if (this.options.targetDisplayId !== undefined) {
+      const sameNative = resolveSameNativeWindow(this.options.hostView.ownerWindow, win);
+      console.log(
+        `[Slideshow display debug] presenter move safety sameNative=${sameNative === null ? "unknown" : String(sameNative)}`,
+      );
+      if (sameNative !== false) {
+        console.log(
+          "[Slideshow display debug] presenter move skipped: presenter native window identity is not safely distinct from host",
+        );
+      } else {
+        const moved = moveWindowToDisplay(win, this.options.targetDisplayId, true);
+        if (moved) {
+          await waitForWindowOnDisplay(win, this.options.targetDisplayId, 2500);
+          await sleepInWindow(win, 150);
+        }
+      }
+      logDisplayDiagnostics(win, `presenter placement complete target=${this.options.targetDisplayId}`);
+    }
   }
 
   /** Brings an already-open presenter window to the foreground. */
@@ -242,7 +292,6 @@ export class PresenterViewController {
     const close = doc.createElement("button");
     close.type = "button";
     close.className = "slideshow-presenter__close";
-    close.title = this.options.t("presenterClose");
     close.setAttribute("aria-label", this.options.t("presenterClose"));
     close.innerHTML = this.options.icons.close;
     close.addEventListener("click", () => void this.destroy(true));
@@ -299,7 +348,6 @@ export class PresenterViewController {
     const label = this.options.t(
       this.notesFocusedLayout ? "presenterStandardLayout" : "presenterNotesFocusLayout",
     );
-    this.layoutButton.title = label;
     this.layoutButton.setAttribute("aria-label", label);
     this.layoutButton.classList.toggle("is-active", this.notesFocusedLayout);
   }
@@ -314,7 +362,6 @@ export class PresenterViewController {
   private iconButton(doc: Document, icon: string, label: string, callback: () => void): HTMLButtonElement {
     const button = doc.createElement("button");
     button.type = "button";
-    button.title = label;
     button.setAttribute("aria-label", label);
     button.innerHTML = icon;
     button.addEventListener("click", callback);

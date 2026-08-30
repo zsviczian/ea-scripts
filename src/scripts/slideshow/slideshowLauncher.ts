@@ -5,28 +5,32 @@
 
 import { getSlideshowIcons } from "./icons";
 import {
-  getAlternatePresentationType,
+  getAlternatePresentationSourceKey,
+  getLinePresentationSourceKey,
   resolvePresentationSetup,
+  resolvePresentationSource,
   resolveSlideDeckChoices,
 } from "./presentationPath";
 import { SlideshowController } from "./SlideshowController";
 import { SlideshowSidepanel } from "./SlideshowSidepanel";
 import { printSlideshowToPdf } from "./printToPdf";
-import { readFrameSlideshowData, readLineSlideshowData } from "./slideshowMetadata";
+import { readFrameSlideshowData } from "./slideshowMetadata";
 import {
   getSlideshowProgress,
+  getSlideshowProgressSource,
   getSlideshowProgressType,
   getSlideshowRuntime,
   getSlideshowViewContext,
   setSlideshowProgress,
   type SlideshowViewContext,
 } from "./slideshowRuntime";
-import { isFrameElement, isLinearPathElement, type PresentationPathType } from "./types";
+import { isFrameElement, isLinearPathElement, type PresentationPathType, type PresentationSourceKey } from "./types";
 
 export interface PresentationLaunchOptions {
   initialSlide?: number;
   startFullscreen?: boolean;
   presentationType?: PresentationPathType;
+  presentationSourceKey?: PresentationSourceKey;
   resume?: boolean;
   openPresenterView?: boolean;
   presentationDisplayId?: number;
@@ -38,22 +42,15 @@ function resolveLaunchModifiers(view: ScriptExcalidrawView): { startFullscreen: 
   return { startFullscreen: !(view.modifierKeyDown.altKey || ctrlKey) };
 }
 
-function getElementPresentationType(element: ExcalidrawElement): PresentationPathType | null {
-  if (isFrameElement(element) && readFrameSlideshowData(element.customData)) {
-    return "frame";
-  }
-  if (
-    isLinearPathElement(element) &&
-    readLineSlideshowData(element.customData, element.id, Math.floor(element.points.length / 2))
-  ) {
-    return "line";
-  }
+function getElementPresentationSourceKey(element: ExcalidrawElement): PresentationSourceKey | null {
+  if (isFrameElement(element) && readFrameSlideshowData(element.customData)) return "frame";
+  if (isLinearPathElement(element)) return getLinePresentationSourceKey(element);
   return null;
 }
 
 /** Returns whether a frame or linear element carries valid slideshow metadata. */
 export function hasSlideshowMetadata(element: ExcalidrawElement): boolean {
-  return getElementPresentationType(element) !== null;
+  return getElementPresentationSourceKey(element) !== null;
 }
 
 /** Registers the view-local “Edit slideshow” element action. */
@@ -61,8 +58,8 @@ export function registerSlideshowElementActionProvider(
   context: SlideshowViewContext,
 ): (() => void) | null {
   return context.ea.registerElementActionProvider((element) => {
-    const presentationType = getElementPresentationType(element);
-    if (!presentationType) return [];
+    const presentationSourceKey = getElementPresentationSourceKey(element);
+    if (!presentationSourceKey) return [];
     return [
       {
         id: "edit-slideshow",
@@ -72,8 +69,8 @@ export function registerSlideshowElementActionProvider(
           context.ea.setView(context.view);
           void openSlideshowSidepanel(
             context,
-            presentationType,
-            presentationType === "frame" ? element.id : undefined,
+            presentationSourceKey,
+            presentationSourceKey === "frame" ? element.id : undefined,
           );
         },
       },
@@ -100,14 +97,19 @@ export async function startSlideshowPresentation(
   if (previous) await previous.exit();
 
   const choices = resolveSlideDeckChoices(ea);
-  const setup = resolvePresentationSetup(ea, api, t, launch.presentationType);
+  const requestedSource =
+    launch.presentationSourceKey ?? launch.presentationType ?? choices.defaultSourceKey ?? undefined;
+  const setup = resolvePresentationSetup(ea, api, t, requestedSource);
   if (!setup || setup.slides.length === 0) return;
-  const alternatePresentationType = getAlternatePresentationType(choices, setup.pathType);
+  const alternatePresentationSourceKey = getAlternatePresentationSourceKey(choices, setup.sourceKey);
   app.workspace.setActiveLeaf(view.leaf, { focus: true });
   const modifierDefaults = resolveLaunchModifiers(view);
   const savedProgressType = getSlideshowProgressType(view);
+  const savedProgressSource = getSlideshowProgressSource(view);
   const resumedSlide =
-    launch.resume && (!savedProgressType || savedProgressType === setup.pathType)
+    launch.resume &&
+    (!savedProgressType || savedProgressType === setup.pathType) &&
+    (!savedProgressSource || savedProgressSource === setup.sourceKey)
       ? getSlideshowProgress(view)
       : undefined;
   const initialSlide = launch.initialSlide ?? resumedSlide ?? 0;
@@ -118,7 +120,7 @@ export async function startSlideshowPresentation(
     hostView: view,
     statusBarElement: view.ownerDocument.querySelector<HTMLElement>("div.status-bar"),
     setup,
-    alternatePresentationType,
+    alternatePresentationSourceKey,
     config,
     icons: getSlideshowIcons(ea),
     initialSlide,
@@ -133,21 +135,21 @@ export async function startSlideshowPresentation(
       ? {}
       : { presenterDisplayId: launch.presenterDisplayId }),
     t,
-    onSlideChange: (slide) => setSlideshowProgress(view, slide, setup.pathType),
+    onSlideChange: (slide) => setSlideshowProgress(view, slide, setup.sourceKey),
     onExit: () => {
       if (runtime.presentations.get(view) === controller) {
         runtime.presentations.delete(view);
       }
     },
-    openSidepanel: () => openSlideshowSidepanel(context, setup.pathType),
-    switchPresentation: (presentationType, startFullscreen) =>
+    openSidepanel: () => openSlideshowSidepanel(context, setup.sourceKey),
+    switchPresentation: (presentationSourceKey, startFullscreen) =>
       startSlideshowPresentation(context, {
-        presentationType,
+        presentationSourceKey,
         startFullscreen,
       }),
   });
   runtime.presentations.set(view, controller);
-  setSlideshowProgress(view, initialSlide, setup.pathType);
+  setSlideshowProgress(view, initialSlide, setup.sourceKey);
   try {
     await controller.start();
   } catch (error) {
@@ -161,7 +163,7 @@ export async function startSlideshowPresentation(
 /** Prints one canonical slideshow deck without entering presentation mode. */
 export async function printSlideshowPresentation(
   context: SlideshowViewContext,
-  presentationType: PresentationPathType,
+  presentationSource: PresentationSourceKey | PresentationPathType,
   event: MouseEvent,
 ): Promise<void> {
   const { ea, view, config, t } = context;
@@ -172,7 +174,13 @@ export async function printSlideshowPresentation(
     new Notice(t("cannotAccessView"));
     return;
   }
-  const resolved = resolveSlideDeckChoices(ea)[presentationType];
+  const choices = resolveSlideDeckChoices(ea);
+  const resolved =
+    presentationSource === "line"
+      ? choices.line
+      : presentationSource === "frame"
+        ? choices.frame
+        : resolvePresentationSource(choices, presentationSource);
   if (!resolved || resolved.deck.visibleSlides.length === 0) {
     new Notice(t("allSlidesExcluded"));
     return;
@@ -192,14 +200,14 @@ export async function printSlideshowPresentation(
 /** Opens or focuses the single slideshow sidepanel and binds it to the requested view. */
 export async function openSlideshowSidepanel(
   context: SlideshowViewContext,
-  preferredType?: PresentationPathType,
+  preferredSource?: PresentationSourceKey | PresentationPathType,
   preferredSlideId?: string,
 ): Promise<void> {
   const runtime = getSlideshowRuntime();
   await runtime.presentations.get(context.view)?.exit();
 
   if (runtime.sidepanel) {
-    await runtime.sidepanel.activate(context.view, preferredType, preferredSlideId);
+    await runtime.sidepanel.activate(context.view, preferredSource, preferredSlideId);
     return;
   }
 
@@ -223,36 +231,40 @@ export async function openSlideshowSidepanel(
     onClosed: () => {
       if (runtime.sidepanel?.activate === handle.activate) runtime.sidepanel = null;
     },
-    startPresentation: async (presentationType, launchOptions) => {
+    startPresentation: async (presentationSourceKey, launchOptions) => {
       const boundView = sidepanel.getBoundView();
       if (!boundView) return;
       const boundContext = getSlideshowViewContext(boundView);
       if (!boundContext) return;
       Object.assign(boundContext.config, context.config);
       await startSlideshowPresentation(boundContext, {
-        presentationType,
+        presentationSourceKey,
         ...launchOptions,
       });
     },
-    printPresentation: async (presentationType, event) => {
+    printPresentation: async (presentationSourceKey, event) => {
       const boundView = sidepanel.getBoundView();
       if (!boundView) return;
       const boundContext = getSlideshowViewContext(boundView);
       if (!boundContext) return;
       Object.assign(boundContext.config, context.config);
-      await printSlideshowPresentation(boundContext, presentationType, event);
+      await printSlideshowPresentation(boundContext, presentationSourceKey, event);
     },
   });
   const handle = {
-    activate: async (view: ScriptExcalidrawView, type?: PresentationPathType, slideId?: string) => {
-      await sidepanel.activate(view, type, slideId);
+    activate: async (
+      view: ScriptExcalidrawView,
+      source?: PresentationSourceKey | PresentationPathType,
+      slideId?: string,
+    ) => {
+      await sidepanel.activate(view, source, slideId);
       tab.open();
       sidepanel.revealRequestedSlide();
     },
   };
   runtime.sidepanel = handle;
   sidepanel.initialize();
-  await handle.activate(context.view, preferredType, preferredSlideId);
+  await handle.activate(context.view, preferredSource, preferredSlideId);
 }
 
 /** Routes a script-button, command-palette, or hotkey invocation for the current view. */

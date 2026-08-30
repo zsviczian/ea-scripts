@@ -8,7 +8,14 @@
 import { getNavigationRect, type NavigationRect } from "../../sharedUtils/presentationGeometry";
 import { sleepInWindow } from "../../sharedUtils/windowTiming";
 import { AnimationRuntime } from "./AnimationRuntime";
-import { moveWindowToDisplay, restoreWindowPlacement, type NativeWindowPlacementSnapshot } from "./desktopDisplays";
+import {
+  captureWindowPlacement,
+  logDisplayDiagnostics,
+  moveWindowToDisplay,
+  restoreWindowPlacement,
+  waitForWindowOnDisplay,
+  type NativeWindowPlacementSnapshot,
+} from "./desktopDisplays";
 import type { FrameDeckSlide, LineDeckSlide } from "./SlideDeck";
 import { PresentationControls } from "./PresentationControls";
 import { PresenterViewController } from "./PresenterViewController";
@@ -20,6 +27,7 @@ import {
   type Direction,
   type EditableLinearElement,
   type PresentationSetup,
+  type PresentationSourceKey,
   type PresentationState,
   type SlideshowConfig,
   type SlideshowIcons,
@@ -31,7 +39,7 @@ export interface SlideshowControllerOptions {
   hostView: ScriptExcalidrawView;
   statusBarElement: HTMLElement | null;
   setup: PresentationSetup;
-  alternatePresentationType: "line" | "frame" | null;
+  alternatePresentationSourceKey: PresentationSourceKey | null;
   config: SlideshowConfig;
   icons: SlideshowIcons;
   initialSlide: number;
@@ -43,7 +51,7 @@ export interface SlideshowControllerOptions {
   onSlideChange(slide: number): void;
   onExit(): void;
   openSidepanel(): Promise<void>;
-  switchPresentation(presentationType: "line" | "frame", startFullscreen: boolean): Promise<void>;
+  switchPresentation(presentationSourceKey: PresentationSourceKey, startFullscreen: boolean): Promise<void>;
 }
 
 /** Owns one active presentation from setup through guaranteed animation/path restoration. */
@@ -56,7 +64,7 @@ export class SlideshowController {
   private readonly ownerDocument: Document;
   private readonly contentElement: ScriptContentElement;
   private readonly setup: PresentationSetup;
-  private readonly alternatePresentationType: "line" | "frame" | null;
+  private readonly alternatePresentationSourceKey: PresentationSourceKey | null;
   private readonly config: SlideshowConfig;
   private readonly icons: SlideshowIcons;
   private readonly statusBarElement: HTMLElement | null;
@@ -69,7 +77,7 @@ export class SlideshowController {
   private readonly onExit: () => void;
   private readonly openSidepanel: () => Promise<void>;
   private readonly switchPresentation: (
-    presentationType: "line" | "frame",
+    presentationSourceKey: PresentationSourceKey,
     startFullscreen: boolean,
   ) => Promise<void>;
   private readonly animationRuntime: AnimationRuntime | null;
@@ -85,6 +93,7 @@ export class SlideshowController {
   private navigationQueue: Promise<void> = Promise.resolve();
   private stateEmissionPauseDepth = 0;
   private hostWindowPlacement: NativeWindowPlacementSnapshot | null = null;
+  private hostPlacementPrepared = false;
 
   public constructor(options: SlideshowControllerOptions) {
     this.ea = options.ea;
@@ -95,7 +104,7 @@ export class SlideshowController {
     this.ownerDocument = options.hostView.ownerDocument;
     this.contentElement = options.hostView.contentEl;
     this.setup = options.setup;
-    this.alternatePresentationType = options.alternatePresentationType;
+    this.alternatePresentationSourceKey = options.alternatePresentationSourceKey;
     this.config = options.config;
     this.icons = options.icons;
     this.statusBarElement = options.statusBarElement;
@@ -126,6 +135,10 @@ export class SlideshowController {
   /** Starts the presentation and installs all temporary UI and handlers. */
   public async start(): Promise<void> {
     this.ea.setView(this.hostView);
+    logDisplayDiagnostics(
+      this.ownerWindow,
+      `controller start fullscreen=${this.shouldStartFullscreen},presenter=${this.openPresenterViewOnStart},presentationTarget=${this.presentationDisplayId ?? "none"},presenterTarget=${this.presenterDisplayId ?? "none"}`,
+    );
     if (this.statusBarElement) this.statusBarElement.style.display = "none";
     this.ea.setViewModeEnabled(true);
     const helpButton = this.hostView.excalidrawContainer?.querySelector(
@@ -139,6 +152,10 @@ export class SlideshowController {
 
     this.createControls();
     this.initializeEventListeners();
+    // Capture the host before opening/moving any presenter popout. This snapshot must never be
+    // derived from a window state that presenter placement may already have changed.
+    this.hostWindowPlacement = captureWindowPlacement(this.ownerWindow);
+    logDisplayDiagnostics(this.ownerWindow, "host captured before presenter open");
     // Create and place presenter notes before macOS enters fullscreen/Spaces. Moving a popout
     // after the host window is fullscreen is unreliable, especially for Sidecar displays.
     if (this.openPresenterViewOnStart) {
@@ -255,7 +272,9 @@ export class SlideshowController {
       contentElement: this.contentElement,
       slidesCount: this.setup.slides.length,
       pathType: this.setup.pathType,
-      alternatePresentationType: this.alternatePresentationType,
+      alternatePresentationType: this.alternatePresentationSourceKey
+        ? (this.alternatePresentationSourceKey === "frame" ? "frame" : "line")
+        : null,
       slideTitles: this.setup.slideTitles,
       shouldOfferPathVisibility: this.setup.shouldHidePathAfterPresentation,
       isPathHidden: this.setup.isHidden,
@@ -302,9 +321,9 @@ export class SlideshowController {
   }
 
   private async switchToAlternatePresentation(): Promise<void> {
-    if (!this.alternatePresentationType) return;
+    if (!this.alternatePresentationSourceKey) return;
     const startFullscreen = this.isFullscreen;
-    const alternate = this.alternatePresentationType;
+    const alternate = this.alternatePresentationSourceKey;
     await this.exit();
     await this.switchPresentation(alternate, startFullscreen);
   }
@@ -328,22 +347,30 @@ export class SlideshowController {
   }
 
   private async prepareHostWindowPlacement(fillWorkArea: boolean): Promise<void> {
-    if (this.hostWindowPlacement || this.presentationDisplayId === undefined) return;
-    this.hostWindowPlacement = moveWindowToDisplay(
+    if (this.hostPlacementPrepared || this.presentationDisplayId === undefined) return;
+    this.hostWindowPlacement ??= captureWindowPlacement(this.ownerWindow);
+    moveWindowToDisplay(
       this.ownerWindow,
       this.presentationDisplayId,
       fillWorkArea,
       false,
     );
-    if (!this.hostWindowPlacement) return;
-    // Electron reports the new bounds synchronously, but macOS/Sidecar window composition lags.
-    // Let the move settle before requesting fullscreen or beginning camera transitions.
-    await sleepInWindow(this.ownerWindow, 250);
+    this.hostPlacementPrepared = true;
+    await waitForWindowOnDisplay(this.ownerWindow, this.presentationDisplayId, 3000);
+    // macOS/Sidecar composition can lag behind Electron's bounds update. Wait after the display
+    // match is confirmed before requesting element fullscreen, otherwise macOS may create the
+    // fullscreen Space on the window's previous display.
+    await sleepInWindow(this.ownerWindow, 350);
+    logDisplayDiagnostics(
+      this.ownerWindow,
+      `host placement complete target=${this.presentationDisplayId ?? "none"}`,
+    );
     app.workspace.setActiveLeaf(this.hostLeaf, { focus: true });
   }
 
   private async gotoFullscreen(refocus = true): Promise<void> {
     if (this.isFullscreen) return;
+    logDisplayDiagnostics(this.ownerWindow, "before element fullscreen");
     this.preventFullscreenExit = true;
     await this.prepareHostWindowPlacement(true);
     this.animationRuntime?.pauseTimedStep();
@@ -355,6 +382,7 @@ export class SlideshowController {
     this.controls?.setFullscreen(true);
     this.controls?.resetPosition(false);
     this.isFullscreen = true;
+    logDisplayDiagnostics(this.ownerWindow, "after element fullscreen");
     if (refocus) await this.scrollToSlide(this.slide, 1);
     this.animationRuntime?.startPendingTimer();
   }
@@ -371,9 +399,9 @@ export class SlideshowController {
     await this.waitForExcalidrawResize();
     this.controls?.resetPosition(false);
     this.isFullscreen = false;
-    if (this.hostWindowPlacement) {
+    if (this.hostWindowPlacement && this.hostPlacementPrepared) {
       restoreWindowPlacement(this.ownerWindow, this.hostWindowPlacement);
-      this.hostWindowPlacement = null;
+      this.hostPlacementPrepared = false;
       await sleepInWindow(this.ownerWindow, 100);
     }
     if (refocus) await this.scrollToSlide(this.slide, 1);
@@ -630,6 +658,7 @@ export class SlideshowController {
 
   private async performExit(openForEdit: boolean): Promise<void> {
     this.ea.setView(this.hostView);
+    logDisplayDiagnostics(this.ownerWindow, `exit begin openForEdit=${openForEdit}`);
     const presenter = this.presenter;
     this.presenter = null;
     await presenter?.destroy(true).catch(() => undefined);
@@ -643,6 +672,9 @@ export class SlideshowController {
       if (this.hostWindowPlacement) {
         restoreWindowPlacement(this.ownerWindow, this.hostWindowPlacement);
         this.hostWindowPlacement = null;
+        this.hostPlacementPrepared = false;
+        await sleepInWindow(this.ownerWindow, 150);
+        logDisplayDiagnostics(this.ownerWindow, "exit after host restore");
       }
       await this.waitForExcalidrawResize();
       this.ea.setViewModeEnabled(false);

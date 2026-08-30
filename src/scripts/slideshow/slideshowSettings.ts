@@ -4,7 +4,7 @@
  */
 
 import type { SlideshowTranslator } from "./lang";
-import type { SlideshowConfig } from "./types";
+import type { PresentationPathType, SlideshowConfig } from "./types";
 
 export const DEFAULT_SLIDESHOW_CONFIG: SlideshowConfig = {
   transitionStepCount: 100,
@@ -19,35 +19,76 @@ export const DEFAULT_SLIDESHOW_CONFIG: SlideshowConfig = {
 
 const CONFIG_KEYS = Object.keys(DEFAULT_SLIDESHOW_CONFIG) as Array<keyof SlideshowConfig>;
 
-export type SlideshowLaunchMode = "beginning" | "resume" | "presenter" | "current";
+export type SlideshowStartMode = "beginning" | "resume" | "current";
+export type SlideshowWindowMode = "fullscreen" | "window";
+export type SlideshowNotesMode = "slides" | "presenter";
 
 export interface SlideshowLaunchPreferences {
-  mode: SlideshowLaunchMode;
-  startFullscreen: boolean;
+  startMode: SlideshowStartMode;
+  windowMode: SlideshowWindowMode;
+  notesMode: SlideshowNotesMode;
+  presentationType?: PresentationPathType;
 }
 
-const LAUNCH_MODE_SETTING = "slideshowLaunchMode";
-const START_FULLSCREEN_SETTING = "slideshowStartFullscreen";
+export interface SlideshowDisplayPreferences {
+  presentationDisplayId: number | null;
+  presenterDisplayId: number | null;
+}
+
+const START_MODE_SETTING = "slideshowStartMode";
+const WINDOW_MODE_SETTING = "slideshowWindowMode";
+const NOTES_MODE_SETTING = "slideshowNotesMode";
+const PRESENTATION_TYPE_SETTING = "slideshowPresentationType";
+const DISPLAY_TARGETS_SETTING = "slideshowDisplayTargetsByDevice";
+const LEGACY_LAUNCH_MODE_SETTING = "slideshowLaunchMode";
+const LEGACY_START_FULLSCREEN_SETTING = "slideshowStartFullscreen";
+
+function readSettings(ea: ExcalidrawAutomate): Record<string, unknown> {
+  const getSettings = (ea as ExcalidrawAutomate & {
+    getScriptSettings?: () => Record<string, unknown>;
+  }).getScriptSettings;
+  return typeof getSettings === "function" ? getSettings.call(ea) : {};
+}
 
 /** Reads the user's most recently selected presentation launch behavior. */
 export function loadSlideshowLaunchPreferences(
   ea: ExcalidrawAutomate,
 ): SlideshowLaunchPreferences {
-  const getSettings = (ea as ExcalidrawAutomate & {
-    getScriptSettings?: () => Record<string, unknown>;
-  }).getScriptSettings;
-  const settings = typeof getSettings === "function" ? getSettings.call(ea) : {};
-  const rawMode = settings[LAUNCH_MODE_SETTING];
-  const mode: SlideshowLaunchMode =
-    rawMode === "resume" || rawMode === "presenter" || rawMode === "current"
-      ? rawMode
-      : "beginning";
+  const settings = readSettings(ea);
+  const legacyMode = settings[LEGACY_LAUNCH_MODE_SETTING];
+  const rawStartMode = settings[START_MODE_SETTING];
+  const startMode: SlideshowStartMode =
+    rawStartMode === "resume" || rawStartMode === "current"
+      ? rawStartMode
+      : rawStartMode === "beginning"
+        ? "beginning"
+        : legacyMode === "resume" || legacyMode === "current"
+          ? legacyMode
+          : "beginning";
+  const rawWindowMode = settings[WINDOW_MODE_SETTING];
+  const windowMode: SlideshowWindowMode =
+    rawWindowMode === "window" || rawWindowMode === "fullscreen"
+      ? rawWindowMode
+      : settings[LEGACY_START_FULLSCREEN_SETTING] === false
+        ? "window"
+        : "fullscreen";
+  const rawNotesMode = settings[NOTES_MODE_SETTING];
+  const notesMode: SlideshowNotesMode =
+    rawNotesMode === "presenter" || rawNotesMode === "slides"
+      ? rawNotesMode
+      : legacyMode === "presenter"
+        ? "presenter"
+        : "slides";
+  const rawPresentationType = settings[PRESENTATION_TYPE_SETTING];
+  const presentationType: PresentationPathType | undefined =
+    rawPresentationType === "frame" || rawPresentationType === "line"
+      ? rawPresentationType
+      : undefined;
   return {
-    mode,
-    startFullscreen:
-      typeof settings[START_FULLSCREEN_SETTING] === "boolean"
-        ? (settings[START_FULLSCREEN_SETTING] as boolean)
-        : true,
+    startMode,
+    windowMode,
+    notesMode,
+    ...(presentationType ? { presentationType } : {}),
   };
 }
 
@@ -59,8 +100,56 @@ export async function saveSlideshowLaunchPreferences(
   const settings = ea.getScriptSettings();
   await ea.setScriptSettings({
     ...settings,
-    [LAUNCH_MODE_SETTING]: preferences.mode,
-    [START_FULLSCREEN_SETTING]: preferences.startFullscreen,
+    [START_MODE_SETTING]: preferences.startMode,
+    [WINDOW_MODE_SETTING]: preferences.windowMode,
+    [NOTES_MODE_SETTING]: preferences.notesMode,
+    ...(preferences.presentationType
+      ? { [PRESENTATION_TYPE_SETTING]: preferences.presentationType }
+      : {}),
+  });
+}
+
+function asDisplayPreferences(value: unknown): SlideshowDisplayPreferences | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  const normalizeId = (id: unknown): number | null | undefined => {
+    if (id === null) return null;
+    return typeof id === "number" && Number.isFinite(id) ? id : undefined;
+  };
+  const presentationDisplayId = normalizeId(record.presentationDisplayId);
+  const presenterDisplayId = normalizeId(record.presenterDisplayId);
+  if (presentationDisplayId === undefined || presenterDisplayId === undefined) return null;
+  return { presentationDisplayId, presenterDisplayId };
+}
+
+/** Reads monitor choices for one local device identity. */
+export function loadSlideshowDisplayPreferences(
+  ea: ExcalidrawAutomate,
+  deviceKey: string,
+): SlideshowDisplayPreferences | null {
+  const raw = readSettings(ea)[DISPLAY_TARGETS_SETTING];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  return asDisplayPreferences((raw as Record<string, unknown>)[deviceKey]);
+}
+
+/** Persists monitor choices independently for each local device identity. */
+export async function saveSlideshowDisplayPreferences(
+  ea: ExcalidrawAutomate,
+  deviceKey: string,
+  preferences: SlideshowDisplayPreferences,
+): Promise<void> {
+  const settings = ea.getScriptSettings();
+  const existingRaw = settings[DISPLAY_TARGETS_SETTING];
+  const existing =
+    existingRaw && typeof existingRaw === "object" && !Array.isArray(existingRaw)
+      ? (existingRaw as Record<string, unknown>)
+      : {};
+  await ea.setScriptSettings({
+    ...settings,
+    [DISPLAY_TARGETS_SETTING]: {
+      ...existing,
+      [deviceKey]: { ...preferences },
+    },
   });
 }
 

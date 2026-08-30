@@ -6,7 +6,7 @@
 import type { App } from "obsidian";
 
 import type { SlideshowTranslator } from "./lang";
-import type { PresentationPathType, SlideshowConfig } from "./types";
+import type { PresentationPathType, PresentationSourceKey, SlideshowConfig } from "./types";
 
 const RUNTIME_PROPERTY = "__excalidrawAutomateSlideshowRuntimeV1" as const;
 
@@ -29,7 +29,7 @@ export interface SlideshowPresentationHandle {
 export interface SlideshowSidepanelHandle {
   activate(
     view: ScriptExcalidrawView,
-    preferredType?: PresentationPathType,
+    preferredSource?: PresentationSourceKey | PresentationPathType,
     preferredSlideId?: string,
   ): Promise<void>;
 }
@@ -38,6 +38,7 @@ export interface SlideshowRuntimeState {
   readonly contexts: WeakMap<ScriptExcalidrawView, SlideshowViewContext>;
   readonly progress: WeakMap<ScriptExcalidrawView, number>;
   readonly progressType: WeakMap<ScriptExcalidrawView, PresentationPathType>;
+  readonly progressSource: WeakMap<ScriptExcalidrawView, PresentationSourceKey>;
   readonly presentations: WeakMap<ScriptExcalidrawView, SlideshowPresentationHandle>;
   sidepanel: SlideshowSidepanelHandle | null;
 }
@@ -53,6 +54,7 @@ export function getSlideshowRuntime(): SlideshowRuntimeState {
     contexts: new WeakMap(),
     progress: new WeakMap(),
     progressType: new WeakMap(),
+    progressSource: new WeakMap(),
     presentations: new WeakMap(),
     sidepanel: null,
   };
@@ -61,6 +63,11 @@ export function getSlideshowRuntime(): SlideshowRuntimeState {
   if (!("progressType" in runtime) || !runtime.progressType) {
     Object.assign(runtime, {
       progressType: new WeakMap<ScriptExcalidrawView, PresentationPathType>(),
+    });
+  }
+  if (!("progressSource" in runtime) || !runtime.progressSource) {
+    Object.assign(runtime, {
+      progressSource: new WeakMap<ScriptExcalidrawView, PresentationSourceKey>(),
     });
   }
   return runtime;
@@ -85,11 +92,17 @@ export function getSlideshowViewContext(
 export function setSlideshowProgress(
   view: ScriptExcalidrawView,
   slide: number,
-  presentationType?: PresentationPathType,
+  presentationSource?: PresentationSourceKey | PresentationPathType,
 ): void {
   const runtime = getSlideshowRuntime();
   runtime.progress.set(view, slide);
-  if (presentationType) runtime.progressType.set(view, presentationType);
+  if (presentationSource) {
+    const type: PresentationPathType = presentationSource === "frame" ? "frame" : "line";
+    runtime.progressType.set(view, type);
+    if (presentationSource === "frame" || presentationSource.startsWith("line:")) {
+      runtime.progressSource.set(view, presentationSource as PresentationSourceKey);
+    }
+  }
 }
 
 /** Returns a concrete view's last temporary zero-based slide position. */
@@ -102,6 +115,14 @@ export function getSlideshowProgressType(
   view: ScriptExcalidrawView,
 ): PresentationPathType | undefined {
   return getSlideshowRuntime().progressType.get(view);
+}
+
+
+/** Returns the exact presentation source associated with the saved temporary slide position. */
+export function getSlideshowProgressSource(
+  view: ScriptExcalidrawView,
+): PresentationSourceKey | undefined {
+  return getSlideshowRuntime().progressSource.get(view);
 }
 
 /** Clears the shared runtime. Intended for tests and development reloads. */

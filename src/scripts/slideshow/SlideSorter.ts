@@ -151,7 +151,6 @@ export class SlideSorter {
     button.type = "button";
     button.innerHTML = icon;
     button.setAttribute("aria-label", label);
-    button.title = label;
     button.disabled = disabled;
     button.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -203,7 +202,6 @@ export class SlideSorter {
       top.draggable = true;
       top.classList.add("is-draggable");
       top.setAttribute("aria-label", t("dragSlide"));
-      top.title = t("dragSlide");
       top.addEventListener("dragstart", (event) => {
         this.draggedIndex = index;
         row.classList.add("is-dragging");

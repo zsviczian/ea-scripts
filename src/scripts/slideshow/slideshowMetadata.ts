@@ -195,20 +195,28 @@ export function readLineSlideshowDataV2(customData: unknown): LineSlideshowData 
     return null;
   }
   const originalProps = readOriginalPathProperties(value.originalProps);
-  if (typeof value.hidden !== "boolean" || !originalProps || !Array.isArray(value.slides)) {
+  if (
+    typeof value.hidden !== "boolean" ||
+    !originalProps ||
+    !Array.isArray(value.slides) ||
+    (value.name !== undefined && typeof value.name !== "string")
+  ) {
     return null;
   }
   const slides = value.slides.map(readLineSlideRecord);
   if (slides.some((slide) => slide === null)) {
     return null;
   }
-  return {
+  const result: LineSlideshowData = {
     schemaVersion: LINE_SCHEMA_VERSION,
     kind: "path",
     hidden: value.hidden,
     originalProps,
     slides: slides as LineSlideMetadataRecord[],
   };
+  const name = normalizeNotes(value.name);
+  if (name !== undefined) result.name = name;
+  return result;
 }
 
 function makeGeneratedLineSlideId(pathId: string, index: number, usedIds: Set<string>): string {

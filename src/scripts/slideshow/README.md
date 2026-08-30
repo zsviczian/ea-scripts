@@ -22,12 +22,16 @@ script is emitted to `build/slideshow/slideshow.md`.
 - The sidepanel is a single non-persistent instance. It follows the most recently focused
   Excalidraw drawing across main-window/popout contexts and shows an empty state for Markdown notes.
 
-## Presentation paths and slide order
+## Presentation sources and slide order
 
-- Select an arrow or line to use its consecutive point pairs as slides.
-- With no selection, a previously remembered presentation path is reused.
-- If no line path is available, frames are used.
-- If both frames and a remembered/selected line path are available, the sidepanel shows a presentation-type dropdown. Frame and line configurations remain independent, and launch actions run the type currently selected in the sidepanel.
+A drawing can contain one frame presentation plus any number of independent line/arrow presentations. The sidepanel keeps an explicit presentation-source selection; selecting ordinary canvas elements never changes which deck the sorter is editing.
+
+- Frames form one presentation source when the drawing contains frames.
+- A line/arrow becomes a presentation source only after slideshow metadata is created for it. Selecting an ordinary line does **not** implicitly turn it into a slideshow or replace the sidepanel deck.
+- When an ordinary line/arrow with at least one complete point pair is selected, the sidepanel shows a contextual **Create line presentation** action in the top toolbar.
+- Every persisted line presentation has its own optional name. Use its ellipsis/settings action beside the deck summary to rename it or remove only its slideshow metadata. Removing presentation metadata never deletes the line itself and restores its original styling if the path had been persistently hidden.
+- If presentation names collide, the selector disambiguates them only in the UI as `Name (1)`, `Name (2)`, and so on; element ids remain the stable identity. Unnamed paths use `Line presentation` with the same duplicate-numbering rule.
+- When multiple sources exist, the presentation selector lists `Frames` plus every named line presentation independently. Manual script launch prefers a selected **persisted** line presentation; otherwise frames are the default when available, then the first persisted line presentation.
 - Frames without slideshow metadata retain alphabetical ordering.
 - The first sorter mutation writes explicit normalized `order` metadata; after that, frame renames do not change presentation order.
 - Excluded frame and line slides remain visible and editable in the sorter, but are omitted from presentation and PDF output.
@@ -87,9 +91,13 @@ The sidepanel also includes a small support link to [Ko-fi](https://ko-fi.com/zs
 
 ## Presentation launch, displays, and PDF behavior
 
-The sidepanel uses one compact play control. Its adjacent menu offers **From beginning**, **Resume**, **With presenter notes**, and **Current slide**. The main play button remembers and repeats the most recently chosen launch action, while a small `F`, `W`, `R`, or `C` badge communicates fullscreen/window/resume/current-slide intent. The fullscreen/current-window toggle is persisted in script settings as well. Windowed launches hide the entire Excalidraw sidepanel before presentation so the deck receives the full workspace width.
+The sidepanel has one compact **Play** button. Launch behavior is configured independently through dropdowns instead of overloading the play action: **Start / Resume / Current**, **Fullscreen / Windowed**, and **Slides only / With Notes**. If both frame and line decks exist, a separate presentation-type dropdown is shown. Changing a dropdown never starts the presentation; pressing Play uses the currently selected combination. These choices are persisted in script settings. Windowed launches hide the entire Excalidraw sidepanel before presentation so the deck receives the full workspace width.
 
-On desktop, when Electron exposes more than one display, the sidepanel offers separate presentation-display and presenter-display selectors. The default keeps the presentation on the current/primary display and chooses another display for presenter notes when available. Presenter popouts are created and placed before the host enters fullscreen, then the presentation window is moved and allowed to settle before fullscreen is requested. The Electron bridge resolves the native BrowserWindow that most closely matches each DOM window rather than assuming `getCurrentWindow()` belongs to the requested popout. Window placement remains best-effort because Obsidian does not provide a script-level first-class presentation-display API, but this sequencing is specifically intended to improve external-monitor and Sidecar workflows. The original host-window placement is restored on exit.
+On desktop, display selectors are shown only when **With Notes** is selected. The default keeps the presentation on the current/primary display and chooses another display for presenter notes when available. Presentation and notes display selections are persisted in script settings under a stable local device key, allowing different machines that share the script settings to keep independent monitor choices.
+
+Presenter placement is deliberately fail-safe. The host native-window placement is captured **before** a presenter popout is opened. After `openPopoutLeaf()`, Slideshow waits until Obsidian has actually migrated the presenter leaf into a DOM `Window` distinct from the host, then verifies that the two DOM windows resolve to different native Electron `BrowserWindow`s before moving either presenter window. If identity cannot be established unambiguously, presenter movement is skipped instead of risking moving the main Obsidian window. The host is then moved to the requested presentation display and fullscreen is requested only after Electron confirms the display transition. Native restoration uses Electron's `BrowserWindow.id` when available and clamps stale/off-screen bounds to an available display.
+
+Display handling remains best-effort because Obsidian does not expose a first-class presentation-display API to scripts. For diagnosis, display operations write string-only console messages prefixed with `[Slideshow display debug]`, including popout migration timing, host/presenter DOM identity, native BrowserWindow ids, candidate geometry scores, detected displays, movement confirmation, fullscreen state, and restoration.
 
 Presentation navigation, the toolbar slide picker, and PDF export consume the canonical visible deck. Frame order and exclusions therefore match the sorter. The presentation slide picker labels entries as `Title (current/total)`. Starting from the sidepanel returns focus to the drawing leaf before keyboard handlers are installed, so arrow-key navigation is immediately active. PDF pages use the final fully built scene state: all animation targets are restored to their original opacity and no animation overlays are included.
 

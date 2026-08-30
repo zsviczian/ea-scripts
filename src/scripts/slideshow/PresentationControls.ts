@@ -119,7 +119,6 @@ export class PresentationControls {
             attr: {
               style: "margin-left: calc(var(--default-button-size)*0.25);",
               "aria-label": t("previousSlide"),
-              title: t("previousSlide"),
             },
           },
           (button) => {
@@ -138,7 +137,7 @@ export class PresentationControls {
                 border: none;
                 color: var(--color-gray-100);
                 cursor: pointer;`,
-              title: t("navigateToSlide"),
+              "aria-label": t("navigateToSlide"),
             },
           },
           (selectElement) => {
@@ -162,7 +161,7 @@ export class PresentationControls {
 
         buttonList.createEl(
           "button",
-          { attr: { title: t("nextSlide"), "aria-label": t("nextSlide") } },
+          { attr: { "aria-label": t("nextSlide") } },
           (button) => {
             button.innerHTML = icons.rightArrow;
             button.onclick = callbacks.next;
@@ -180,7 +179,7 @@ export class PresentationControls {
 
         buttonList.createEl(
           "button",
-          { attr: { title: t("toggleLaser"), "aria-label": t("toggleLaser") } },
+          { attr: { "aria-label": t("toggleLaser") } },
           (button) => {
             button.innerHTML = icons.laserOff;
             button.onclick = () => {
@@ -191,7 +190,7 @@ export class PresentationControls {
         );
         buttonList.createEl(
           "button",
-          { attr: { title: t("refocusSlide"), "aria-label": t("refocusSlide") } },
+          { attr: { "aria-label": t("refocusSlide") } },
           (button) => {
             button.innerHTML = icons.refocus;
             button.onclick = callbacks.refocus;
@@ -199,7 +198,7 @@ export class PresentationControls {
         );
         buttonList.createEl(
           "button",
-          { attr: { title: t("toggleFullscreen"), "aria-label": t("toggleFullscreen") } },
+          { attr: { "aria-label": t("toggleFullscreen") } },
           (button) => {
             this.fullscreenButton = button;
             button.innerHTML = this.options.isFullscreen ? icons.minimize : icons.maximize;
@@ -212,14 +211,13 @@ export class PresentationControls {
             let pathHidden = isPathHidden;
             buttonList.createEl(
               "button",
-              { attr: { title: t("pathVisibility"), "aria-label": t("pathVisibility") } },
+              { attr: { "aria-label": t("pathVisibility") } },
               (button) => {
                 const renderPathVisibility = (): void => {
                   const label = pathHidden
                     ? t("keepPresentationPathHidden")
                     : t("keepPresentationPathVisible");
                   button.innerHTML = pathHidden ? icons.eyeOff : icons.eye;
-                  button.title = label;
                   button.setAttribute("aria-label", label);
                   button.setAttribute("aria-pressed", String(pathHidden));
                 };
@@ -234,7 +232,7 @@ export class PresentationControls {
           }
           buttonList.createEl(
             "button",
-            { attr: { title: t("editSlide"), "aria-label": t("editSlide") } },
+            { attr: { "aria-label": t("editSlide") } },
             (button) => {
               button.innerHTML = icons.edit;
               button.onclick = callbacks.editSlide;
@@ -249,7 +247,7 @@ export class PresentationControls {
               : t("switchToLineSlideshow");
           buttonList.createEl(
             "button",
-            { attr: { title: switchLabel, "aria-label": switchLabel } },
+            { attr: { "aria-label": switchLabel } },
             (button) => {
               button.innerHTML =
                 pathType === "frame" ? icons.frameSlideshow : icons.lineSlideshow;
@@ -260,7 +258,7 @@ export class PresentationControls {
 
         buttonList.createEl(
           "button",
-          { attr: { title: t("openPanelEndsPresentation"), "aria-label": t("openSlideshowPanel") } },
+          { attr: { "aria-label": t("openSlideshowPanel") } },
           (button) => {
             button.innerHTML = icons.settings;
             button.onclick = callbacks.openSidepanel;
@@ -270,7 +268,7 @@ export class PresentationControls {
         if (ea.DEVICE.isDesktop) {
           buttonList.createEl(
             "button",
-            { attr: { title: t("presenterView"), "aria-label": t("presenterView") } },
+            { attr: { "aria-label": t("presenterView") } },
             (button) => {
               button.innerHTML = icons.presentation;
               button.onclick = callbacks.openPresenterView;
@@ -281,7 +279,6 @@ export class PresentationControls {
             {
               attr: {
                 style: "margin-right: calc(var(--default-button-size)*0.25);",
-                title: t("printPdf", { width: printSlideWidth, height: printSlideHeight }),
                 "aria-label": t("printPdf", { width: printSlideWidth, height: printSlideHeight }),
               },
             },
@@ -296,7 +293,6 @@ export class PresentationControls {
           {
             attr: {
               style: "margin-right: calc(var(--default-button-size)*0.25);",
-              title: t("endPresentation"),
               "aria-label": t("endPresentation"),
             },
           },

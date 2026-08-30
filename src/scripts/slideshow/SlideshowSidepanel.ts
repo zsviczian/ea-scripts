@@ -13,6 +13,8 @@ import {
   chooseDefaultDisplayTargets,
   getAvailableDisplays,
   getCurrentDisplayId,
+  getSlideshowDeviceKey,
+  logDisplayDiagnostics,
   type SlideshowDisplay,
 } from "./desktopDisplays";
 import { getVisibleSlideIndex, type FrameDeckSlide, type SlideDeckSlide } from "./SlideDeck";
@@ -20,12 +22,19 @@ import { SlidePreviewService, getSceneVisualFingerprint } from "./SlidePreviewSe
 import { SlideSorter } from "./SlideSorter";
 import type { SlideshowTranslator } from "./lang";
 import {
+  getLinePresentationSourceKey,
+  getPresentationSourceType,
+  hasPresentationSource,
   isPresentationPathHidden,
+  resolvePresentationSource,
   resolveSlideDeckChoices,
   type SlideDeckChoices,
 } from "./presentationPath";
 import {
+  createLinePresentation,
   hasBoundLineEndpoint,
+  removeLinePresentation,
+  renameLinePresentation,
   reorderFrameSlides,
   reorderLineSlides,
   saveFrameNotes,
@@ -35,16 +44,22 @@ import {
   setLineSlideExcluded,
 } from "./slideDeckMutations";
 import {
+  loadSlideshowDisplayPreferences,
   loadSlideshowLaunchPreferences,
   openSlideshowSettingsModal,
+  saveSlideshowDisplayPreferences,
   saveSlideshowLaunchPreferences,
-  type SlideshowLaunchMode,
+  type SlideshowNotesMode,
+  type SlideshowStartMode,
+  type SlideshowWindowMode,
 } from "./slideshowSettings";
 import { SLIDESHOW_SIDEPANEL_STYLES } from "./styles";
-import { getSlideshowProgress, getSlideshowProgressType } from "./slideshowRuntime";
+import { getSlideshowProgress, getSlideshowProgressSource, getSlideshowProgressType } from "./slideshowRuntime";
 import {
   isLinearPathElement,
+  type LinePresentationSource,
   type PresentationPathType,
+  type PresentationSourceKey,
   type ResolvedSlideDeck,
   type SlideshowConfig,
   type SlideshowIcons,
@@ -65,10 +80,10 @@ export interface SlideshowSidepanelOptions {
   icons: SlideshowIcons;
   config: SlideshowConfig;
   startPresentation(
-    presentationType: PresentationPathType,
+    presentationSource: PresentationSourceKey,
     options: SidepanelPresentationLaunchOptions,
   ): Promise<void>;
-  printPresentation(presentationType: PresentationPathType, event: MouseEvent): Promise<void>;
+  printPresentation(presentationSource: PresentationSourceKey, event: MouseEvent): Promise<void>;
   onClosed(): void;
 }
 
@@ -88,25 +103,74 @@ function getDeckFingerprint(resolved: ResolvedSlideDeck | null): string {
   });
 }
 
-/** Chooses the sorter deck, giving an explicitly selected line priority over remembered UI state. */
+/** Chooses the sorter source from stable panel state; canvas selection never changes it. */
+export function chooseSidepanelPresentationSourceKey(
+  choices: SlideDeckChoices,
+  storedSource: PresentationSourceKey | undefined,
+  preferredType?: PresentationPathType,
+): PresentationSourceKey | null {
+  if (storedSource && hasPresentationSource(choices, storedSource)) return storedSource;
+  if (preferredType === "frame" && choices.frame) return "frame";
+  if (preferredType === "line" && choices.lines.length > 0) return choices.lines[0]?.key ?? null;
+  return choices.defaultSourceKey;
+}
+
+/** Compatibility wrapper retained for broad-type tests/callers. */
 export function chooseSidepanelPresentationType(
   choices: SlideDeckChoices,
   storedType: PresentationPathType | undefined,
-  selectedElement: ExcalidrawElement | null,
+  _selectedElement?: ExcalidrawElement | null,
 ): PresentationPathType | null {
-  if (isLinearPathElement(selectedElement) && choices.line) return "line";
-  return storedType && choices[storedType] ? storedType : choices.defaultType;
+  const source = chooseSidepanelPresentationSourceKey(choices, undefined, storedType);
+  return source ? getPresentationSourceType(source) : null;
 }
 
-/** Clears selected line intent when the user explicitly switches to the frame deck. */
+/** Compatibility helper retained for callers that intentionally clear a selected line. */
 export function clearLineSelectionForDeckSwitch(
   presentationType: PresentationPathType,
   selectedElement: ExcalidrawElement | null,
   api: ExcalidrawAPI,
 ): void {
-  if (presentationType === "frame" && isLinearPathElement(selectedElement)) {
-    api.selectElements([]);
-  }
+  if (presentationType === "frame" && isLinearPathElement(selectedElement)) api.selectElements([]);
+}
+
+/** Returns an ordinary selected line that can be explicitly converted into a presentation. */
+export function getConvertibleSelectedLine(ea: ExcalidrawAutomate): ExcalidrawLinearElement | null {
+  const selected = ea.getViewSelectedElement();
+  if (!isLinearPathElement(selected) || Math.floor(selected.points.length / 2) <= 0) return null;
+  return getLinePresentationSourceKey(selected) ? null : selected;
+}
+
+/** Creates disambiguated presentation labels without changing stored presentation names. */
+export function getPresentationSourceLabels(
+  choices: SlideDeckChoices,
+  frameLabel: string,
+  defaultLineLabel: string,
+): Array<{ key: PresentationSourceKey; label: string }> {
+  const result: Array<{ key: PresentationSourceKey; label: string }> = [];
+  if (choices.frame) result.push({ key: "frame", label: frameLabel });
+  const bases = choices.lines.map((line) => line.name?.trim() || defaultLineLabel);
+  const totals = new Map<string, number>();
+  for (const base of bases) totals.set(base, (totals.get(base) ?? 0) + 1);
+  const seen = new Map<string, number>();
+  choices.lines.forEach((line, index) => {
+    const base = bases[index] ?? defaultLineLabel;
+    const ordinal = (seen.get(base) ?? 0) + 1;
+    seen.set(base, ordinal);
+    result.push({
+      key: line.key,
+      label: (totals.get(base) ?? 0) > 1 ? `${base} (${ordinal})` : base,
+    });
+  });
+  return result;
+}
+
+function getLineSourceByKey(
+  choices: SlideDeckChoices,
+  sourceKey: PresentationSourceKey | null,
+): LinePresentationSource | null {
+  if (!sourceKey || sourceKey === "frame") return null;
+  return choices.lines.find((line) => line.key === sourceKey) ?? null;
 }
 
 interface SorterSceneSelection {
@@ -147,9 +211,12 @@ export function getResumeSlideForPresentation(
   progressType: PresentationPathType | undefined,
   presentationType: PresentationPathType | null,
   visibleSlideCount: number,
+  progressSource?: PresentationSourceKey,
+  presentationSource?: PresentationSourceKey | null,
 ): number | null {
   if (progress === undefined || presentationType === null || visibleSlideCount <= 0) return null;
   if (progressType && progressType !== presentationType) return null;
+  if (progressSource && presentationSource && progressSource !== presentationSource) return null;
   return Math.min(Math.max(progress, 0), visibleSlideCount - 1);
 }
 
@@ -158,9 +225,9 @@ export class SlideshowSidepanel {
   private sorter: SlideSorter | null = null;
   private previewService: SlidePreviewService | null = null;
   private resolved: ResolvedSlideDeck | null = null;
-  private choices: SlideDeckChoices = { frame: null, line: null, defaultType: null };
-  private presentationType: PresentationPathType | null = null;
-  private readonly presentationTypeByDrawing = new Map<string, PresentationPathType>();
+  private choices: SlideDeckChoices = { frame: null, lines: [], line: null, defaultSourceKey: null, defaultType: null };
+  private presentationSourceKey: PresentationSourceKey | null = null;
+  private readonly presentationSourceByDrawing = new Map<string, PresentationSourceKey>();
   private refreshTimer = 0;
   private ownerWindow: Window;
   private lastFingerprint = "";
@@ -172,18 +239,30 @@ export class SlideshowSidepanel {
   private requestedSlideId: string | null = null;
   private animationEditor: AnimationEditor | null = null;
   private animationEditingSlideId: string | null = null;
-  private startFullscreen = true;
-  private lastLaunchMode: SlideshowLaunchMode = "beginning";
+  private startMode: SlideshowStartMode = "beginning";
+  private windowMode: SlideshowWindowMode = "fullscreen";
+  private notesMode: SlideshowNotesMode = "slides";
+  private preferredPresentationType: PresentationPathType | undefined;
   private displays: SlideshowDisplay[] = [];
   private presentationDisplayId: number | null = null;
   private presenterDisplayId: number | null = null;
+  private deviceKey: string;
+  private settingsWriteQueue: Promise<void> = Promise.resolve();
 
   public constructor(private readonly options: SlideshowSidepanelOptions) {
     this.ownerWindow = options.tab.contentEl.ownerDocument.defaultView ?? window;
     this.boundView = null;
     const launchPreferences = loadSlideshowLaunchPreferences(options.ea);
-    this.startFullscreen = launchPreferences.startFullscreen;
-    this.lastLaunchMode = launchPreferences.mode;
+    this.startMode = launchPreferences.startMode;
+    this.windowMode = launchPreferences.windowMode;
+    this.notesMode = launchPreferences.notesMode;
+    this.preferredPresentationType = launchPreferences.presentationType;
+    this.deviceKey = getSlideshowDeviceKey(this.ownerWindow);
+    const displayPreferences = loadSlideshowDisplayPreferences(options.ea, this.deviceKey);
+    if (displayPreferences) {
+      this.presentationDisplayId = displayPreferences.presentationDisplayId;
+      this.presenterDisplayId = displayPreferences.presenterDisplayId;
+    }
   }
 
   /** Returns the drawing currently edited by this sidepanel. */
@@ -204,10 +283,15 @@ export class SlideshowSidepanel {
   /** Rebinds the panel to a concrete view and optionally selects its deck type. */
   public async activate(
     view: ScriptExcalidrawView,
-    preferredType?: PresentationPathType,
+    preferredSource?: PresentationSourceKey | PresentationPathType,
     preferredSlideId?: string,
   ): Promise<void> {
-    if (preferredType) this.presentationTypeByDrawing.set(view.file.path, preferredType);
+    if (preferredSource) {
+      const sourceKey: PresentationSourceKey | null =
+        preferredSource === "line" ? null : (preferredSource as PresentationSourceKey);
+      if (sourceKey) this.presentationSourceByDrawing.set(view.file.path, sourceKey);
+      else this.preferredPresentationType = "line";
+    }
     if (preferredSlideId) this.requestedSlideId = preferredSlideId;
     if (view === this.boundView) {
       this.options.ea.setView(view);
@@ -319,8 +403,8 @@ export class SlideshowSidepanel {
     this.previewService?.clear();
     this.previewService = null;
     this.resolved = null;
-    this.choices = { frame: null, line: null, defaultType: null };
-    this.presentationType = null;
+    this.choices = { frame: null, lines: [], line: null, defaultSourceKey: null, defaultType: null };
+    this.presentationSourceKey = null;
     this.lastFingerprint = "";
     this.boundView = view;
     this.options.ea.setView(view);
@@ -366,7 +450,6 @@ export class SlideshowSidepanel {
     settingsButton.type = "button";
     settingsButton.className = "slideshow-sidepanel__icon-button";
     settingsButton.setAttribute("aria-label", t("settingsTitle"));
-    settingsButton.title = t("settingsTitle");
     settingsButton.innerHTML = icons.settings;
     settingsButton.addEventListener("click", () => {
       void (async () => {
@@ -419,13 +502,20 @@ export class SlideshowSidepanel {
     }
     const choices = resolveSlideDeckChoices(ea);
     const drawingKey = view.file.path;
-    const storedType = this.presentationTypeByDrawing.get(drawingKey);
-    const selectedElement = ea.getViewSelectedElement();
-    const presentationType = chooseSidepanelPresentationType(choices, storedType, selectedElement);
-    if (presentationType) this.presentationTypeByDrawing.set(drawingKey, presentationType);
-    const resolved = presentationType ? choices[presentationType] : null;
+    const storedSource = this.presentationSourceByDrawing.get(drawingKey);
+    const presentationSourceKey = chooseSidepanelPresentationSourceKey(
+      choices,
+      storedSource,
+      this.preferredPresentationType,
+    );
+    if (presentationSourceKey) this.presentationSourceByDrawing.set(drawingKey, presentationSourceKey);
+    const resolved = resolvePresentationSource(choices, presentationSourceKey);
     const appState = api.getAppState();
-    const compositeFingerprint = `${presentationType ?? "none"}|${getDeckFingerprint(choices.frame)}|${getDeckFingerprint(choices.line)}|${appState.theme}|${appState.viewBackgroundColor}|${getSceneVisualFingerprint(ea.getViewElements())}`;
+    const lineFingerprint = choices.lines
+      .map((line) => `${line.key}:${line.name ?? ""}:${getDeckFingerprint(line.resolved)}`)
+      .join("|");
+    const convertibleId = getConvertibleSelectedLine(ea)?.id ?? "none";
+    const compositeFingerprint = `${presentationSourceKey ?? "none"}|${getDeckFingerprint(choices.frame)}|${lineFingerprint}|candidate=${convertibleId}|${appState.theme}|${appState.viewBackgroundColor}|${getSceneVisualFingerprint(ea.getViewElements())}`;
     if (!force && compositeFingerprint === this.lastFingerprint) return;
 
     const requestedSlideId = this.requestedSlideId;
@@ -436,7 +526,7 @@ export class SlideshowSidepanel {
     this.sorter?.destroy();
     this.sorter = null;
     this.choices = choices;
-    this.presentationType = presentationType;
+    this.presentationSourceKey = presentationSourceKey;
     this.resolved = resolved;
     this.lastFingerprint = compositeFingerprint;
     this.pendingRefresh = false;
@@ -472,8 +562,12 @@ export class SlideshowSidepanel {
         ? getResumeSlideForPresentation(
             getSlideshowProgress(this.boundView),
             getSlideshowProgressType(this.boundView),
-            this.presentationType,
+            this.presentationSourceKey
+              ? getPresentationSourceType(this.presentationSourceKey)
+              : null,
             this.resolved.deck.visibleSlides.length,
+            getSlideshowProgressSource(this.boundView),
+            this.presentationSourceKey,
           )
         : null;
     const selectedSlideId =
@@ -485,115 +579,16 @@ export class SlideshowSidepanel {
       ? getVisibleSlideIndex(this.resolved.deck, selectedSlideId)
       : null;
 
-    const launchGroup = doc.createElement("div");
-    launchGroup.className = "slideshow-sidepanel__launch-group";
-    header.appendChild(launchGroup);
-
-    const availableLaunchMode = (): SlideshowLaunchMode => {
-      if (this.lastLaunchMode === "resume" && resumeSlide === null) return "beginning";
-      if (this.lastLaunchMode === "current" && selectedVisibleIndex === null) return "beginning";
-      return this.lastLaunchMode;
-    };
-    const launchModeLabel = (mode: SlideshowLaunchMode): string => {
-      switch (mode) {
-        case "resume":
-          return t("continuePresentation");
-        case "presenter":
-          return t("startWithPresenterView");
-        case "current":
-          return t("startFromCurrentSlide");
-        default:
-          return t("startFromBeginning");
-      }
-    };
-    const launchModeLetter = (mode: SlideshowLaunchMode): string => {
-      if (mode === "resume") return "R";
-      if (mode === "current") return "C";
-      return this.startFullscreen ? "F" : "W";
-    };
+    this.refreshDisplayTargets();
 
     const startButton = doc.createElement("button");
     startButton.type = "button";
     startButton.className = "slideshow-sidepanel__icon-button slideshow-sidepanel__launch-main";
-    const updateStartButton = (): void => {
-      const mode = availableLaunchMode();
-      const modeLabel = launchModeLabel(mode);
-      const windowLabel = this.startFullscreen ? t("startFullscreen") : t("startCurrentWindow");
-      const label = `${modeLabel} · ${windowLabel}`;
-      startButton.setAttribute("aria-label", label);
-      startButton.title = noVisibleSlides ? t("allSlidesExcluded") : label;
-      startButton.innerHTML = `${icons.play}<span class="slideshow-sidepanel__launch-letter" aria-hidden="true">${launchModeLetter(mode)}</span>`;
-    };
-    updateStartButton();
+    startButton.setAttribute("aria-label", t("startPresentation"));
+    startButton.innerHTML = icons.play;
     startButton.disabled = !this.resolved || noVisibleSlides;
-    launchGroup.appendChild(startButton);
-    startButton.addEventListener("click", () => void this.launchPresentation(availableLaunchMode()));
-
-    const launchMenuButton = doc.createElement("button");
-    launchMenuButton.type = "button";
-    launchMenuButton.className = "slideshow-sidepanel__icon-button slideshow-sidepanel__launch-menu-button";
-    launchMenuButton.setAttribute("aria-label", t("presentationStartOptions"));
-    launchMenuButton.title = t("presentationStartOptions");
-    launchMenuButton.innerHTML = icons.chevronDown;
-    launchMenuButton.disabled = !this.resolved || noVisibleSlides;
-    launchGroup.appendChild(launchMenuButton);
-
-    const launchMenu = doc.createElement("div");
-    launchMenu.className = "slideshow-sidepanel__launch-menu";
-    launchMenu.hidden = true;
-    launchMenu.setAttribute("role", "menu");
-    launchGroup.appendChild(launchMenu);
-    const addLaunchItem = (
-      label: string,
-      mode: SlideshowLaunchMode,
-      disabled = false,
-    ): void => {
-      const item = doc.createElement("button");
-      item.type = "button";
-      item.setAttribute("role", "menuitem");
-      item.textContent = label;
-      item.disabled = disabled;
-      item.addEventListener("click", () => {
-        launchMenu.hidden = true;
-        this.lastLaunchMode = mode;
-        updateStartButton();
-        void this.persistLaunchPreferences();
-        void this.launchPresentation(mode);
-      });
-      launchMenu.appendChild(item);
-    };
-    addLaunchItem(t("startFromBeginning"), "beginning");
-    addLaunchItem(t("continuePresentation"), "resume", resumeSlide === null);
-    addLaunchItem(t("startWithPresenterView"), "presenter", ea.DEVICE.isMobile);
-    addLaunchItem(t("startFromCurrentSlide"), "current", selectedVisibleIndex === null);
-    launchMenuButton.addEventListener("click", () => {
-      launchMenu.hidden = !launchMenu.hidden;
-      if (!launchMenu.hidden) launchMenu.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
-    });
-    launchGroup.addEventListener("focusout", (event) => {
-      const next = event.relatedTarget as Node | null;
-      if (!next || !launchGroup.contains(next)) launchMenu.hidden = true;
-    });
-
-    const windowModeButton = doc.createElement("button");
-    windowModeButton.type = "button";
-    windowModeButton.className = "slideshow-sidepanel__icon-button";
-    windowModeButton.setAttribute("role", "switch");
-    const updateWindowModeButton = (): void => {
-      const label = this.startFullscreen ? t("startFullscreen") : t("startCurrentWindow");
-      windowModeButton.setAttribute("aria-checked", String(this.startFullscreen));
-      windowModeButton.setAttribute("aria-label", label);
-      windowModeButton.title = label;
-      windowModeButton.innerHTML = this.startFullscreen ? icons.maximize : icons.currentWindow;
-    };
-    updateWindowModeButton();
-    windowModeButton.addEventListener("click", () => {
-      this.startFullscreen = !this.startFullscreen;
-      updateWindowModeButton();
-      updateStartButton();
-      void this.persistLaunchPreferences();
-    });
-    header.appendChild(windowModeButton);
+    header.appendChild(startButton);
+    startButton.addEventListener("click", () => void this.launchPresentation());
 
     const printButton = doc.createElement("button");
     printButton.type = "button";
@@ -603,7 +598,6 @@ export class SlideshowSidepanel {
       height: this.options.config.printSlideHeight,
     });
     printButton.setAttribute("aria-label", printLabel);
-    printButton.title = printLabel;
     printButton.innerHTML = icons.printer;
     printButton.disabled = !this.resolved || noVisibleSlides;
     header.appendChild(printButton);
@@ -611,10 +605,136 @@ export class SlideshowSidepanel {
       void this.printPresentation(event);
     });
 
+    const convertibleLine = getConvertibleSelectedLine(ea);
+    if (convertibleLine) {
+      const createPathButton = doc.createElement("button");
+      createPathButton.type = "button";
+      createPathButton.className = "slideshow-sidepanel__icon-button";
+      createPathButton.setAttribute("aria-label", t("createLinePresentation"));
+      createPathButton.innerHTML = icons.plus;
+      createPathButton.addEventListener("click", () => void this.convertSelectedLineToPresentation());
+      header.appendChild(createPathButton);
+    } else if (this.presentationSourceKey !== "frame" && this.resolved?.pathElement) {
+      const pathHidden = isPresentationPathHidden(this.resolved.pathElement);
+      const pathButton = doc.createElement("button");
+      pathButton.type = "button";
+      pathButton.className = "slideshow-sidepanel__icon-button";
+      pathButton.setAttribute(
+        "aria-label",
+        t(pathHidden ? "showPresentationPath" : "hidePresentationPath"),
+      );
+      pathButton.innerHTML = pathHidden ? icons.eyeOff : icons.eye;
+      pathButton.addEventListener("click", () => void this.togglePresentationPathVisibility());
+      header.appendChild(pathButton);
+    }
+
     this.appendSettingsButton(header, doc);
 
-    this.refreshDisplayTargets();
-    if (!ea.DEVICE.isMobile && this.displays.length > 1) {
+    if (!this.resolved || !this.previewService) {
+      const empty = doc.createElement("div");
+      empty.className = "slideshow-empty";
+      empty.textContent = t("noEligibleSlides");
+      root.appendChild(empty);
+      return null;
+    }
+
+    const launchOptions = doc.createElement("div");
+    launchOptions.className = "slideshow-sidepanel__launch-options";
+    root.appendChild(launchOptions);
+
+    const appendSelect = <T extends string>(
+      labelText: string,
+      value: T,
+      options: Array<{ value: T; label: string; disabled?: boolean }>,
+      onChange: (value: T) => void,
+    ): HTMLSelectElement => {
+      const label = doc.createElement("label");
+      label.className = "slideshow-sidepanel__launch-option";
+      const select = doc.createElement("select");
+      select.setAttribute("aria-label", labelText);
+      for (const optionDefinition of options) {
+        const option = doc.createElement("option");
+        option.value = optionDefinition.value;
+        option.textContent = optionDefinition.label;
+        option.disabled = optionDefinition.disabled ?? false;
+        select.appendChild(option);
+      }
+      select.value = value;
+      select.addEventListener("change", () => onChange(select.value as T));
+      label.appendChild(select);
+      launchOptions.appendChild(label);
+      return select;
+    };
+
+    const sourceOptions = getPresentationSourceLabels(
+      this.choices,
+      t("frameDeck"),
+      t("linePresentationDefaultName"),
+    );
+    if (sourceOptions.length > 1 && this.presentationSourceKey) {
+      appendSelect<PresentationSourceKey>(
+        t("presentationType"),
+        this.presentationSourceKey,
+        sourceOptions.map((option) => ({ value: option.key, label: option.label })),
+        (nextSource) => void this.selectPresentationSource(nextSource),
+      );
+    }
+
+    const effectiveStartMode: SlideshowStartMode =
+      this.startMode === "resume" && resumeSlide === null
+        ? "beginning"
+        : this.startMode === "current" && selectedVisibleIndex === null
+          ? "beginning"
+          : this.startMode;
+    appendSelect<SlideshowStartMode>(
+      t("startMode"),
+      effectiveStartMode,
+      [
+        { value: "beginning", label: t("startModeStart") },
+        { value: "resume", label: t("startModeResume"), disabled: resumeSlide === null },
+        {
+          value: "current",
+          label: t("startModeCurrent"),
+          disabled: selectedVisibleIndex === null,
+        },
+      ],
+      (mode) => {
+        this.startMode = mode;
+        void this.persistLaunchPreferences();
+      },
+    );
+    appendSelect<SlideshowWindowMode>(
+      t("windowMode"),
+      this.windowMode,
+      [
+        { value: "fullscreen", label: t("windowModeFullscreen") },
+        { value: "window", label: t("windowModeWindowed") },
+      ],
+      (mode) => {
+        this.windowMode = mode;
+        void this.persistLaunchPreferences();
+      },
+    );
+    appendSelect<SlideshowNotesMode>(
+      t("notesMode"),
+      ea.DEVICE.isMobile ? "slides" : this.notesMode,
+      [
+        { value: "slides", label: t("notesModeSlidesOnly") },
+        {
+          value: "presenter",
+          label: t("notesModeWithNotes"),
+          disabled: ea.DEVICE.isMobile,
+        },
+      ],
+      (mode) => {
+        this.notesMode = mode;
+        void this.persistLaunchPreferences();
+        this.lastFingerprint = "";
+        void this.refresh(true);
+      },
+    );
+
+    if (!ea.DEVICE.isMobile && this.notesMode === "presenter" && this.displays.length > 1) {
       const displayControls = doc.createElement("div");
       displayControls.className = "slideshow-sidepanel__display-controls";
       root.appendChild(displayControls);
@@ -628,6 +748,7 @@ export class SlideshowSidepanel {
         caption.textContent = labelText;
         label.appendChild(caption);
         const select = doc.createElement("select");
+        select.setAttribute("aria-label", labelText);
         for (const display of this.displays) {
           const option = doc.createElement("option");
           option.value = String(display.id);
@@ -641,70 +762,35 @@ export class SlideshowSidepanel {
       };
       appendDisplayPicker(t("presentationDisplay"), this.presentationDisplayId, (id) => {
         this.presentationDisplayId = id;
+        logDisplayDiagnostics(this.boundView?.ownerWindow ?? this.ownerWindow, `presentation display selected id=${id}`);
+        void this.persistDisplayPreferences();
       });
       appendDisplayPicker(t("presenterDisplay"), this.presenterDisplayId, (id) => {
         this.presenterDisplayId = id;
+        logDisplayDiagnostics(this.boundView?.ownerWindow ?? this.ownerWindow, `presenter display selected id=${id}`);
+        void this.persistDisplayPreferences();
       });
-    }
-
-    if (!this.resolved || !this.previewService) {
-      const empty = doc.createElement("div");
-      empty.className = "slideshow-empty";
-      empty.textContent = t("noEligibleSlides");
-      root.appendChild(empty);
-      return null;
-    }
-
-    if (this.choices.frame && this.choices.line) {
-      const deckPicker = doc.createElement("div");
-      deckPicker.className = "slideshow-sidepanel__deck-picker";
-      root.appendChild(deckPicker);
-      const label = doc.createElement("label");
-      label.textContent = t("presentationType");
-      deckPicker.appendChild(label);
-      const select = doc.createElement("select");
-      select.setAttribute("aria-label", t("presentationType"));
-      select.title = t("presentationTypeHint");
-      const frameOption = doc.createElement("option");
-      frameOption.value = "frame";
-      frameOption.textContent = t("frameDeck");
-      select.appendChild(frameOption);
-      const lineOption = doc.createElement("option");
-      lineOption.value = "line";
-      lineOption.textContent = t("lineDeck");
-      select.appendChild(lineOption);
-      select.value = this.presentationType ?? this.choices.defaultType ?? "frame";
-      select.addEventListener("change", () => {
-        const nextType = select.value === "line" ? "line" : "frame";
-        void this.selectPresentationType(nextType);
-      });
-      deckPicker.appendChild(select);
     }
 
     const deck = this.resolved.deck;
+    const summaryRow = doc.createElement("div");
+    summaryRow.className = "slideshow-sidepanel__summary-row";
+    root.appendChild(summaryRow);
     const summary = doc.createElement("div");
     summary.className = "slideshow-sidepanel__summary";
-    root.appendChild(summary);
-    summary.textContent =
-      deck.kind === "frame"
-        ? `${t("frameDeck")} · ${t("visibleSlideCount", { visible: deck.visibleSlides.length, total: deck.slides.length })}`
-        : `${t("lineDeck")} · ${t("visibleSlideCount", { visible: deck.visibleSlides.length, total: deck.slides.length })}`;
-
-    if (
-      deck.kind === "path" &&
-      this.resolved.pathElement &&
-      isPresentationPathHidden(this.resolved.pathElement)
-    ) {
-      const pathActions = doc.createElement("div");
-      pathActions.className = "slideshow-sidepanel__path-actions";
-      root.appendChild(pathActions);
-      const showPathButton = doc.createElement("button");
-      showPathButton.type = "button";
-      showPathButton.innerHTML = `${icons.eye}<span>${t("showPresentationPath")}</span>`;
-      showPathButton.setAttribute("aria-label", t("showPresentationPath"));
-      showPathButton.title = t("showPresentationPath");
-      showPathButton.addEventListener("click", () => void this.showPresentationPath());
-      pathActions.appendChild(showPathButton);
+    summaryRow.appendChild(summary);
+    const activeSourceLabel =
+      sourceOptions.find((option) => option.key === this.presentationSourceKey)?.label ??
+      (deck.kind === "frame" ? t("frameDeck") : t("linePresentationDefaultName"));
+    summary.textContent = `${activeSourceLabel} · ${t("visibleSlideCount", { visible: deck.visibleSlides.length, total: deck.slides.length })}`;
+    if (deck.kind === "path") {
+      const presentationSettingsButton = doc.createElement("button");
+      presentationSettingsButton.type = "button";
+      presentationSettingsButton.className = "slideshow-sidepanel__icon-button slideshow-sidepanel__presentation-settings";
+      presentationSettingsButton.setAttribute("aria-label", t("linePresentationSettings"));
+      presentationSettingsButton.innerHTML = icons.moreHorizontal;
+      presentationSettingsButton.addEventListener("click", () => this.openLinePresentationSettings());
+      summaryRow.appendChild(presentationSettingsButton);
     }
 
     const reorderEnabled =
@@ -780,35 +866,76 @@ export class SlideshowSidepanel {
     return `${name} · ${resolution}${primary}`;
   }
 
-  private async persistLaunchPreferences(): Promise<void> {
-    await saveSlideshowLaunchPreferences(this.options.ea, {
-      mode: this.lastLaunchMode,
-      startFullscreen: this.startFullscreen,
-    }).catch((error) => console.error("Slideshow launch preference save failed", error));
+  private persistLaunchPreferences(): Promise<void> {
+    const preferences = {
+      startMode: this.startMode,
+      windowMode: this.windowMode,
+      notesMode: this.notesMode,
+      ...(this.presentationSourceKey
+        ? { presentationType: getPresentationSourceType(this.presentationSourceKey) }
+        : {}),
+    };
+    this.settingsWriteQueue = this.settingsWriteQueue
+      .then(() => saveSlideshowLaunchPreferences(this.options.ea, preferences))
+      .catch((error) => console.error("Slideshow launch preference save failed", error));
+    return this.settingsWriteQueue;
   }
 
-  private async launchPresentation(mode: SlideshowLaunchMode): Promise<void> {
+  private persistDisplayPreferences(): Promise<void> {
+    const preferences = {
+      presentationDisplayId: this.presentationDisplayId,
+      presenterDisplayId: this.presenterDisplayId,
+    };
+    this.settingsWriteQueue = this.settingsWriteQueue
+      .then(() => saveSlideshowDisplayPreferences(this.options.ea, this.deviceKey, preferences))
+      .catch((error) => console.error("Slideshow display preference save failed", error));
+    return this.settingsWriteQueue;
+  }
+
+  private hideSidepanelForWindowedPresentation(): void {
+    const sidepanelLeaf = this.options.ea.getSidepanelLeaf();
+    const container = sidepanelLeaf?.view.containerEl;
+    if (!container) return;
+    const rect = container.getBoundingClientRect();
+    const visible =
+      container.isConnected &&
+      rect.width > 1 &&
+      rect.height > 1 &&
+      this.ownerWindow.getComputedStyle(container).display !== "none";
+    if (visible) this.options.ea.toggleSidepanelView();
+  }
+
+  private async launchPresentation(): Promise<void> {
     const view = this.boundView;
     const resolved = this.resolved;
-    const presentationType = this.presentationType;
-    if (!view || !resolved || !presentationType || resolved.deck.visibleSlides.length === 0) return;
+    const presentationSourceKey = this.presentationSourceKey;
+    if (!view || !resolved || !presentationSourceKey || resolved.deck.visibleSlides.length === 0) return;
+    const presentationType = getPresentationSourceType(presentationSourceKey);
 
-    this.lastLaunchMode = mode;
     await this.persistLaunchPreferences();
+    await this.persistDisplayPreferences();
+
+    const resume = getResumeSlideForPresentation(
+      getSlideshowProgress(view),
+      getSlideshowProgressType(view),
+      presentationType,
+      resolved.deck.visibleSlides.length,
+      getSlideshowProgressSource(view),
+      presentationSourceKey,
+    );
+    const selectedId = this.sorter?.getSelectedSlideId() ?? null;
+    const selectedIndex = getVisibleSlideIndex(resolved.deck, selectedId);
+    const effectiveStartMode: SlideshowStartMode =
+      this.startMode === "resume" && resume === null
+        ? "beginning"
+        : this.startMode === "current" && selectedIndex === null
+          ? "beginning"
+          : this.startMode;
 
     let initialSlide: number | undefined;
-    if (mode === "resume") {
-      const resume = getResumeSlideForPresentation(
-        getSlideshowProgress(view),
-        getSlideshowProgressType(view),
-        presentationType,
-        resolved.deck.visibleSlides.length,
-      );
-      if (resume === null) return;
-      initialSlide = resume;
-    } else if (mode === "current") {
-      const selectedId = this.sorter?.getSelectedSlideId() ?? null;
-      const selectedIndex = getVisibleSlideIndex(resolved.deck, selectedId);
+    if (effectiveStartMode === "resume") {
+      initialSlide = resume ?? 0;
+    } else if (effectiveStartMode === "current") {
       if (selectedIndex === null) {
         new Notice(this.options.t("selectedSlideNotPresentable"));
         return;
@@ -822,26 +949,27 @@ export class SlideshowSidepanel {
     await this.animationEditor?.destroy();
     this.animationEditor = null;
     this.animationEditingSlideId = null;
-    const startFullscreen = this.startFullscreen;
+    const startFullscreen = this.windowMode === "fullscreen";
+    const openPresenterView = !this.options.ea.DEVICE.isMobile && this.notesMode === "presenter";
     const launchOptions: SidepanelPresentationLaunchOptions = {
       initialSlide,
       startFullscreen,
-      openPresenterView: mode === "presenter",
-      ...(this.presentationDisplayId === null
-        ? {}
-        : { presentationDisplayId: this.presentationDisplayId }),
-      ...(this.presenterDisplayId === null ? {} : { presenterDisplayId: this.presenterDisplayId }),
+      openPresenterView,
+      ...(openPresenterView && this.presentationDisplayId !== null
+        ? { presentationDisplayId: this.presentationDisplayId }
+        : {}),
+      ...(openPresenterView && this.presenterDisplayId !== null
+        ? { presenterDisplayId: this.presenterDisplayId }
+        : {}),
     };
 
-    // A windowed presentation and the editing sidepanel compete for horizontal space.
-    // Hide the entire Excalidraw sidepanel rather than merely closing this script tab.
-    if (!startFullscreen) {
-      const sidepanelLeaf = this.options.ea.getSidepanelLeaf();
-      if (sidepanelLeaf?.view.containerEl.offsetParent !== null) {
-        this.options.ea.toggleSidepanelView();
-      }
-    }
-    await this.options.startPresentation(presentationType, launchOptions);
+    logDisplayDiagnostics(
+      view.ownerWindow,
+      `launch device=${this.deviceKey},source=${presentationSourceKey},type=${presentationType},startPreference=${this.startMode},startEffective=${effectiveStartMode},window=${this.windowMode},notes=${this.notesMode},presentationDisplay=${this.presentationDisplayId ?? "none"},presenterDisplay=${this.presenterDisplayId ?? "none"}`,
+    );
+
+    if (!startFullscreen) this.hideSidepanelForWindowedPresentation();
+    await this.options.startPresentation(presentationSourceKey, launchOptions);
   }
 
   private async printPresentation(event: MouseEvent): Promise<void> {
@@ -853,38 +981,120 @@ export class SlideshowSidepanel {
       this.lastFingerprint = "";
       await this.refresh(true);
     }
-    if (this.presentationType) {
-      await this.options.printPresentation(this.presentationType, event);
+    if (this.presentationSourceKey) {
+      await this.options.printPresentation(this.presentationSourceKey, event);
     }
   }
 
-  private async selectPresentationType(presentationType: PresentationPathType): Promise<void> {
-    if (!this.choices[presentationType] || presentationType === this.presentationType) return;
+  private async selectPresentationSource(sourceKey: PresentationSourceKey): Promise<void> {
+    if (!hasPresentationSource(this.choices, sourceKey) || sourceKey === this.presentationSourceKey) return;
     await this.sorter?.flushNotes();
     await this.animationEditor?.destroy();
     this.animationEditor = null;
     this.animationEditingSlideId = null;
     const view = this.boundView;
     if (!view) return;
-    this.presentationTypeByDrawing.set(view.file.path, presentationType);
-    const api = this.options.ea.getExcalidrawAPI();
-    if (api) {
-      clearLineSelectionForDeckSwitch(
-        presentationType,
-        this.options.ea.getViewSelectedElement(),
-        api,
-      );
-    }
+    this.presentationSourceByDrawing.set(view.file.path, sourceKey);
+    this.preferredPresentationType = getPresentationSourceType(sourceKey);
+    this.presentationSourceKey = sourceKey;
+    await this.persistLaunchPreferences();
     this.lastFingerprint = "";
     await this.refresh(true);
   }
 
-  private async showPresentationPath(): Promise<void> {
+  private async convertSelectedLineToPresentation(): Promise<void> {
+    const view = this.boundView;
+    const path = getConvertibleSelectedLine(this.options.ea);
+    if (!view || !path) return;
+    try {
+      await this.sorter?.flushNotes();
+      await createLinePresentation(
+        this.options.ea,
+        path.id,
+        this.options.t("linePresentationDefaultName"),
+      );
+      await view.forceSave(true);
+      const sourceKey: PresentationSourceKey = `line:${path.id}`;
+      this.presentationSourceByDrawing.set(view.file.path, sourceKey);
+      this.presentationSourceKey = sourceKey;
+      this.preferredPresentationType = "line";
+      await this.persistLaunchPreferences();
+      this.lastFingerprint = "";
+      await this.refresh(true);
+    } catch (error) {
+      console.error("Slideshow line presentation creation failed", error);
+      new Notice(this.options.t("metadataSaveFailed"));
+    }
+  }
+
+  private openLinePresentationSettings(): void {
+    const source = getLineSourceByKey(this.choices, this.presentationSourceKey);
+    const view = this.boundView;
+    if (!source || !view) return;
+    const { ea, t } = this.options;
+    const modal = new ea.obsidian.Modal(app);
+    modal.titleEl.setText(t("linePresentationSettings"));
+    const input = modal.contentEl.createEl("input", {
+      type: "text",
+      value: source.name ?? t("linePresentationDefaultName"),
+      attr: { "aria-label": t("linePresentationName") },
+    });
+    input.style.width = "100%";
+    input.style.marginBottom = "1rem";
+    const actions = modal.contentEl.createDiv({ cls: "slideshow-line-presentation-settings__actions" });
+    actions.style.display = "flex";
+    actions.style.gap = "0.5rem";
+    actions.style.flexWrap = "wrap";
+    const save = actions.createEl("button", { text: t("settingsSave") });
+    save.addEventListener("click", () => {
+      void (async () => {
+        try {
+          await renameLinePresentation(ea, source.pathId, input.value);
+          await view.forceSave(true);
+          modal.close();
+          this.lastFingerprint = "";
+          await this.refresh(true);
+        } catch (error) {
+          console.error("Slideshow line presentation rename failed", error);
+          new Notice(t("metadataSaveFailed"));
+        }
+      })();
+    });
+    const remove = actions.createEl("button", { text: t("removeLinePresentation") });
+    remove.style.color = "var(--text-error)";
+    remove.addEventListener("click", () => {
+      const confirmed = this.ownerWindow.confirm(t("removeLinePresentationConfirm"));
+      if (!confirmed) return;
+      void (async () => {
+        try {
+          await removeLinePresentation(ea, source.pathId);
+          await view.forceSave(true);
+          modal.close();
+          this.presentationSourceByDrawing.delete(view.file.path);
+          this.presentationSourceKey = null;
+          this.lastFingerprint = "";
+          await this.refresh(true);
+        } catch (error) {
+          console.error("Slideshow line presentation removal failed", error);
+          new Notice(t("metadataSaveFailed"));
+        }
+      })();
+    });
+    modal.open();
+    input.focus();
+    input.select();
+  }
+
+  private async togglePresentationPathVisibility(): Promise<void> {
     const path = this.resolved?.pathElement;
     if (!path) return;
     try {
       await this.sorter?.flushNotes();
-      await setLinePresentationPathHidden(this.options.ea, path.id, false);
+      await setLinePresentationPathHidden(
+        this.options.ea,
+        path.id,
+        !isPresentationPathHidden(path),
+      );
       this.lastFingerprint = "";
       await this.refresh(true);
     } catch (error) {

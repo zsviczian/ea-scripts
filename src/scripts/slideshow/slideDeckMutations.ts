@@ -156,6 +156,86 @@ function fallbackPathProperties(path: ExcalidrawLinearElement): {
   };
 }
 
+
+/** Creates slideshow metadata on an ordinary line/arrow without changing its geometry. */
+export async function createLinePresentation(
+  ea: ExcalidrawAutomate,
+  pathId: string,
+  name?: string,
+): Promise<void> {
+  const source = ea.getViewElements().find((element) => element.id === pathId);
+  if (!isLinearPathElement(source)) throw new Error("The selected line no longer exists.");
+  if (Math.floor(source.points.length / 2) <= 0) {
+    throw new Error("The selected line does not contain a complete slide point pair.");
+  }
+  ea.clear();
+  ea.copyViewElementsToEAforEditing([source]);
+  const element = ea.getElement<ExcalidrawLinearElement>(pathId) as EditableLinearElement | null;
+  if (!element) throw new Error("The selected line could not be edited.");
+  const metadata = upgradeLineSlideshowData(
+    element.customData,
+    element.id,
+    Math.floor(element.points.length / 2),
+    fallbackPathProperties(source),
+  );
+  const normalizedName = normalizeNotes(name ?? "");
+  if (normalizedName === undefined) delete metadata.name;
+  else metadata.name = normalizedName;
+  writeSlideshowMetadata(ea, element.id, metadata);
+  await commitWorkbench(ea);
+}
+
+/** Renames one persisted line presentation while retaining all slide metadata. */
+export async function renameLinePresentation(
+  ea: ExcalidrawAutomate,
+  pathId: string,
+  name: string,
+): Promise<void> {
+  const source = ea.getViewElements().find((element) => element.id === pathId);
+  if (!isLinearPathElement(source)) throw new Error("The presentation path no longer exists.");
+  ea.clear();
+  ea.copyViewElementsToEAforEditing([source]);
+  const element = ea.getElement<ExcalidrawLinearElement>(pathId) as EditableLinearElement | null;
+  if (!element) throw new Error("The presentation path could not be edited.");
+  const metadata = upgradeLineSlideshowData(
+    element.customData,
+    element.id,
+    Math.floor(element.points.length / 2),
+    fallbackPathProperties(source),
+  );
+  const normalizedName = normalizeNotes(name);
+  if (normalizedName === undefined) delete metadata.name;
+  else metadata.name = normalizedName;
+  writeSlideshowMetadata(ea, element.id, metadata);
+  await commitWorkbench(ea);
+}
+
+/** Removes only slideshow metadata from a line and restores hidden presentation styling first. */
+export async function removeLinePresentation(
+  ea: ExcalidrawAutomate,
+  pathId: string,
+): Promise<void> {
+  const source = ea.getViewElements().find((element) => element.id === pathId);
+  if (!isLinearPathElement(source)) throw new Error("The presentation path no longer exists.");
+  ea.clear();
+  ea.copyViewElementsToEAforEditing([source]);
+  const element = ea.getElement<ExcalidrawLinearElement>(pathId) as EditableLinearElement | null;
+  if (!element) throw new Error("The presentation path could not be edited.");
+  const existing = upgradeLineSlideshowData(
+    element.customData,
+    element.id,
+    Math.floor(element.points.length / 2),
+    fallbackPathProperties(source),
+  );
+  if (existing.hidden) {
+    element.strokeColor = existing.originalProps.strokeColor;
+    element.backgroundColor = existing.originalProps.backgroundColor;
+    element.locked = existing.originalProps.locked;
+  }
+  writeSlideshowMetadata(ea, element.id, undefined);
+  await commitWorkbench(ea);
+}
+
 /** Reorders a consecutive line point-pair and its stable metadata record in one scene transaction. */
 export async function reorderLineSlides(
   ea: ExcalidrawAutomate,

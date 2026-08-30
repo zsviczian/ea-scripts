@@ -41,5 +41,6 @@ export function getSlideshowIcons(ea: ExcalidrawAutomate): SlideshowIcons {
     settings: iconMarkup(ea, "lucide-settings"),
     frameSlideshow: iconMarkup(ea, "lucide-frame"),
     lineSlideshow: iconMarkup(ea, "lucide-route"),
+    moreHorizontal: iconMarkup(ea, "lucide-ellipsis"),
   };
 }

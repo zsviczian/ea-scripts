@@ -14,13 +14,18 @@ import {
 import { hasSlideshowMetadata, registerSlideshowElementActionProvider } from "../slideshowLauncher";
 import { createSlideshowTranslator } from "../lang";
 import {
+  getAlternatePresentationSourceKey,
   getAlternatePresentationType,
   resolvePresentationSetup,
+  resolvePresentationSource,
   resolveSlideDeck,
   resolveSlideDeckChoices,
 } from "../presentationPath";
 import {
+  createLinePresentation,
   hasBoundLineEndpoint,
+  removeLinePresentation,
+  renameLinePresentation,
   reorderFrameSlides,
   reorderLineSlides,
   saveFrameNotes,
@@ -31,6 +36,7 @@ import {
 import { readFrameSlideshowData, readLineSlideshowDataV2 } from "../slideshowMetadata";
 import {
   getSlideshowProgress,
+  getSlideshowProgressSource,
   getSlideshowProgressType,
   getSlideshowRuntime,
   resetSlideshowRuntimeForTests,
@@ -40,8 +46,11 @@ import { runSlideshow } from "../run";
 import { buildFrameSlideDeck } from "../SlideDeck";
 import { SlideSorter } from "../SlideSorter";
 import {
+  chooseSidepanelPresentationSourceKey,
   chooseSidepanelPresentationType,
   clearLineSelectionForDeckSwitch,
+  getConvertibleSelectedLine,
+  getPresentationSourceLabels,
   getResumeSlideForPresentation,
   getSceneSelectedSlideId,
   SlideshowSidepanel,
@@ -64,9 +73,12 @@ function frame(
   } as unknown as ExcalidrawFrameElement;
 }
 
-function line(customData?: Record<string, unknown>): ExcalidrawLinearElement {
+function line(
+  customData?: Record<string, unknown>,
+  id = "path",
+): ExcalidrawLinearElement {
   return {
-    id: "path",
+    id,
     type: "line",
     x: 100,
     y: 200,
@@ -265,6 +277,32 @@ describe("slideshow checkpoint 2 mutations", () => {
     expect(readLineSlideshowDataV2(updated.customData)?.hidden).toBe(false);
   });
 
+  it("creates, renames, and removes line presentation metadata without losing unrelated custom data", async () => {
+    const elements: ExcalidrawElement[] = [line({ preserved: "keep" }, "draft")];
+    const ea = createFakeEa(elements);
+
+    await createLinePresentation(ea, "draft", "Product demo");
+    let metadata = readLineSlideshowDataV2(elements[0]?.customData);
+    expect(metadata?.name).toBe("Product demo");
+    expect(metadata?.slides).toHaveLength(3);
+    const stableIds = metadata?.slides.map((slide) => slide.id);
+
+    await renameLinePresentation(ea, "draft", "Investor pitch");
+    metadata = readLineSlideshowDataV2(elements[0]?.customData);
+    expect(metadata?.name).toBe("Investor pitch");
+    expect(metadata?.slides.map((slide) => slide.id)).toEqual(stableIds);
+
+    await setLinePresentationPathHidden(ea, "draft", true);
+    expect((elements[0] as ExcalidrawLinearElement).strokeColor).toBe("transparent");
+    await removeLinePresentation(ea, "draft");
+    const restored = elements[0] as ExcalidrawLinearElement;
+    expect(readLineSlideshowDataV2(restored.customData)).toBeNull();
+    expect((restored.customData as Record<string, unknown>).preserved).toBe("keep");
+    expect(restored.strokeColor).toBe("#123");
+    expect(restored.backgroundColor).toBe("transparent");
+    expect(restored.locked).toBe(false);
+  });
+
   it("detects bound endpoints before line reordering", () => {
     const path = line() as Mutable<ExcalidrawLinearElement>;
     path.startBinding = { elementId: "box", fixedPoint: [0.5, 0.5], mode: "orbit" };
@@ -291,8 +329,10 @@ describe("slideshow checkpoint 2 deck consumption", () => {
         structuredClone(element) as Mutable<T>,
     } as unknown as ExcalidrawAutomate;
     const choices = resolveSlideDeckChoices(ea);
-    expect(choices.defaultType).toBe("line");
+    expect(choices.defaultSourceKey).toBe("frame");
+    expect(choices.defaultType).toBe("frame");
     expect(choices.frame?.deck.kind).toBe("frame");
+    expect(choices.lines).toHaveLength(1);
     expect(choices.line?.deck.kind).toBe("path");
     expect(resolveSlideDeck(ea, "frame")?.deck.slides.map((slide) => slide.title)).toEqual([
       "Alpha",
@@ -323,7 +363,7 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(getAlternatePresentationType(choices, "frame")).toBe("line");
   });
 
-  it("defaults to a selected visible line even when frames exist", () => {
+  it("does not treat an ordinary selected line as a presentation source", () => {
     const selectedPath = line();
     const elements: ExcalidrawElement[] = [frame("a", "Alpha"), selectedPath];
     const ea = {
@@ -333,8 +373,76 @@ describe("slideshow checkpoint 2 deck consumption", () => {
         structuredClone(element) as Mutable<T>,
     } as unknown as ExcalidrawAutomate;
     const choices = resolveSlideDeckChoices(ea);
+    expect(choices.defaultSourceKey).toBe("frame");
+    expect(choices.defaultType).toBe("frame");
+    expect(choices.lines).toHaveLength(0);
+    expect(chooseSidepanelPresentationType(choices, "frame", selectedPath)).toBe("frame");
+    expect(getConvertibleSelectedLine(ea)?.id).toBe("path");
+  });
+
+  it("uses a selected persisted line presentation as the manual launch default", () => {
+    const selectedPath = line({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "path",
+        name: "Lecture",
+        hidden: false,
+        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+        slides: [{ id: "one" }, { id: "two" }, { id: "three" }],
+      },
+    });
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha"), selectedPath];
+    const ea = {
+      getViewElements: () => elements,
+      getViewSelectedElement: () => selectedPath,
+      cloneElement: <T extends ExcalidrawElement>(element: T) =>
+        structuredClone(element) as Mutable<T>,
+    } as unknown as ExcalidrawAutomate;
+    const choices = resolveSlideDeckChoices(ea);
+    expect(choices.defaultSourceKey).toBe("line:path");
     expect(choices.defaultType).toBe("line");
-    expect(chooseSidepanelPresentationType(choices, "frame", selectedPath)).toBe("line");
+    expect(getConvertibleSelectedLine(ea)).toBeNull();
+  });
+
+  it("enumerates multiple named line presentations and disambiguates duplicate names", () => {
+    const first = line({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "path",
+        name: "Lecture",
+        hidden: false,
+        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+        slides: [{ id: "a1" }, { id: "a2" }, { id: "a3" }],
+      },
+    }, "path-a");
+    const second = line({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "path",
+        name: "Lecture",
+        hidden: false,
+        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+        slides: [{ id: "b1" }, { id: "b2" }, { id: "b3" }],
+      },
+    }, "path-b");
+    const ordinary = line(undefined, "ordinary");
+    const elements: ExcalidrawElement[] = [frame("frame-a", "Frames"), first, second, ordinary];
+    const ea = {
+      getViewElements: () => elements,
+      getViewSelectedElement: () => ordinary,
+      cloneElement: <T extends ExcalidrawElement>(element: T) =>
+        structuredClone(element) as Mutable<T>,
+    } as unknown as ExcalidrawAutomate;
+    const choices = resolveSlideDeckChoices(ea);
+    expect(choices.lines.map((source) => source.key)).toEqual(["line:path-a", "line:path-b"]);
+    expect(resolvePresentationSource(choices, "line:path-b")?.pathElement?.id).toBe("path-b");
+    expect(getAlternatePresentationSourceKey(choices, "frame")).toBeNull();
+    expect(chooseSidepanelPresentationSourceKey(choices, "line:path-b", "frame")).toBe("line:path-b");
+    expect(getPresentationSourceLabels(choices, "Frames", "Line presentation")).toEqual([
+      { key: "frame", label: "Frames" },
+      { key: "line:path-a", label: "Lecture (1)" },
+      { key: "line:path-b", label: "Lecture (2)" },
+    ]);
   });
 
   it("preserves scene frame ids instead of using cloneElement's generated ids", () => {
@@ -376,7 +484,15 @@ describe("slideshow checkpoint 2 deck consumption", () => {
   });
 
   it("maps selected line points only when every point belongs to one slide pair", () => {
-    const path = line();
+    const path = line({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "path",
+        hidden: false,
+        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+        slides: [{ id: "slideshow-path-1" }, { id: "slideshow-path-2" }, { id: "slideshow-path-3" }],
+      },
+    });
     const ea = {
       getViewElements: () => [path],
       getViewSelectedElement: () => path,
@@ -792,6 +908,15 @@ describe("slideshow checkpoint 2 temporary progress", () => {
     expect(getResumeSlideForPresentation(4, "frame", "frame", 3)).toBe(2);
     expect(getResumeSlideForPresentation(4, "frame", "line", 6)).toBeNull();
     expect(getResumeSlideForPresentation(undefined, "frame", "frame", 3)).toBeNull();
+  });
+
+  it("associates resume progress with one exact line presentation source", () => {
+    const view = {} as ScriptExcalidrawView;
+    setSlideshowProgress(view, 2, "line:path-b");
+    expect(getSlideshowProgressType(view)).toBe("line");
+    expect(getSlideshowProgressSource(view)).toBe("line:path-b");
+    expect(getResumeSlideForPresentation(2, "line", "line", 5, "line:path-b", "line:path-b")).toBe(2);
+    expect(getResumeSlideForPresentation(2, "line", "line", 5, "line:path-b", "line:path-a")).toBeNull();
   });
 
   it("upgrades an existing runtime when presentation-type progress was not available yet", () => {
