@@ -5,7 +5,8 @@
 
 /* eslint-disable max-lines-per-function -- The toolbar is kept in visual order to preserve the legacy control layout. */
 
-import type { NamedFrame, PresentationPathType, SlideshowIcons } from "./types";
+import type { SlideshowTranslator } from "./lang";
+import type { PresentationPathType, SlideshowIcons } from "./types";
 
 export interface PresentationControlCallbacks {
   previous(): void;
@@ -16,6 +17,7 @@ export interface PresentationControlCallbacks {
   toggleFullscreen(): void;
   togglePathVisibility(hidden: boolean): void;
   editSlide(): void;
+  openSidepanel(): void;
   print(event: MouseEvent): void;
   finish(): void;
 }
@@ -27,7 +29,7 @@ export interface PresentationControlsOptions {
   contentElement: ScriptContentElement;
   slidesCount: number;
   pathType: PresentationPathType;
-  frames: readonly NamedFrame[];
+  slideTitles: readonly string[];
   shouldOfferPathVisibility: boolean;
   isPathHidden: boolean;
   isFullscreen: boolean;
@@ -36,6 +38,7 @@ export interface PresentationControlsOptions {
   printSlideWidth: number;
   printSlideHeight: number;
   icons: SlideshowIcons;
+  t: SlideshowTranslator;
   callbacks: PresentationControlCallbacks;
 }
 
@@ -58,7 +61,7 @@ export class PresentationControls {
       contentElement,
       slidesCount,
       pathType,
-      frames,
+      slideTitles,
       shouldOfferPathVisibility,
       isPathHidden,
       printSlideWidth,
@@ -66,6 +69,8 @@ export class PresentationControls {
       ea,
       callbacks,
       icons,
+      t,
+      ownerDocument,
     } = this.options;
     const excalidrawContainer = contentElement.querySelector<HTMLElement>(".excalidraw");
     if (!excalidrawContainer) {
@@ -103,16 +108,14 @@ export class PresentationControls {
         },
       },
       (buttonList) => {
-        buttonList.createEl("style", {
-          text: " select:focus { box-shadow: var(--input-shadow);} ",
-        });
+        buttonList.createEl("style", { text: " select:focus { box-shadow: var(--input-shadow);} " });
         buttonList.createEl(
           "button",
           {
             attr: {
               style: "margin-left: calc(var(--default-button-size)*0.25);",
-              "aria-label": "Previous slide",
-              title: "Previous slide",
+              "aria-label": t("previousSlide"),
+              title: t("previousSlide"),
             },
           },
           (button) => {
@@ -131,17 +134,13 @@ export class PresentationControls {
                 border: none;
                 color: var(--color-gray-100);
                 cursor: pointer;`,
-              title: "Navigate to slide",
+              title: t("navigateToSlide"),
             },
           },
           (selectElement) => {
             for (let index = 0; index < slidesCount; index += 1) {
-              // Preserve the main-workspace realm used by the legacy script.
-              const option = document.createElement("option");
-              option.text =
-                pathType === "frame"
-                  ? `${frames[index]?.name ?? ""}/${slidesCount}`
-                  : `Slide ${index + 1}/${slidesCount}`;
+              const option = ownerDocument.createElement("option");
+              option.text = `${slideTitles[index] ?? t("slideLabel", { number: index + 1 })}/${slidesCount}`;
               option.value = String(index + 1);
               selectElement.add(option);
             }
@@ -153,10 +152,14 @@ export class PresentationControls {
           },
         );
 
-        buttonList.createEl("button", { attr: { title: "Next slide" } }, (button) => {
-          button.innerHTML = icons.rightArrow;
-          button.onclick = callbacks.next;
-        });
+        buttonList.createEl(
+          "button",
+          { attr: { title: t("nextSlide"), "aria-label": t("nextSlide") } },
+          (button) => {
+            button.innerHTML = icons.rightArrow;
+            button.onclick = callbacks.next;
+          },
+        );
         buttonList.createDiv({
           attr: {
             style: `
@@ -169,7 +172,7 @@ export class PresentationControls {
 
         buttonList.createEl(
           "button",
-          { attr: { title: "Toggle Laser Pointer and Panning Mode" } },
+          { attr: { title: t("toggleLaser"), "aria-label": t("toggleLaser") } },
           (button) => {
             button.innerHTML = icons.laserOff;
             button.onclick = () => {
@@ -180,7 +183,7 @@ export class PresentationControls {
         );
         buttonList.createEl(
           "button",
-          { attr: { title: "Re-focus current slide (shortcut: HOME)" } },
+          { attr: { title: t("refocusSlide"), "aria-label": t("refocusSlide") } },
           (button) => {
             button.innerHTML = icons.refocus;
             button.onclick = callbacks.refocus;
@@ -188,12 +191,7 @@ export class PresentationControls {
         );
         buttonList.createEl(
           "button",
-          {
-            attr: {
-              title:
-                "Toggle fullscreen. If you hold ALT/OPT when starting the presentation it will not go fullscreen. (shortcut: f)",
-            },
-          },
+          { attr: { title: t("toggleFullscreen"), "aria-label": t("toggleFullscreen") } },
           (button) => {
             this.fullscreenButton = button;
             button.innerHTML = this.options.isFullscreen ? icons.minimize : icons.maximize;
@@ -205,17 +203,27 @@ export class PresentationControls {
           if (shouldOfferPathVisibility) {
             new ea.obsidian.ToggleComponent(buttonList)
               .setValue(isPathHidden)
-              .onChange((value) => callbacks.togglePathVisibility(value))
-              .toggleEl.setAttribute(
-                "title",
-                "Arrow visibility. ON: hidden after presentation, OFF: visible after presentation",
-              );
+              .onChange((value: boolean) => callbacks.togglePathVisibility(value))
+              .toggleEl.setAttribute("title", t("pathVisibility"));
           }
-          buttonList.createEl("button", { attr: { title: "Edit slide" } }, (button) => {
-            button.innerHTML = icons.edit;
-            button.onclick = callbacks.editSlide;
-          });
+          buttonList.createEl(
+            "button",
+            { attr: { title: t("editSlide"), "aria-label": t("editSlide") } },
+            (button) => {
+              button.innerHTML = icons.edit;
+              button.onclick = callbacks.editSlide;
+            },
+          );
         }
+
+        buttonList.createEl(
+          "button",
+          { attr: { title: t("openPanelEndsPresentation"), "aria-label": t("openSlideshowPanel") } },
+          (button) => {
+            button.innerHTML = icons.settings;
+            button.onclick = callbacks.openSidepanel;
+          },
+        );
 
         if (ea.DEVICE.isDesktop) {
           buttonList.createEl(
@@ -223,7 +231,8 @@ export class PresentationControls {
             {
               attr: {
                 style: "margin-right: calc(var(--default-button-size)*0.25);",
-                title: `Print to PDF\nClick to print slides at ${printSlideWidth}x${printSlideHeight}\nHold SHIFT to print the presentation as displayed`,
+                title: t("printPdf", { width: printSlideWidth, height: printSlideHeight }),
+                "aria-label": t("printPdf", { width: printSlideWidth, height: printSlideHeight }),
               },
             },
             (button) => {
@@ -237,7 +246,8 @@ export class PresentationControls {
           {
             attr: {
               style: "margin-right: calc(var(--default-button-size)*0.25);",
-              title: "End presentation",
+              title: t("endPresentation"),
+              "aria-label": t("endPresentation"),
             },
           },
           (button) => {
@@ -256,9 +266,7 @@ export class PresentationControls {
 
   /** Repositions the panel and restores the current slide's viewport. */
   public resetPosition(): void {
-    if (!this.panel) {
-      return;
-    }
+    if (!this.panel) return;
     const top = this.options.contentElement.innerHeight;
     const left = this.options.contentElement.innerWidth / 2;
     this.panel.style.top = `calc(${top}px - var(--default-button-size)*2)`;
@@ -268,17 +276,13 @@ export class PresentationControls {
 
   /** Updates the slide picker to the one-based slide number. */
   public setSelectedSlide(slideNumber: number): void {
-    if (this.select) {
-      this.select.value = String(slideNumber);
-    }
+    if (this.select) this.select.value = String(slideNumber);
   }
 
   /** Updates the fullscreen button without rebuilding the toolbar. */
   public setFullscreen(fullscreen: boolean): void {
     if (this.fullscreenButton) {
-      this.fullscreenButton.innerHTML = fullscreen
-        ? this.options.icons.minimize
-        : this.options.icons.maximize;
+      this.fullscreenButton.innerHTML = fullscreen ? this.options.icons.minimize : this.options.icons.maximize;
     }
   }
 
@@ -303,9 +307,7 @@ export class PresentationControls {
         this.setFadeTimeout(delay);
         return;
       }
-      if (this.panel) {
-        this.panel.style.opacity = String(this.options.fadeLevel);
-      }
+      if (this.panel) this.panel.style.opacity = String(this.options.fadeLevel);
     }, delay);
   }
 
@@ -314,9 +316,7 @@ export class PresentationControls {
       this.options.ownerWindow.clearTimeout(this.fadeTimeout);
       this.fadeTimeout = 0;
     }
-    if (this.panel) {
-      this.panel.style.opacity = "1";
-    }
+    if (this.panel) this.panel.style.opacity = "1";
   }
 
   private readonly onPointerUp = (): void => {
@@ -341,18 +341,11 @@ export class PresentationControls {
   };
 
   private updatePosition(deltaY = 0, deltaX = 0): void {
-    if (!this.panel) {
-      return;
-    }
+    if (!this.panel) return;
     this.panel.style.top = `${this.panel.offsetTop - deltaY}px`;
     this.panel.style.left = `${this.panel.offsetLeft - deltaX}px`;
   }
 
-  private readonly onMouseEnter = (): void => {
-    this.clearFadeTimeout();
-  };
-
-  private readonly onMouseLeave = (): void => {
-    this.setFadeTimeout();
-  };
+  private readonly onMouseEnter = (): void => this.clearFadeTimeout();
+  private readonly onMouseLeave = (): void => this.setFadeTimeout();
 }

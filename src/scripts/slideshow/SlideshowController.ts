@@ -8,6 +8,7 @@
 import { getNavigationRect, type NavigationRect } from "../../sharedUtils/presentationGeometry";
 import { sleepInWindow } from "../../sharedUtils/windowTiming";
 import { PresentationControls } from "./PresentationControls";
+import type { SlideshowTranslator } from "./lang";
 import { printSlideshowToPdf } from "./printToPdf";
 import { upgradeLineSlideshowData, writeSlideshowMetadata } from "./slideshowMetadata";
 import {
@@ -28,6 +29,8 @@ export interface SlideshowControllerOptions {
   icons: SlideshowIcons;
   initialSlide: number;
   startFullscreen: boolean;
+  t: SlideshowTranslator;
+  openSidepanel(): Promise<void>;
 }
 
 /** Owns one active presentation from setup through restoration. */
@@ -44,6 +47,8 @@ export class SlideshowController {
   private readonly icons: SlideshowIcons;
   private readonly statusBarElement: HTMLElement | null;
   private readonly shouldStartFullscreen: boolean;
+  private readonly t: SlideshowTranslator;
+  private readonly openSidepanel: () => Promise<void>;
   private controls: PresentationControls | null = null;
   private slide: number;
   private isFullscreen = false;
@@ -64,8 +69,10 @@ export class SlideshowController {
     this.config = options.config;
     this.icons = options.icons;
     this.statusBarElement = options.statusBarElement;
-    this.slide = options.initialSlide;
+    this.slide = Math.min(Math.max(options.initialSlide, 0), Math.max(options.setup.slides.length - 1, 0));
     this.shouldStartFullscreen = options.startFullscreen;
+    this.t = options.t;
+    this.openSidepanel = options.openSidepanel;
   }
 
   /** Starts the presentation and installs all temporary UI and handlers. */
@@ -108,7 +115,7 @@ export class SlideshowController {
       contentElement: this.contentElement,
       slidesCount: this.setup.slides.length,
       pathType: this.setup.pathType,
-      frames: this.setup.frames,
+      slideTitles: this.setup.slideTitles,
       shouldOfferPathVisibility: this.setup.shouldHidePathAfterPresentation,
       isPathHidden: this.setup.isHidden,
       isFullscreen: this.isFullscreen,
@@ -117,6 +124,7 @@ export class SlideshowController {
       printSlideWidth: this.config.printSlideWidth,
       printSlideHeight: this.config.printSlideHeight,
       icons: this.icons,
+      t: this.t,
       callbacks: {
         previous: () => void this.navigate("bkwd"),
         next: () => void this.navigate("fwd"),
@@ -128,8 +136,7 @@ export class SlideshowController {
           this.shouldSaveAfterPresentation = true;
           if (hidden) {
             this.api.setToast({
-              message:
-                "The presentation path remain hidden after the presentation. No need to select the line again. Just click the slideshow button to start the next presentation.",
+              message: this.t("pathWillRemainHidden"),
               duration: 5000,
               closable: true,
             });
@@ -141,6 +148,9 @@ export class SlideshowController {
             void this.togglePathVisibility(false);
           }
           void this.exit(true);
+        },
+        openSidepanel: () => {
+          void this.exit().then(() => this.openSidepanel());
         },
         print: (event) => void this.print(event),
         finish: () => void this.exit(),
@@ -266,7 +276,7 @@ export class SlideshowController {
         : this.slide - 1;
     const targetSlide = this.setup.slides[this.slide];
     if (!targetSlide) {
-      throw new Error("The slideshow presentation path does not contain a valid slide.");
+      throw new Error(this.t("invalidSlide"));
     }
     const appState = this.api.getAppState();
     return getNavigationRect(
@@ -514,6 +524,7 @@ export class SlideshowController {
       printSlideWidth: this.config.printSlideWidth,
       printSlideHeight: this.config.printSlideHeight,
       maxZoom: this.config.maxZoom,
+      t: this.t,
     });
   }
 }

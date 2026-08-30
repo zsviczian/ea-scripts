@@ -18,7 +18,7 @@
     "package": "npm run build && node scripts/package.mjs",
     "new-script": "tsx scripts/new-script.ts",
     "sync-refs": "node scripts/sync-refs.mjs",
-    "test:slideshow": "vitest run src/scripts/slideshow/__tests__/checkpoint1.test.ts",
+    "test:slideshow": "vitest run src/scripts/slideshow/__tests__",
     "repo:export": "bash scripts/generate-repository-zip.sh",
     "repo:update": "rsync -av --progress ~/Downloads/update/ ./"
   },

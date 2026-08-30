@@ -7,13 +7,56 @@ script is emitted to `build/slideshow/slideshow.md`.
 
 ![Slideshow example](https://raw.githubusercontent.com/zsviczian/obsidian-excalidraw-plugin/master/images/scripts-slideshow-2.jpg)
 
-## Presentation paths
+## Launch behavior
+
+- A normal invocation starts the slideshow after the existing short delay.
+- A double invocation cancels that delayed start and opens/focuses the **Slideshow** sidepanel.
+- The presentation toolbar's settings button ends the active presentation and opens the sidepanel.
+- The sidepanel is non-persistent and follows the most recently focused Excalidraw drawing through its lifecycle hooks.
+
+## Presentation paths and slide order
 
 - Select an arrow or line to use its consecutive point pairs as slides.
-- With no selection, a previously hidden presentation path is reused.
-- If no line path is available, frames are shown in alphabetical title order.
+- With no selection, a previously remembered presentation path is reused.
+- If no line path is available, frames are used.
+- Frames without slideshow metadata retain alphabetical ordering.
+- The first sorter mutation writes explicit normalized `order` metadata; after that, frame renames do not change presentation order.
+- Excluded frames remain visible and editable in the sorter, but are omitted from presentation and PDF output.
 
-## Keyboard shortcuts and modifier keys
+## Slide sorter
+
+The sidepanel shows a thumbnail and controls for every slide.
+
+- Desktop: drag rows to reorder them.
+- All platforms: use the up/down buttons or `Alt+Arrow Up/Down`.
+- `Arrow Up/Down`: move sorter focus.
+- `Enter`: zoom the drawing editor to the focused slide.
+- `Space`: toggle inclusion for frame slides.
+- `N`: focus presenter notes.
+- `A`: reserved for the Checkpoint 3 animation editor.
+
+Line slides reorder consecutive point pairs in absolute scene coordinates and normalize the line origin afterward. Stable line-slide metadata records are reordered in the same transaction so presenter notes remain attached to the correct slide. Reordering is disabled when the presentation line/arrow has an active start or end binding.
+
+## Presenter notes
+
+Each sorter row can own Markdown presenter notes.
+
+- Frame notes are stored in `frame.customData.slideshow.notes`.
+- Line-slide notes are stored in the corresponding stable record on the presentation-path element.
+- Notes save after a short debounce and are flushed on blur, slide changes, panel close, and presentation start.
+- Empty notes are removed rather than persisted as empty strings.
+
+The separate presenter popout and rendered Markdown notes are planned for Checkpoint 4.
+
+## Thumbnails
+
+`SlidePreviewService` exports the drawing once as SVG for a visual scene fingerprint and crops per-slide clones in the sidepanel's current owner document. Slideshow metadata-only changes do not invalidate the visual SVG cache.
+
+## Presentation and PDF behavior
+
+Presentation navigation, the toolbar slide picker, and PDF export consume the canonical visible deck. Frame order and exclusions therefore match the sorter. PDF pages use the normal fully visible scene state; animation-aware final-state rendering is completed with the animation runtime in Checkpoint 3.
+
+## Keyboard shortcuts and modifier keys during presentation
 
 - **Forward:** Arrow Down, Arrow Right, or Space
 - **Backward:** Arrow Up or Arrow Left
@@ -23,37 +66,41 @@ script is emitted to `build/slideshow/slideshow.md`.
 - **Return to the current slide:** Home
 - **Go to the final slide:** End
 - **Run in a window:** Hold Alt/Option while launching the script.
-- **Continue from the last slide:** Hold Shift while launching the script. This
-  state lasts for the current Obsidian session and can be combined with
-  Alt/Option.
+- **Continue from the last slide:** Hold Shift while launching the script. This state lasts for the current Obsidian session and can be combined with Alt/Option.
 
 ## Source structure
 
-- `main.ts` validates the host, exposes the configuration constants at the top
-  of the generated script, and preserves the legacy double-click scheduler.
-- `SlideshowController.ts` owns presentation lifecycle, navigation, fullscreen,
-  and drawing restoration.
-- `PresentationControls.ts` owns the toolbar, slide picker, fading, and dragging.
-- `presentationPath.ts` resolves the currently active legacy presentation path.
-- `slideshowMetadata.ts` validates schema-v2 metadata, reads legacy line metadata,
-  reconciles stable line-slide records, and performs safe slideshow-namespace writes.
-- `SlideDeck.ts` builds the canonical ordered frame/line deck and contains pure
-  reorder/normalization helpers used by the upcoming sorter.
-- `printToPdf.ts` owns PDF page generation.
-- `types.ts` contains slideshow domain types, schema contracts, and element guards.
+- `main.ts`: delayed single-click / double-click bootstrap.
+- `slideshowLauncher.ts`: shared sidepanel and presentation launch orchestration.
+- `SlideshowController.ts`: presentation lifecycle, navigation, fullscreen, and restoration.
+- `PresentationControls.ts`: presentation toolbar and slide picker.
+- `presentationPath.ts`: non-mutating canonical deck resolution plus presentation setup.
+- `slideshowMetadata.ts`: schema validation, migration, reconciliation, and safe metadata writes.
+- `SlideDeck.ts`: canonical ordered frame/line deck and pure point-pair ordering helpers.
+- `slideDeckMutations.ts`: undoable sorter metadata/geometry transactions.
+- `SlideshowSidepanel.ts`: drawing-aware sidepanel lifecycle and refresh orchestration.
+- `SlideSorter.ts`: rows, drag/drop, keyboard controls, inclusion, and notes UI.
+- `SlidePreviewService.ts`: cached whole-scene SVG export and slide cropping.
+- `printToPdf.ts`: PDF page generation from the canonical visible slide rectangles.
+- `styles.ts`: sidepanel/sorter CSS.
+- `types.ts`: slideshow domain contracts and host-facing types.
 
 ## Localization
 
-The `lang/` folder demonstrates the workspace convention with localized startup
-and host-validation messages in English, German, Spanish, French, Russian, and
-Simplified Chinese. The rest of Slideshow's UI remains unchanged for now; this is
-intentionally a small adoption sample, not a full translation.
+English remains the typed source of truth. Existing German, Spanish, French, Russian, and Simplified Chinese startup translations are retained; new Checkpoint 2 strings fall back to English until translated.
 
 ## Testing
 
-The checkpoint-1 model harness was migrated without adding new slideshow cases to
-`__tests__/checkpoint1.test.ts`. Run it with `npm run test:slideshow`, or run all
-current and future script suites with `npm test`.
+Run slideshow tests with:
 
-Reusable geometry, timer, and notice helpers live in `src/sharedUtils` so future
-scripts can consume them without depending on slideshow-specific modules.
+```bash
+npm run test:slideshow
+```
+
+Run the full workspace gate with:
+
+```bash
+npm run check
+```
+
+Checkpoint 1 covers schema/deck foundations. Checkpoint 2 adds focused coverage for frame reorder normalization, exclusions, frame/line notes, line point-pair metadata coupling, bound-line safety, canonical presentation consumption, all-excluded prevention, and metadata-insensitive thumbnail fingerprints.

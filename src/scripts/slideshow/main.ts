@@ -1,33 +1,31 @@
 /**
  * @file main.ts
- * @overview Converts an Excalidraw drawing into a line- or frame-driven slideshow.
+ * @overview Delayed single-click presentation launcher and double-click slideshow sidepanel entrypoint.
  *
  * Build output: build/slideshow/slideshow.md
  */
 
-/* eslint-disable complexity, max-lines-per-function -- Startup order mirrors the published Slideshow.md scheduler. */
-
-import { getSlideshowIcons } from "./icons";
 import { createSlideshowTranslator } from "./lang";
-import { resolvePresentationSetup } from "./presentationPath";
-import { SlideshowController } from "./SlideshowController";
+import { openSlideshowSidepanel, startSlideshowPresentation } from "./slideshowLauncher";
+import type { SlideshowConfig } from "./types";
 
-const TRANSITION_STEP_COUNT = 100;
-const TRANSITION_DELAY = 1000;
-const FRAME_SLEEP = 1;
-const EDIT_ZOOMOUT = 0.7;
-const FADE_LEVEL = 0.1;
-const PRINT_SLIDE_WIDTH = 1920;
-const PRINT_SLIDE_HEIGHT = 1080;
-const MAX_ZOOM = 30;
+const CONFIG: SlideshowConfig = {
+  transitionStepCount: 100,
+  transitionDelay: 1000,
+  frameSleep: 1,
+  editZoomOut: 0.7,
+  fadeLevel: 0.1,
+  printSlideWidth: 1920,
+  printSlideHeight: 1080,
+  maxZoom: 30,
+};
 
-/** Creates and schedules a slideshow for the current Excalidraw view. */
+/** Creates a delayed slideshow start or opens the sorter on a double invocation. */
 export async function runSlideshow(
   scriptEa: ExcalidrawAutomate,
   scriptUtils: ScriptUtils,
 ): Promise<void> {
   const t = createSlideshowTranslator(scriptEa.obsidian.moment.locale());
-
   if (!scriptEa.verifyMinimumPluginVersion?.("2.8.0")) {
     new Notice(t("requiresNewerVersion"));
     return;
@@ -38,60 +36,20 @@ export async function runSlideshow(
     new Notice(t("noActiveView"));
     return;
   }
-  if (targetView.isDirty()) {
-    void targetView.forceSave(true);
-  }
-
-  const api = scriptEa.getExcalidrawAPI();
-  if (!api) {
-    new Notice(t("cannotAccessView"));
-    return;
-  }
-  const ctrlKey = targetView.modifierKeyDown.ctrlKey || targetView.modifierKeyDown.metaKey;
-  const startFullscreen = !(targetView.modifierKeyDown.altKey || ctrlKey);
-  const savedSlide = window.ExcalidrawSlideshow?.slide[targetView.file.path];
-  const shouldStartWithLastSlide =
-    targetView.modifierKeyDown.shiftKey &&
-    window.ExcalidrawSlideshow?.script === scriptUtils.scriptFile.path &&
-    typeof savedSlide === "number";
-
-  window.removePresentationEventHandlers?.();
-  const setup = resolvePresentationSetup(scriptEa, api);
-  if (!setup) {
-    return;
-  }
-
-  const controller = new SlideshowController({
-    ea: scriptEa,
-    api,
-    hostView: targetView,
-    statusBarElement: document.querySelector<HTMLElement>("div.status-bar"),
-    setup,
-    config: {
-      transitionStepCount: TRANSITION_STEP_COUNT,
-      transitionDelay: TRANSITION_DELAY,
-      frameSleep: FRAME_SLEEP,
-      editZoomOut: EDIT_ZOOMOUT,
-      fadeLevel: FADE_LEVEL,
-      printSlideWidth: PRINT_SLIDE_WIDTH,
-      printSlideHeight: PRINT_SLIDE_HEIGHT,
-      maxZoom: MAX_ZOOM,
-    },
-    icons: getSlideshowIcons(scriptEa),
-    initialSlide: shouldStartWithLastSlide ? savedSlide : 0,
-    startFullscreen,
-  });
-
   const timestamp = Date.now();
-  if (
-    window.ExcalidrawSlideshow?.script === scriptUtils.scriptFile.path &&
-    timestamp - window.ExcalidrawSlideshow.timestamp < 400
-  ) {
+  const session = window.ExcalidrawSlideshow;
+  const isDoubleInvocation =
+    session !== undefined &&
+    session.script === scriptUtils.scriptFile.path &&
+    timestamp - session.timestamp < 400;
+
+  if (isDoubleInvocation) {
     if (window.ExcalidrawSlideshowStartTimer) {
       window.clearTimeout(window.ExcalidrawSlideshowStartTimer);
       delete window.ExcalidrawSlideshowStartTimer;
     }
-    await controller.start();
+    window.ExcalidrawSlideshow!.timestamp = timestamp;
+    await openSlideshowSidepanel(scriptEa, scriptUtils, CONFIG, t);
     return;
   }
 
@@ -104,9 +62,22 @@ export async function runSlideshow(
     timestamp,
     slide: {},
   };
+  window.ExcalidrawSlideshow.script = scriptUtils.scriptFile.path;
   window.ExcalidrawSlideshow.timestamp = timestamp;
+
+  const savedSlide = window.ExcalidrawSlideshow.slide[targetView.file.path];
+  const shouldStartWithLastSlide =
+    targetView.modifierKeyDown.shiftKey && typeof savedSlide === "number";
+  const ctrlKey = targetView.modifierKeyDown.ctrlKey || targetView.modifierKeyDown.metaKey;
+  const startFullscreen = !(targetView.modifierKeyDown.altKey || ctrlKey);
   window.ExcalidrawSlideshow.slide[targetView.file.path] = 0;
-  window.ExcalidrawSlideshowStartTimer = window.setTimeout(() => void controller.start(), 500);
+  window.ExcalidrawSlideshowStartTimer = window.setTimeout(() => {
+    delete window.ExcalidrawSlideshowStartTimer;
+    void startSlideshowPresentation(scriptEa, scriptUtils, CONFIG, t, {
+      initialSlide: shouldStartWithLastSlide ? savedSlide : 0,
+      startFullscreen,
+    });
+  }, 500);
 }
 
 void runSlideshow(ea, utils);

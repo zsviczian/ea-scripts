@@ -6,6 +6,7 @@
 /* eslint-disable complexity, max-lines-per-function -- PDF steps intentionally remain sequential for progress reporting. */
 
 import { SingleNotice } from "../../sharedUtils/SingleNotice";
+import type { SlideshowTranslator } from "./lang";
 import {
   getNavigationRect,
   translateNavigationRect,
@@ -20,6 +21,7 @@ export interface PrintSlideshowOptions {
   printSlideWidth: number;
   printSlideHeight: number;
   maxZoom: number;
+  t: SlideshowTranslator;
 }
 
 function getElementPlaceholdersForMarkerFrames(
@@ -46,16 +48,14 @@ function getElementPlaceholdersForMarkerFrames(
 
 /** Prints all slideshow rectangles to a multi-page PDF. */
 export async function printSlideshowToPdf(options: PrintSlideshowOptions): Promise<void> {
-  const { event, ea, api, slides, printSlideWidth, printSlideHeight, maxZoom } = options;
+  const { event, ea, api, slides, printSlideWidth, printSlideHeight, maxZoom, t } = options;
   const appState = api.getAppState();
   const slideWidth = event.shiftKey ? appState.width : printSlideWidth;
   const slideHeight = event.shiftKey ? appState.height : printSlideHeight;
   const shouldClipFrames = false;
   const padding = shouldClipFrames ? 0 : Math.round(Math.max(slideWidth, slideHeight) / 2) + 10;
   const notice = new SingleNotice();
-  notice.setMessage(
-    "Generating image. This can take a longer time depending on the size of the image and speed of your device",
-  );
+  notice.setMessage(t("generatingImage"));
 
   const elementsOverride = getElementPlaceholdersForMarkerFrames(ea);
   const svg = await ea.createViewSVG({
@@ -76,7 +76,7 @@ export async function printSlideshowToPdf(options: PrintSlideshowOptions): Promi
   const sceneBounds = ea.getBoundingBox(ea.getViewElements());
   const pages: SVGSVGElement[] = [];
   for (const [index, slide] of slides.entries()) {
-    notice.setMessage(`Generating slide ${index + 1}`);
+    notice.setMessage(t("generatingSlide", { number: index + 1 }));
     const rect = translateNavigationRect(
       getNavigationRect(slide, { width: slideWidth, height: slideHeight }, maxZoom),
       sceneBounds,
@@ -98,7 +98,7 @@ export async function printSlideshowToPdf(options: PrintSlideshowOptions): Promi
     pages.push(clonedSvg);
   }
 
-  notice.setMessage("Creating PDF Document");
+  notice.setMessage(t("creatingPdf"));
   void ea
     .createPDF({
       SVG: pages,

@@ -1,11 +1,13 @@
 /**
  * @file presentationPath.ts
- * @overview Resolves frame or line presentation paths and their slide rectangles.
+ * @overview Resolves frame or line presentation paths and canonical decks.
  */
 
 /* eslint-disable complexity, max-lines-per-function -- Path precedence is kept together to make legacy behavior auditable. */
 
 import { getPresentationFrameName } from "../../sharedUtils/presentationGeometry";
+import { buildFrameSlideDeck, buildLineSlideDeck } from "./SlideDeck";
+import type { SlideshowTranslator } from "./lang";
 import { readLineSlideshowData } from "./slideshowMetadata";
 import {
   isFrameElement,
@@ -13,66 +15,102 @@ import {
   type NamedFrame,
   type OriginalPathProperties,
   type PresentationSetup,
+  type ResolvedSlideDeck,
 } from "./types";
 
-/** Resolves the active presentation path with the same precedence as Slideshow.md. */
+function getNamedFrames(ea: ExcalidrawAutomate, elements: readonly ExcalidrawElement[]): NamedFrame[] {
+  return elements.filter(isFrameElement).map((frame, index) => {
+    const clone = ea.cloneElement(frame) as NamedFrame;
+    clone.name = getPresentationFrameName(clone.name, index);
+    return clone;
+  });
+}
+
+function findRememberedPath(elements: readonly ExcalidrawElement[]): ExcalidrawLinearElement | null {
+  return (
+    (elements.find(
+      (element) =>
+        isLinearPathElement(element) &&
+        Boolean(
+          readLineSlideshowData(
+            element.customData,
+            element.id,
+            Math.floor(element.points.length / 2),
+          ),
+        ),
+    ) as ExcalidrawLinearElement | undefined) ?? null
+  );
+}
+
+/** Resolves the current canonical deck without mutating app state or showing notices. */
+export function resolveSlideDeck(ea: ExcalidrawAutomate): ResolvedSlideDeck | null {
+  const viewElements = ea.getViewElements();
+  const frames = getNamedFrames(ea, viewElements);
+  const selectedElement = ea.getViewSelectedElement();
+  const rememberedPath = findRememberedPath(viewElements);
+  const pathElement = isLinearPathElement(selectedElement) ? selectedElement : rememberedPath;
+
+  if (pathElement) {
+    return {
+      deck: buildLineSlideDeck(pathElement),
+      pathElement,
+      frames,
+    };
+  }
+  if (frames.length === 0) {
+    return null;
+  }
+  return {
+    deck: buildFrameSlideDeck(frames),
+    pathElement: null,
+    frames,
+  };
+}
+
+/** Resolves the active presentation setup with the same path precedence as Slideshow.md. */
 export function resolvePresentationSetup(
   ea: ExcalidrawAutomate,
   api: ExcalidrawAPI,
+  t?: SlideshowTranslator,
 ): PresentationSetup | null {
   const viewElements = ea.getViewElements();
-  let pathElement = viewElements.find(
-    (element) =>
-      isLinearPathElement(element) &&
-      Boolean(
-        readLineSlideshowData(
-          element.customData,
-          element.id,
-          Math.floor(element.points.length / 2),
-        ),
-      ),
-  ) as ExcalidrawLinearElement | undefined;
-
-  const frames = viewElements
-    .filter(isFrameElement)
-    .map((frame, index) => {
-      const clone = ea.cloneElement(frame) as NamedFrame;
-      clone.name = getPresentationFrameName(clone.name, index);
-      return clone;
-    })
-    .sort((left, right) => (left.name > right.name ? 1 : -1));
-
+  const rememberedPath = findRememberedPath(viewElements);
   const selectedElement = ea.getViewSelectedElement();
   let shouldHidePathAfterPresentation = true;
-  if (pathElement && isLinearPathElement(selectedElement)) {
+
+  if (rememberedPath && isLinearPathElement(selectedElement)) {
     api.setToast({
       message:
-        "Using selected line instead of hidden line. Note that there is a hidden presentation path for this drawing. Run the slideshow script without selecting any elements to access the hidden presentation path",
+        t?.("selectedPathOverridesHidden") ??
+        "Using the selected line instead of the hidden presentation path. Run the slideshow without selecting an element to use the hidden path.",
       duration: 5000,
       closable: true,
     });
     shouldHidePathAfterPresentation = false;
-    pathElement = selectedElement;
   }
 
-  pathElement ??= isLinearPathElement(selectedElement) ? selectedElement : undefined;
+  const resolved = resolveSlideDeck(ea);
   const frameRenderingOriginalState = api.getAppState().frameRendering;
-  if (!pathElement && frames.length === 0) {
+  if (!resolved) {
     api.setToast({
-      message: "Please select the line or arrow for the presentation path or add frames.",
+      message:
+        t?.("noPresentationPath") ??
+        "Select the line or arrow for the presentation path or add frames.",
       duration: 3000,
       closable: true,
     });
     return null;
   }
 
-  if (!pathElement) {
-    const slides = frames.map((frame) => ({
-      x1: frame.x,
-      y1: frame.y,
-      x2: frame.x + frame.width,
-      y2: frame.y + frame.height,
-    }));
+  if (!resolved.pathElement) {
+    if (resolved.deck.visibleSlides.length === 0) {
+      api.setToast({
+        message: t?.("allFramesExcluded") ?? "All frame slides are excluded. Include at least one frame before presenting.",
+        duration: 4000,
+        closable: true,
+      });
+      return null;
+    }
     if (frameRenderingOriginalState.enabled) {
       api.updateScene({
         appState: {
@@ -80,12 +118,11 @@ export function resolvePresentationSetup(
         },
       });
     }
-
     return {
+      ...resolved,
       pathType: "frame",
-      pathElement: null,
-      frames,
-      slides,
+      slides: resolved.deck.visibleSlides.map((slide) => slide.rect),
+      slideTitles: resolved.deck.visibleSlides.map((slide) => slide.title),
       shouldHidePathAfterPresentation,
       isHidden: false,
       originalPathProperties: null,
@@ -93,21 +130,7 @@ export function resolvePresentationSetup(
     };
   }
 
-  const slides = [];
-  for (let index = 0; index < Math.floor(pathElement.points.length / 2); index += 1) {
-    const pointA = pathElement.points[index * 2];
-    const pointB = pathElement.points[index * 2 + 1];
-    if (!pointA || !pointB) {
-      continue;
-    }
-    slides.push({
-      x1: pathElement.x + pointA[0],
-      y1: pathElement.y + pointA[1],
-      x2: pathElement.x + pointB[0],
-      y2: pathElement.y + pointB[1],
-    });
-  }
-
+  const pathElement = resolved.pathElement;
   const metadata = readLineSlideshowData(
     pathElement.customData,
     pathElement.id,
@@ -122,10 +145,10 @@ export function resolvePresentationSetup(
       };
 
   return {
+    ...resolved,
     pathType: "line",
-    pathElement,
-    frames,
-    slides,
+    slides: resolved.deck.visibleSlides.map((slide) => slide.rect),
+    slideTitles: resolved.deck.visibleSlides.map((slide) => slide.title),
     shouldHidePathAfterPresentation,
     isHidden: metadata?.data.hidden ?? false,
     originalPathProperties,

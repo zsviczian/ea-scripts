@@ -6,6 +6,7 @@
 import type { AppState } from "@zsviczian/excalidraw/types";
 
 import type { NavigationRect, SlideRect } from "../../sharedUtils/presentationGeometry";
+import type { SlideDeck } from "./SlideDeck";
 
 export type Direction = "fwd" | "bkwd";
 export type PresentationPathType = "line" | "frame";
@@ -35,6 +36,20 @@ export interface SlideshowIcons {
   laserOff: string;
   printer: string;
   refocus: string;
+  gripVertical: string;
+  chevronUp: string;
+  chevronDown: string;
+  eye: string;
+  eyeOff: string;
+  sparkles: string;
+  notebookPen: string;
+  play: string;
+  presentation: string;
+  refresh: string;
+  plus: string;
+  trash: string;
+  close: string;
+  settings: string;
 }
 
 export interface OriginalPathProperties {
@@ -105,11 +120,16 @@ export type EditableLinearElement = Mutable<ExcalidrawLinearElement> & {
 
 export type NamedFrame = Mutable<ExcalidrawFrameElement> & { name: string };
 
-export interface PresentationSetup {
-  pathType: PresentationPathType;
+export interface ResolvedSlideDeck {
+  deck: SlideDeck;
   pathElement: ExcalidrawLinearElement | null;
   frames: NamedFrame[];
+}
+
+export interface PresentationSetup extends ResolvedSlideDeck {
+  pathType: PresentationPathType;
   slides: SlideRect[];
+  slideTitles: string[];
   shouldHidePathAfterPresentation: boolean;
   isHidden: boolean;
   originalPathProperties: OriginalPathProperties | null;
