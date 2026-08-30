@@ -37,6 +37,7 @@ export interface SlideshowSidepanelHandle {
 export interface SlideshowRuntimeState {
   readonly contexts: WeakMap<ScriptExcalidrawView, SlideshowViewContext>;
   readonly progress: WeakMap<ScriptExcalidrawView, number>;
+  readonly progressType: WeakMap<ScriptExcalidrawView, PresentationPathType>;
   readonly presentations: WeakMap<ScriptExcalidrawView, SlideshowPresentationHandle>;
   sidepanel: SlideshowSidepanelHandle | null;
 }
@@ -51,10 +52,18 @@ export function getSlideshowRuntime(): SlideshowRuntimeState {
   host[RUNTIME_PROPERTY] ??= {
     contexts: new WeakMap(),
     progress: new WeakMap(),
+    progressType: new WeakMap(),
     presentations: new WeakMap(),
     sidepanel: null,
   };
-  return host[RUNTIME_PROPERTY];
+  const runtime = host[RUNTIME_PROPERTY];
+  // Hot-reloaded scripts can encounter a V1 runtime created before progressType existed.
+  if (!("progressType" in runtime) || !runtime.progressType) {
+    Object.assign(runtime, {
+      progressType: new WeakMap<ScriptExcalidrawView, PresentationPathType>(),
+    });
+  }
+  return runtime;
 }
 
 /** Registers or refreshes a view context and reports whether the view was already known. */
@@ -73,13 +82,26 @@ export function getSlideshowViewContext(
 }
 
 /** Stores a zero-based slide position in temporary memory for one concrete view. */
-export function setSlideshowProgress(view: ScriptExcalidrawView, slide: number): void {
-  getSlideshowRuntime().progress.set(view, slide);
+export function setSlideshowProgress(
+  view: ScriptExcalidrawView,
+  slide: number,
+  presentationType?: PresentationPathType,
+): void {
+  const runtime = getSlideshowRuntime();
+  runtime.progress.set(view, slide);
+  if (presentationType) runtime.progressType.set(view, presentationType);
 }
 
 /** Returns a concrete view's last temporary zero-based slide position. */
 export function getSlideshowProgress(view: ScriptExcalidrawView): number | undefined {
   return getSlideshowRuntime().progress.get(view);
+}
+
+/** Returns the presentation type associated with the saved temporary slide position. */
+export function getSlideshowProgressType(
+  view: ScriptExcalidrawView,
+): PresentationPathType | undefined {
+  return getSlideshowRuntime().progressType.get(view);
 }
 
 /** Clears the shared runtime. Intended for tests and development reloads. */

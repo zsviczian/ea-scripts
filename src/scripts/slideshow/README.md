@@ -77,7 +77,13 @@ The separate presenter popout and rendered Markdown notes are planned for Checkp
 
 ## Thumbnails
 
-`SlidePreviewService` exports the drawing once as SVG for a visual scene fingerprint and crops per-slide clones in the sidepanel's current owner document. The export is anchored to the full scene bounds with an invisible sizing element so hidden frame chrome cannot shift the crop origin. Preview navigation assumes a fixed 1920×1080 presentation viewport. Slideshow metadata-only changes do not invalidate the visual SVG cache.
+`SlidePreviewService` exports the drawing once as SVG for a visual scene fingerprint and crops per-slide clones in the sidepanel's current owner document. The export is anchored to the full scene bounds with an invisible sizing element so hidden frame chrome cannot shift the crop origin. Preview navigation uses the configured `printSlideWidth` × `printSlideHeight` viewport, and the preview container uses the same aspect ratio. Slideshow metadata-only changes do not invalidate the visual SVG cache.
+
+## Slideshow settings
+
+The sidepanel cog opens a script-owned settings modal for transition timing, edit zoom, fade level, print/presentation dimensions, and maximum zoom. Values are persisted through Excalidraw Automate script settings, with the historical configuration values used as defaults. The sidepanel preview aspect ratio updates to match the configured print width and height.
+
+The sidepanel also includes a small support link to [Ko-fi](https://ko-fi.com/zsolt).
 
 ## Presentation and PDF behavior
 
@@ -99,7 +105,8 @@ Presentation navigation, the toolbar slide picker, and PDF export consume the ca
 
 ## Source structure
 
-- `main.ts`: executable bootstrap and editable configuration constants.
+- `main.ts`: executable bootstrap that loads persisted slideshow configuration.
+- `slideshowSettings.ts`: default configuration, script-settings persistence, validation, and the settings modal.
 - `run.ts`: autostart registration and later manual-invocation routing.
 - `slideshowLauncher.ts`: shared sidepanel and presentation launch orchestration.
 - `slideshowRuntime.ts`: shared temporary per-view contexts, controllers, and slide progress.

@@ -9,9 +9,7 @@ import {
   type SceneBounds,
 } from "../../sharedUtils/presentationGeometry";
 import type { SlideDeckSlide } from "./SlideDeck";
-
-const PRESENTATION_WIDTH = 1920;
-const PRESENTATION_HEIGHT = 1080;
+import type { SlideshowConfig } from "./types";
 const EXPORT_PADDING = 10;
 const FALLBACK_BACKGROUND = "#ffffff";
 
@@ -22,14 +20,16 @@ interface CachedSceneSvg {
   backgroundColor: string;
 }
 
-/** Calculates sorter crops using the fixed HD presentation viewport. */
+/** Calculates sorter crops using the configured presentation/print viewport. */
 export function getPreviewNavigationRect(
   slide: SlideDeckSlide,
   maxZoom: number,
+  printSlideWidth = 1920,
+  printSlideHeight = 1080,
 ): ReturnType<typeof getNavigationRect> {
   return getNavigationRect(
     slide.rect,
-    { width: PRESENTATION_WIDTH, height: PRESENTATION_HEIGHT },
+    { width: printSlideWidth, height: printSlideHeight },
     maxZoom,
   );
 }
@@ -69,12 +69,17 @@ export class SlidePreviewService {
   public constructor(
     private readonly ea: ExcalidrawAutomate,
     private readonly api: ExcalidrawAPI,
-    private readonly maxZoom: number,
+    private readonly config: SlideshowConfig,
   ) {}
 
   /** Returns the drawing background used behind crop areas outside exported scene bounds. */
   public getBackgroundColor(): string {
     return readBackgroundColor(this.api.getAppState());
+  }
+
+  /** Returns the configured presentation aspect ratio used by sorter previews. */
+  public getAspectRatio(): string {
+    return `${this.config.printSlideWidth} / ${this.config.printSlideHeight}`;
   }
 
   /** Drops all cached SVG state, for example after switching drawings. */
@@ -168,7 +173,12 @@ export class SlidePreviewService {
     if (!clone || clone.tagName.toLowerCase() !== "svg") return null;
 
     const rect = translateNavigationRect(
-      getPreviewNavigationRect(slide, this.maxZoom),
+      getPreviewNavigationRect(
+        slide,
+        this.config.maxZoom,
+        this.config.printSlideWidth,
+        this.config.printSlideHeight,
+      ),
       cached.sceneBounds,
       EXPORT_PADDING,
     );

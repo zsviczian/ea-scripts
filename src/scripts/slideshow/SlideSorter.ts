@@ -199,31 +199,18 @@ export class SlideSorter {
     top.appendChild(badges);
     row.appendChild(top);
 
-    const content = doc.createElement("div");
-    content.className = "slideshow-sorter__content";
-    row.appendChild(content);
-
-    const drag = doc.createElement("div");
-    drag.className = "slideshow-sorter__drag";
-    const dragButton = this.createIconButton(
-      doc,
-      icons.gripVertical,
-      t("dragSlide"),
-      !reorderEnabled,
-      () => undefined,
-    );
-    drag.appendChild(dragButton);
-    content.appendChild(drag);
-
     if (ea.DEVICE.isDesktop && reorderEnabled) {
-      drag.draggable = true;
-      drag.addEventListener("dragstart", (event) => {
+      top.draggable = true;
+      top.classList.add("is-draggable");
+      top.setAttribute("aria-label", t("dragSlide"));
+      top.title = t("dragSlide");
+      top.addEventListener("dragstart", (event) => {
         this.draggedIndex = index;
         row.classList.add("is-dragging");
         event.dataTransfer?.setData("text/plain", String(index));
         if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
       });
-      drag.addEventListener("dragend", () => {
+      top.addEventListener("dragend", () => {
         this.draggedIndex = null;
         row.classList.remove("is-dragging");
       });
@@ -241,9 +228,14 @@ export class SlideSorter {
       });
     }
 
+    const content = doc.createElement("div");
+    content.className = "slideshow-sorter__content";
+    row.appendChild(content);
+
     const preview = doc.createElement("div");
     preview.className = "slideshow-sorter__preview";
     preview.style.backgroundColor = this.options.previewService.getBackgroundColor();
+    preview.style.aspectRatio = this.options.previewService.getAspectRatio();
     content.appendChild(preview);
 
     const actions = doc.createElement("div");

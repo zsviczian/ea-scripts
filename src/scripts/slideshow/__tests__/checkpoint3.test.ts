@@ -5,6 +5,7 @@ import {
   captureAnimationTargets,
   elementOverlapsFrame,
   getAnimationOverlayPlacement,
+  recycleMissingAnimationTargets,
   removeAnimationTargetConflicts,
   resolveAnimationTargetElementIds,
 } from "../AnimationRuntime";
@@ -167,6 +168,58 @@ describe("checkpoint 3 animation target resolution", () => {
       targets: [{ type: "element", id: "touching" }],
       ignoredSelectionCount: 1,
     });
+  });
+
+  it("recycles deleted animation targets and removes steps that become empty", () => {
+    const elements = [
+      frame(),
+      element("keep", "rectangle", null, { x: 20, y: 20, groupIds: ["group-live"] }),
+    ];
+    const steps: AnimationStep[] = [
+      {
+        id: "mixed",
+        targets: [
+          { type: "element", id: "keep" },
+          { type: "element", id: "deleted" },
+        ],
+        effect: "fade",
+        trigger: "advance",
+      },
+      {
+        id: "deleted-only",
+        targets: [{ type: "element", id: "missing" }],
+        effect: "appear",
+        trigger: "advance",
+      },
+      {
+        id: "group-live",
+        targets: [{ type: "group", id: "group-live" }],
+        effect: "zoom",
+        trigger: "advance",
+      },
+      {
+        id: "group-deleted",
+        targets: [{ type: "group", id: "group-gone" }],
+        effect: "slide",
+        trigger: "advance",
+        direction: "left",
+      },
+    ];
+
+    expect(recycleMissingAnimationTargets(steps, elements)).toEqual([
+      {
+        id: "mixed",
+        targets: [{ type: "element", id: "keep" }],
+        effect: "fade",
+        trigger: "advance",
+      },
+      {
+        id: "group-live",
+        targets: [{ type: "group", id: "group-live" }],
+        effect: "zoom",
+        trigger: "advance",
+      },
+    ]);
   });
 
   it("moves overlapping visual targets out of earlier animation steps", () => {

@@ -208,10 +208,28 @@ export class PresentationControls {
 
         if (pathType === "line") {
           if (shouldOfferPathVisibility) {
-            new ea.obsidian.ToggleComponent(buttonList)
-              .setValue(isPathHidden)
-              .onChange((value: boolean) => callbacks.togglePathVisibility(value))
-              .toggleEl.setAttribute("title", t("pathVisibility"));
+            let pathHidden = isPathHidden;
+            buttonList.createEl(
+              "button",
+              { attr: { title: t("pathVisibility"), "aria-label": t("pathVisibility") } },
+              (button) => {
+                const renderPathVisibility = (): void => {
+                  const label = pathHidden
+                    ? t("keepPresentationPathHidden")
+                    : t("keepPresentationPathVisible");
+                  button.innerHTML = pathHidden ? icons.eyeOff : icons.eye;
+                  button.title = label;
+                  button.setAttribute("aria-label", label);
+                  button.setAttribute("aria-pressed", String(pathHidden));
+                };
+                renderPathVisibility();
+                button.onclick = () => {
+                  pathHidden = !pathHidden;
+                  renderPathVisibility();
+                  callbacks.togglePathVisibility(pathHidden);
+                };
+              },
+            );
           }
           buttonList.createEl(
             "button",
@@ -232,7 +250,8 @@ export class PresentationControls {
             "button",
             { attr: { title: switchLabel, "aria-label": switchLabel } },
             (button) => {
-              button.innerHTML = icons.switchPresentation;
+              button.innerHTML =
+                pathType === "frame" ? icons.frameSlideshow : icons.lineSlideshow;
               button.onclick = callbacks.switchPresentation;
             },
           );

@@ -11,9 +11,11 @@ import {
 } from "./presentationPath";
 import { SlideshowController } from "./SlideshowController";
 import { SlideshowSidepanel } from "./SlideshowSidepanel";
+import { printSlideshowToPdf } from "./printToPdf";
 import { readFrameSlideshowData, readLineSlideshowData } from "./slideshowMetadata";
 import {
   getSlideshowProgress,
+  getSlideshowProgressType,
   getSlideshowRuntime,
   getSlideshowViewContext,
   setSlideshowProgress,
@@ -100,7 +102,11 @@ export async function startSlideshowPresentation(
   const alternatePresentationType = getAlternatePresentationType(choices, setup.pathType);
   app.workspace.setActiveLeaf(view.leaf, { focus: true });
   const modifierDefaults = resolveLaunchModifiers(view);
-  const resumedSlide = launch.resume ? getSlideshowProgress(view) : undefined;
+  const savedProgressType = getSlideshowProgressType(view);
+  const resumedSlide =
+    launch.resume && (!savedProgressType || savedProgressType === setup.pathType)
+      ? getSlideshowProgress(view)
+      : undefined;
   const initialSlide = launch.initialSlide ?? resumedSlide ?? 0;
 
   const controller = new SlideshowController({
@@ -115,7 +121,7 @@ export async function startSlideshowPresentation(
     initialSlide,
     startFullscreen: launch.startFullscreen ?? modifierDefaults.startFullscreen,
     t,
-    onSlideChange: (slide) => setSlideshowProgress(view, slide),
+    onSlideChange: (slide) => setSlideshowProgress(view, slide, setup.pathType),
     onExit: () => {
       if (runtime.presentations.get(view) === controller) {
         runtime.presentations.delete(view);
@@ -129,7 +135,7 @@ export async function startSlideshowPresentation(
       }),
   });
   runtime.presentations.set(view, controller);
-  setSlideshowProgress(view, initialSlide);
+  setSlideshowProgress(view, initialSlide, setup.pathType);
   try {
     await controller.start();
   } catch (error) {
@@ -138,6 +144,37 @@ export async function startSlideshowPresentation(
     }
     throw error;
   }
+}
+
+/** Prints one canonical slideshow deck without entering presentation mode. */
+export async function printSlideshowPresentation(
+  context: SlideshowViewContext,
+  presentationType: PresentationPathType,
+  event: MouseEvent,
+): Promise<void> {
+  const { ea, view, config, t } = context;
+  ea.setView(view);
+  if (view.isDirty()) await view.forceSave(true);
+  const api = ea.getExcalidrawAPI();
+  if (!api) {
+    new Notice(t("cannotAccessView"));
+    return;
+  }
+  const resolved = resolveSlideDeckChoices(ea)[presentationType];
+  if (!resolved || resolved.deck.visibleSlides.length === 0) {
+    new Notice(t("allSlidesExcluded"));
+    return;
+  }
+  await printSlideshowToPdf({
+    event,
+    ea,
+    api,
+    slides: resolved.deck.visibleSlides.map((slide) => slide.rect),
+    printSlideWidth: config.printSlideWidth,
+    printSlideHeight: config.printSlideHeight,
+    maxZoom: config.maxZoom,
+    t,
+  });
 }
 
 /** Opens or focuses the single slideshow sidepanel and binds it to the requested view. */
@@ -179,10 +216,19 @@ export async function openSlideshowSidepanel(
       if (!boundView) return;
       const boundContext = getSlideshowViewContext(boundView);
       if (!boundContext) return;
+      Object.assign(boundContext.config, context.config);
       await startSlideshowPresentation(
         boundContext,
         initialSlide === undefined ? { presentationType } : { presentationType, initialSlide },
       );
+    },
+    printPresentation: async (presentationType, event) => {
+      const boundView = sidepanel.getBoundView();
+      if (!boundView) return;
+      const boundContext = getSlideshowViewContext(boundView);
+      if (!boundContext) return;
+      Object.assign(boundContext.config, context.config);
+      await printSlideshowPresentation(boundContext, presentationType, event);
     },
   });
   const handle = {

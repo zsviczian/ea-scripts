@@ -222,6 +222,32 @@ export function resolveAnimationTargetElementIds(
   return expandBoundVisualUnit(baseIds, elements);
 }
 
+function animationTargetExists(
+  target: AnimationTarget,
+  elements: readonly ExcalidrawElement[],
+): boolean {
+  if (target.type === "element") {
+    return elements.some((element) => element.id === target.id);
+  }
+  return elements.some((element) => asAnimationShape(element).groupIds?.includes(target.id));
+}
+
+/**
+ * Removes animation targets whose referenced element/group no longer exists in the scene.
+ * Steps that lose their final target are recycled completely.
+ */
+export function recycleMissingAnimationTargets(
+  steps: readonly AnimationStep[],
+  elements: readonly ExcalidrawElement[],
+): AnimationStep[] {
+  return steps.flatMap((step) => {
+    const targets = step.targets
+      .filter((target) => animationTargetExists(target, elements))
+      .map((target) => structuredClone(target));
+    return targets.length === 0 ? [] : [{ ...structuredClone(step), targets }];
+  });
+}
+
 /** Converts the current Excalidraw selection into stable frame-local animation targets. */
 export function captureAnimationTargets(
   frameId: string,

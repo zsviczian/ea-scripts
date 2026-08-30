@@ -44,13 +44,15 @@ export interface SlideshowIcons {
   sparkles: string;
   notebookPen: string;
   play: string;
+  continuePresentation: string;
   presentation: string;
   refresh: string;
   plus: string;
   trash: string;
   close: string;
   settings: string;
-  switchPresentation: string;
+  frameSlideshow: string;
+  lineSlideshow: string;
 }
 
 export interface OriginalPathProperties {

@@ -10,6 +10,7 @@ import type { AppState } from "@zsviczian/excalidraw/types";
 import {
   AnimationRuntime,
   captureAnimationTargets,
+  recycleMissingAnimationTargets,
   removeAnimationTargetConflicts,
   resolveAnimationTargetElementIds,
 } from "./AnimationRuntime";
@@ -33,7 +34,6 @@ export interface AnimationEditorOptions {
   slide: FrameDeckSlide;
   icons: SlideshowIcons;
   t: SlideshowTranslator;
-  onClose(): void;
   onSaved(): void;
 }
 
@@ -78,6 +78,8 @@ export class AnimationEditor {
   private destroyed = false;
   private saving = false;
   private ignoreSelectionUntil = 0;
+  private recycleTimer = 0;
+  private pendingRecycleElements: readonly ExcalidrawElement[] | null = null;
   private readonly previewRuntime: AnimationRuntime;
 
   public constructor(private readonly options: AnimationEditorOptions) {
@@ -96,16 +98,6 @@ export class AnimationEditor {
     const doc = container.ownerDocument;
     container.replaceChildren();
     container.className = "slideshow-animation-editor";
-
-    const header = doc.createElement("div");
-    header.className = "slideshow-animation-editor__header";
-    const heading = doc.createElement("strong");
-    heading.textContent = t("animationEditorTitle", { title: this.options.slide.title });
-    header.appendChild(heading);
-    header.appendChild(
-      this.iconButton(doc, icons.close, t("closeAnimationEditor"), false, () => this.options.onClose()),
-    );
-    container.appendChild(header);
 
     const instructions = doc.createElement("div");
     instructions.className = "slideshow-animation-editor__hint";
@@ -246,6 +238,15 @@ export class AnimationEditor {
     container.appendChild(stepList);
   }
 
+  /** Processes live scene changes while animation editing is active. */
+  public handleSceneChange(
+    elements: readonly ExcalidrawElement[],
+    appState: Pick<AppState, "selectedElementIds" | "selectedGroupIds">,
+  ): void {
+    this.captureSelection(elements, appState);
+    this.scheduleMissingTargetRecycle(elements);
+  }
+
   /** Captures the live canvas selection while animation editing is active. */
   public captureSelection(
     elements: readonly ExcalidrawElement[],
@@ -273,7 +274,57 @@ export class AnimationEditor {
   public async destroy(): Promise<void> {
     if (this.destroyed) return;
     this.destroyed = true;
+    if (this.recycleTimer) this.options.hostView.ownerWindow.clearTimeout(this.recycleTimer);
+    this.recycleTimer = 0;
+    this.pendingRecycleElements = null;
     await this.previewRuntime.leaveSlide();
+  }
+
+  private scheduleMissingTargetRecycle(elements: readonly ExcalidrawElement[]): void {
+    if (this.destroyed) return;
+    this.pendingRecycleElements = elements;
+    const ownerWindow = this.options.hostView.ownerWindow;
+    if (this.recycleTimer) ownerWindow.clearTimeout(this.recycleTimer);
+    this.recycleTimer = ownerWindow.setTimeout(() => {
+      this.recycleTimer = 0;
+      void this.recycleMissingTargets();
+    }, 160);
+  }
+
+  private async recycleMissingTargets(): Promise<void> {
+    if (this.destroyed) return;
+    const elements = this.pendingRecycleElements ?? this.options.ea.getViewElements();
+    this.pendingRecycleElements = null;
+    if (this.saving) {
+      this.scheduleMissingTargetRecycle(elements);
+      return;
+    }
+
+    const steps = recycleMissingAnimationTargets(this.steps, elements);
+    if (JSON.stringify(steps) === JSON.stringify(this.steps)) return;
+
+    this.saving = true;
+    try {
+      await saveFrameAnimationSteps(this.options.ea, this.options.slide.frameId, steps);
+      this.steps = steps;
+      if (this.selectedStepId) {
+        const selectedStep = steps.find((step) => step.id === this.selectedStepId);
+        if (selectedStep) {
+          this.targets = selectedStep.targets.map((target) => structuredClone(target));
+        } else {
+          this.selectedStepId = null;
+          this.targets = [];
+          this.resetFormDefaults();
+        }
+      }
+      this.options.onSaved();
+    } catch (error) {
+      console.error("Slideshow stale animation cleanup failed", error);
+      new Notice(this.options.t("animationSaveFailed"));
+    } finally {
+      this.saving = false;
+      this.render();
+    }
   }
 
   private renderStep(doc: Document, step: AnimationStep, index: number): HTMLElement {

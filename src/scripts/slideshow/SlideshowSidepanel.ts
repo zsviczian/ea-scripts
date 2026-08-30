@@ -28,7 +28,9 @@ import {
   setLinePresentationPathHidden,
   setLineSlideExcluded,
 } from "./slideDeckMutations";
+import { openSlideshowSettingsModal } from "./slideshowSettings";
 import { SLIDESHOW_SIDEPANEL_STYLES } from "./styles";
+import { getSlideshowProgress, getSlideshowProgressType } from "./slideshowRuntime";
 import {
   isLinearPathElement,
   type PresentationPathType,
@@ -47,6 +49,7 @@ export interface SlideshowSidepanelOptions {
     presentationType: PresentationPathType,
     initialSlide?: number,
   ): Promise<void>;
+  printPresentation(presentationType: PresentationPathType, event: MouseEvent): Promise<void>;
   onClosed(): void;
 }
 
@@ -117,6 +120,18 @@ export function getSceneSelectedSlideId(
   if (pairIndices.size !== 1) return null;
   const pairIndex = pairIndices.values().next().value as number | undefined;
   return pairIndex === undefined ? null : (resolved.deck.slides[pairIndex]?.id ?? null);
+}
+
+/** Resolves saved progress for the active deck, clamping it after deck edits. */
+export function getResumeSlideForPresentation(
+  progress: number | undefined,
+  progressType: PresentationPathType | undefined,
+  presentationType: PresentationPathType | null,
+  visibleSlideCount: number,
+): number | null {
+  if (progress === undefined || presentationType === null || visibleSlideCount <= 0) return null;
+  if (progressType && progressType !== presentationType) return null;
+  return Math.min(Math.max(progress, 0), visibleSlideCount - 1);
 }
 
 /** Manages one non-persistent slideshow sidepanel across Excalidraw view focus changes. */
@@ -236,7 +251,7 @@ export class SlideshowSidepanel {
       callback: (elements, appState, _files, view) => {
         if (!this.boundView || view !== this.boundView) return;
         if (this.animationEditor) {
-          this.animationEditor.captureSelection(elements, appState);
+          this.animationEditor.handleSceneChange(elements, appState);
           return;
         }
         const selectedSlideId = getSceneSelectedSlideId(this.resolved, appState);
@@ -300,6 +315,42 @@ export class SlideshowSidepanel {
     }, 180);
   }
 
+  private appendSupportLine(root: HTMLElement, doc: Document): void {
+    const support = doc.createElement("div");
+    support.className = "slideshow-sidepanel__support";
+    const prefix = doc.createElement("span");
+    prefix.textContent = `${this.options.t("supportPrompt")} `;
+    support.appendChild(prefix);
+    const link = doc.createElement("a");
+    link.href = "https://ko-fi.com/zsolt";
+    link.target = "_blank";
+    link.rel = "noopener noreferrer";
+    link.textContent = this.options.t("supportLink");
+    support.appendChild(link);
+    root.appendChild(support);
+  }
+
+  private appendSettingsButton(header: HTMLElement, doc: Document): void {
+    const { ea, icons, t } = this.options;
+    const settingsButton = doc.createElement("button");
+    settingsButton.type = "button";
+    settingsButton.className = "slideshow-sidepanel__icon-button";
+    settingsButton.setAttribute("aria-label", t("settingsTitle"));
+    settingsButton.title = t("settingsTitle");
+    settingsButton.innerHTML = icons.settings;
+    settingsButton.addEventListener("click", () => {
+      void (async () => {
+        await this.sorter?.flushNotes();
+        openSlideshowSettingsModal(ea, this.options.config, t, () => {
+          this.previewService?.clear();
+          this.lastFingerprint = "";
+          void this.refresh(true);
+        });
+      })();
+    });
+    header.appendChild(settingsButton);
+  }
+
   private renderUnavailable(): void {
     const { tab, t } = this.options;
     tab.setDisabled(false);
@@ -310,6 +361,12 @@ export class SlideshowSidepanel {
     const root = tab.contentEl.ownerDocument.createElement("div");
     root.className = "slideshow-sidepanel";
     tab.contentEl.appendChild(root);
+    const doc = tab.contentEl.ownerDocument;
+    this.appendSupportLine(root, doc);
+    const header = doc.createElement("div");
+    header.className = "slideshow-sidepanel__header";
+    root.appendChild(header);
+    this.appendSettingsButton(header, doc);
     const empty = tab.contentEl.ownerDocument.createElement("div");
     empty.className = "slideshow-empty";
     empty.textContent = t("noEligibleSlides");
@@ -353,7 +410,7 @@ export class SlideshowSidepanel {
     this.resolved = resolved;
     this.lastFingerprint = compositeFingerprint;
     this.pendingRefresh = false;
-    this.previewService ??= new SlidePreviewService(ea, api, this.options.config.maxZoom);
+    this.previewService ??= new SlidePreviewService(ea, api, this.options.config);
     const renderedSorter = this.render(selectedId, expandedNotesId);
     if (requestedSlideId) {
       renderedSorter?.scrollToSlide(requestedSlideId);
@@ -374,23 +431,49 @@ export class SlideshowSidepanel {
     const root = doc.createElement("div");
     root.className = "slideshow-sidepanel";
     tab.contentEl.appendChild(root);
+    this.appendSupportLine(root, doc);
     const header = doc.createElement("div");
     header.className = "slideshow-sidepanel__header";
     root.appendChild(header);
 
+    const noVisibleSlides = Boolean(this.resolved && this.resolved.deck.visibleSlides.length === 0);
     const startButton = doc.createElement("button");
     startButton.type = "button";
-    header.appendChild(startButton);
-    startButton.innerHTML = `${icons.play}<span>${t("startPresentation")}</span>`;
-    const noVisibleSlides = Boolean(this.resolved && this.resolved.deck.visibleSlides.length === 0);
+    startButton.className = "slideshow-sidepanel__icon-button";
+    startButton.setAttribute("aria-label", t("startPresentation"));
+    startButton.title = noVisibleSlides ? t("allSlidesExcluded") : t("startPresentation");
+    startButton.innerHTML = icons.play;
     startButton.disabled = !this.resolved || noVisibleSlides;
-    if (noVisibleSlides) startButton.title = t("allSlidesExcluded");
+    header.appendChild(startButton);
     startButton.addEventListener("click", () => {
       void this.startPresentation();
     });
 
+    const resumeSlide =
+      this.boundView && this.resolved
+        ? getResumeSlideForPresentation(
+            getSlideshowProgress(this.boundView),
+            getSlideshowProgressType(this.boundView),
+            this.presentationType,
+            this.resolved.deck.visibleSlides.length,
+          )
+        : null;
+    if (resumeSlide !== null) {
+      const continueButton = doc.createElement("button");
+      continueButton.type = "button";
+      continueButton.className = "slideshow-sidepanel__icon-button";
+      continueButton.setAttribute("aria-label", t("continuePresentation"));
+      continueButton.title = t("continuePresentation");
+      continueButton.innerHTML = icons.continuePresentation;
+      continueButton.addEventListener("click", () => {
+        void this.startPresentation(resumeSlide);
+      });
+      header.appendChild(continueButton);
+    }
+
     const startSelectedButton = doc.createElement("button");
     startSelectedButton.type = "button";
+    startSelectedButton.className = "slideshow-sidepanel__icon-button";
     startSelectedButton.setAttribute("aria-label", t("startFromSelectedSlide"));
     startSelectedButton.title = t("startFromSelectedSlide");
     startSelectedButton.innerHTML = icons.presentation;
@@ -408,8 +491,25 @@ export class SlideshowSidepanel {
       void this.startPresentation(initialSlide);
     });
 
+    const printButton = doc.createElement("button");
+    printButton.type = "button";
+    printButton.className = "slideshow-sidepanel__icon-button";
+    const printLabel = t("printPdf", {
+      width: this.options.config.printSlideWidth,
+      height: this.options.config.printSlideHeight,
+    });
+    printButton.setAttribute("aria-label", printLabel);
+    printButton.title = printLabel;
+    printButton.innerHTML = icons.printer;
+    printButton.disabled = !this.resolved || noVisibleSlides;
+    header.appendChild(printButton);
+    printButton.addEventListener("click", (event) => {
+      void this.printPresentation(event);
+    });
+
     const refreshButton = doc.createElement("button");
     refreshButton.type = "button";
+    refreshButton.className = "slideshow-sidepanel__icon-button";
     refreshButton.setAttribute("aria-label", t("refreshSlides"));
     refreshButton.title = t("refreshSlides");
     header.appendChild(refreshButton);
@@ -425,6 +525,8 @@ export class SlideshowSidepanel {
         await this.refresh(true);
       })();
     });
+
+    this.appendSettingsButton(header, doc);
 
     if (!this.resolved || !this.previewService) {
       const empty = doc.createElement("div");
@@ -537,6 +639,20 @@ export class SlideshowSidepanel {
     this.animationEditingSlideId = null;
     if (this.presentationType) {
       await this.options.startPresentation(this.presentationType, initialSlide);
+    }
+  }
+
+  private async printPresentation(event: MouseEvent): Promise<void> {
+    await this.sorter?.flushNotes();
+    if (this.animationEditor) {
+      await this.animationEditor.destroy();
+      this.animationEditor = null;
+      this.animationEditingSlideId = null;
+      this.lastFingerprint = "";
+      await this.refresh(true);
+    }
+    if (this.presentationType) {
+      await this.options.printPresentation(this.presentationType, event);
     }
   }
 
@@ -739,13 +855,12 @@ export class SlideshowSidepanel {
       slide,
       icons: this.options.icons,
       t: this.options.t,
-      onClose: () => void this.closeAnimationEditor(),
       onSaved: () => {
         this.lastFingerprint = "";
       },
     });
     this.animationEditor.render();
-    this.animationEditor.captureSelection(this.options.ea.getViewElements(), api.getAppState());
+    this.animationEditor.handleSceneChange(this.options.ea.getViewElements(), api.getAppState());
   }
 
   private selectAndZoomAnimationFrame(slide: FrameDeckSlide): void {

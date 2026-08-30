@@ -32,12 +32,14 @@ export function getSlideshowIcons(ea: ExcalidrawAutomate): SlideshowIcons {
     sparkles: iconMarkup(ea, "lucide-sparkles"),
     notebookPen: iconMarkup(ea, "lucide-notebook-pen"),
     play: iconMarkup(ea, "lucide-play"),
+    continuePresentation: iconMarkup(ea, "lucide-circle-play"),
     presentation: iconMarkup(ea, "lucide-presentation"),
     refresh: iconMarkup(ea, "lucide-refresh-cw"),
     plus: iconMarkup(ea, "lucide-plus"),
     trash: iconMarkup(ea, "lucide-trash-2"),
     close: iconMarkup(ea, "lucide-x"),
     settings: iconMarkup(ea, "lucide-settings"),
-    switchPresentation: iconMarkup(ea, "lucide-repeat-2"),
+    frameSlideshow: iconMarkup(ea, "lucide-frame"),
+    lineSlideshow: iconMarkup(ea, "lucide-route"),
   };
 }

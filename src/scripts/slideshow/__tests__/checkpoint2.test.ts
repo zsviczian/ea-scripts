@@ -5,6 +5,12 @@ import {
   getSceneVisualFingerprint,
   SlidePreviewService,
 } from "../SlidePreviewService";
+import {
+  DEFAULT_SLIDESHOW_CONFIG,
+  normalizeSlideshowConfig,
+  resetSlideshowConfigToDefaults,
+  saveSlideshowConfig,
+} from "../slideshowSettings";
 import { hasSlideshowMetadata, registerSlideshowElementActionProvider } from "../slideshowLauncher";
 import { createSlideshowTranslator } from "../lang";
 import {
@@ -25,6 +31,7 @@ import {
 import { readFrameSlideshowData, readLineSlideshowDataV2 } from "../slideshowMetadata";
 import {
   getSlideshowProgress,
+  getSlideshowProgressType,
   getSlideshowRuntime,
   resetSlideshowRuntimeForTests,
   setSlideshowProgress,
@@ -35,6 +42,7 @@ import { SlideSorter } from "../SlideSorter";
 import {
   chooseSidepanelPresentationType,
   clearLineSelectionForDeckSwitch,
+  getResumeSlideForPresentation,
   getSceneSelectedSlideId,
   SlideshowSidepanel,
 } from "../SlideshowSidepanel";
@@ -468,6 +476,50 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(setup?.slideTitles).toEqual(["Alpha"]);
   });
 
+  it("loads slideshow config values with defaults and safe numeric normalization", () => {
+    const config = normalizeSlideshowConfig({
+      transitionStepCount: 42.4,
+      fadeLevel: 2,
+      printSlideWidth: 1600,
+      printSlideHeight: 1000,
+    });
+    expect(config.transitionStepCount).toBe(42);
+    expect(config.fadeLevel).toBe(1);
+    expect(config.printSlideWidth).toBe(1600);
+    expect(config.printSlideHeight).toBe(1000);
+    expect(config.maxZoom).toBe(DEFAULT_SLIDESHOW_CONFIG.maxZoom);
+  });
+
+  it("resets slideshow config values to built-in defaults", () => {
+    const config = {
+      ...DEFAULT_SLIDESHOW_CONFIG,
+      transitionStepCount: 12,
+      fadeLevel: 0.8,
+      printSlideWidth: 1024,
+      printSlideHeight: 768,
+    };
+    resetSlideshowConfigToDefaults(config);
+    expect(config).toEqual(DEFAULT_SLIDESHOW_CONFIG);
+  });
+
+  it("persists slideshow config without deleting unrelated script settings", async () => {
+    let persisted: Record<string, unknown> = { unrelated: "keep" };
+    const ea = {
+      getScriptSettings: () => persisted,
+      setScriptSettings: async (settings: Record<string, unknown>) => {
+        persisted = settings;
+      },
+    } as unknown as ExcalidrawAutomate;
+    await saveSlideshowConfig(ea, {
+      ...DEFAULT_SLIDESHOW_CONFIG,
+      printSlideWidth: 1600,
+      printSlideHeight: 1000,
+    });
+    expect(persisted.unrelated).toBe("keep");
+    expect(persisted.printSlideWidth).toBe(1600);
+    expect(persisted.printSlideHeight).toBe(1000);
+  });
+
   it("calculates preview crops against an HD presentation viewport", () => {
     const slide = {
       id: "a",
@@ -484,13 +536,30 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(rect.bottom - rect.top).toBe(1080);
   });
 
+  it("uses configured print dimensions for sorter preview crops", () => {
+    const slide = {
+      id: "a",
+      kind: "frame",
+      frameId: "a",
+      title: "Alpha",
+      rect: { x1: 100, y1: 200, x2: 200, y2: 300 },
+      excluded: false,
+      order: 0,
+      animationSteps: [],
+    } as const;
+    const rect = getPreviewNavigationRect(slide, 1, 1600, 1000);
+    expect(rect.right - rect.left).toBe(1600);
+    expect(rect.bottom - rect.top).toBe(1000);
+  });
+
   it("uses the Excalidraw scene background behind preview crop overflow", () => {
     const service = new SlidePreviewService(
       {} as ExcalidrawAutomate,
       { getAppState: () => ({ viewBackgroundColor: "#f7f1e8" }) } as unknown as ExcalidrawAPI,
-      30,
+      { ...DEFAULT_SLIDESHOW_CONFIG },
     );
     expect(service.getBackgroundColor()).toBe("#f7f1e8");
+    expect(service.getAspectRatio()).toBe("1920 / 1080");
   });
 
   it("uses the EA workbench to hide a line presentation path for preview export", async () => {
@@ -525,7 +594,7 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     const api = {
       getAppState: () => ({ theme: "light", viewBackgroundColor: "#fff" }),
     } as unknown as ExcalidrawAPI;
-    const service = new SlidePreviewService(ea, api, 30);
+    const service = new SlidePreviewService(ea, api, { ...DEFAULT_SLIDESHOW_CONFIG });
 
     await (
       service as unknown as {
@@ -715,6 +784,30 @@ describe("slideshow checkpoint 2 temporary progress", () => {
     expect(getSlideshowProgress(secondView)).toBe(5);
   });
 
+  it("associates saved progress with the presentation type and resolves continue safely", () => {
+    const view = {} as ScriptExcalidrawView;
+    setSlideshowProgress(view, 4, "frame");
+    expect(getSlideshowProgress(view)).toBe(4);
+    expect(getSlideshowProgressType(view)).toBe("frame");
+    expect(getResumeSlideForPresentation(4, "frame", "frame", 3)).toBe(2);
+    expect(getResumeSlideForPresentation(4, "frame", "line", 6)).toBeNull();
+    expect(getResumeSlideForPresentation(undefined, "frame", "frame", 3)).toBeNull();
+  });
+
+  it("upgrades an existing runtime when presentation-type progress was not available yet", () => {
+    const legacyRuntime = {
+      contexts: new WeakMap(),
+      progress: new WeakMap(),
+      presentations: new WeakMap(),
+      sidepanel: null,
+    };
+    vi.stubGlobal("app", { __excalidrawAutomateSlideshowRuntimeV1: legacyRuntime });
+    const view = {} as ScriptExcalidrawView;
+    setSlideshowProgress(view, 1, "line");
+    expect(getSlideshowProgress(view)).toBe(1);
+    expect(getSlideshowProgressType(view)).toBe("line");
+  });
+
   it("keeps autostart registration-only and launches on the first manual invocation", async () => {
     vi.stubGlobal("Notice", class {});
     const view = {
@@ -784,6 +877,7 @@ describe("slideshow checkpoint 2 presenter-note lifecycle", () => {
       icons: {} as never,
       config: {} as never,
       startPresentation: async () => undefined,
+      printPresentation: async () => undefined,
       onClosed: () => undefined,
     });
     const internals = sidepanel as unknown as {
