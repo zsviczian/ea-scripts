@@ -29,6 +29,8 @@ export interface PresentationLaunchOptions {
   presentationType?: PresentationPathType;
   resume?: boolean;
   openPresenterView?: boolean;
+  presentationDisplayId?: number;
+  presenterDisplayId?: number;
 }
 
 function resolveLaunchModifiers(view: ScriptExcalidrawView): { startFullscreen: boolean } {
@@ -121,6 +123,15 @@ export async function startSlideshowPresentation(
     icons: getSlideshowIcons(ea),
     initialSlide,
     startFullscreen: launch.startFullscreen ?? modifierDefaults.startFullscreen,
+    ...(launch.openPresenterView === undefined
+      ? {}
+      : { openPresenterViewOnStart: launch.openPresenterView }),
+    ...(launch.presentationDisplayId === undefined
+      ? {}
+      : { presentationDisplayId: launch.presentationDisplayId }),
+    ...(launch.presenterDisplayId === undefined
+      ? {}
+      : { presenterDisplayId: launch.presenterDisplayId }),
     t,
     onSlideChange: (slide) => setSlideshowProgress(view, slide, setup.pathType),
     onExit: () => {
@@ -139,7 +150,6 @@ export async function startSlideshowPresentation(
   setSlideshowProgress(view, initialSlide, setup.pathType);
   try {
     await controller.start();
-    if (launch.openPresenterView) await controller.openPresenterView();
   } catch (error) {
     if (runtime.presentations.get(view) === controller) {
       runtime.presentations.delete(view);
@@ -213,18 +223,7 @@ export async function openSlideshowSidepanel(
     onClosed: () => {
       if (runtime.sidepanel?.activate === handle.activate) runtime.sidepanel = null;
     },
-    startPresentation: async (presentationType, initialSlide) => {
-      const boundView = sidepanel.getBoundView();
-      if (!boundView) return;
-      const boundContext = getSlideshowViewContext(boundView);
-      if (!boundContext) return;
-      Object.assign(boundContext.config, context.config);
-      await startSlideshowPresentation(
-        boundContext,
-        initialSlide === undefined ? { presentationType } : { presentationType, initialSlide },
-      );
-    },
-    startPresenterView: async (presentationType, initialSlide) => {
+    startPresentation: async (presentationType, launchOptions) => {
       const boundView = sidepanel.getBoundView();
       if (!boundView) return;
       const boundContext = getSlideshowViewContext(boundView);
@@ -232,8 +231,7 @@ export async function openSlideshowSidepanel(
       Object.assign(boundContext.config, context.config);
       await startSlideshowPresentation(boundContext, {
         presentationType,
-        ...(initialSlide === undefined ? {} : { initialSlide }),
-        openPresenterView: true,
+        ...launchOptions,
       });
     },
     printPresentation: async (presentationType, event) => {

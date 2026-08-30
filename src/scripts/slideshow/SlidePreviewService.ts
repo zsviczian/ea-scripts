@@ -1,6 +1,6 @@
 /**
  * @file SlidePreviewService.ts
- * @overview Generates and caches one scene SVG, then crops clones for sorter previews.
+ * @overview Generates cached scene SVGs, then crops clones for sorter and presenter previews.
  */
 
 import {
@@ -8,16 +8,44 @@ import {
   translateNavigationRect,
   type SceneBounds,
 } from "../../sharedUtils/presentationGeometry";
-import type { SlideDeckSlide } from "./SlideDeck";
+import { resolveAnimationTargetElementIds } from "./AnimationRuntime";
+import type { FrameDeckSlide, SlideDeckSlide } from "./SlideDeck";
 import type { SlideshowConfig } from "./types";
+
 const EXPORT_PADDING = 10;
 const FALLBACK_BACKGROUND = "#ffffff";
+const MAX_CACHE_ENTRIES = 12;
 
 interface CachedSceneSvg {
   fingerprint: string;
   svgMarkup: string;
   sceneBounds: SceneBounds;
   backgroundColor: string;
+}
+
+export interface SlidePreviewState {
+  /** Number of frame build steps that should already be visible. Omit for final state. */
+  completedAnimationSteps?: number;
+  /** Restores animation-time opacity overrides before applying the requested preview build. */
+  originalOpacities?: ReadonlyMap<string, number>;
+}
+
+const EA_EXPORT_QUEUES = new WeakMap<object, Promise<void>>();
+
+async function withEaExportLock<T>(ea: ExcalidrawAutomate, task: () => Promise<T>): Promise<T> {
+  const key = ea as unknown as object;
+  const previous = EA_EXPORT_QUEUES.get(key) ?? Promise.resolve();
+  let release: (() => void) | undefined;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  EA_EXPORT_QUEUES.set(key, previous.catch(() => undefined).then(() => gate));
+  await previous.catch(() => undefined);
+  try {
+    return await task();
+  } finally {
+    release?.();
+  }
 }
 
 /** Calculates sorter crops using the configured presentation/print viewport. */
@@ -60,11 +88,26 @@ function readBackgroundColor(appState: ReturnType<ExcalidrawAPI["getAppState"]>)
     : FALLBACK_BACKGROUND;
 }
 
-/** Owns the expensive whole-scene SVG export used by slide thumbnails. */
+export function getHiddenBuildElementIds(
+  slide: FrameDeckSlide,
+  completedAnimationSteps: number | undefined,
+  elements: readonly ExcalidrawElement[],
+): string[] {
+  if (completedAnimationSteps === undefined) return [];
+  const completed = Math.min(Math.max(Math.trunc(completedAnimationSteps), 0), slide.animationSteps.length);
+  const ids = new Set<string>();
+  for (const step of slide.animationSteps.slice(completed)) {
+    for (const id of resolveAnimationTargetElementIds(slide.frameId, step.targets, elements)) {
+      ids.add(id);
+    }
+  }
+  return [...ids].sort();
+}
+
+/** Owns the expensive whole-scene SVG exports used by slide thumbnails and presenter builds. */
 export class SlidePreviewService {
-  private cached: CachedSceneSvg | null = null;
-  private pending: Promise<CachedSceneSvg> | null = null;
-  private pendingFingerprint = "";
+  private readonly cached = new Map<string, CachedSceneSvg>();
+  private readonly pending = new Map<string, Promise<CachedSceneSvg>>();
 
   public constructor(
     private readonly ea: ExcalidrawAutomate,
@@ -84,23 +127,45 @@ export class SlidePreviewService {
 
   /** Drops all cached SVG state, for example after switching drawings. */
   public clear(): void {
-    this.cached = null;
-    this.pending = null;
-    this.pendingFingerprint = "";
+    this.cached.clear();
+    this.pending.clear();
+  }
+
+  private remember(cached: CachedSceneSvg): CachedSceneSvg {
+    this.cached.delete(cached.fingerprint);
+    this.cached.set(cached.fingerprint, cached);
+    while (this.cached.size > MAX_CACHE_ENTRIES) {
+      const oldest = this.cached.keys().next().value as string | undefined;
+      if (!oldest) break;
+      this.cached.delete(oldest);
+    }
+    return cached;
   }
 
   private async ensureSceneSvg(
     elements: readonly ExcalidrawElement[],
     hiddenPathId?: string,
+    hiddenElementIds: readonly string[] = [],
+    originalOpacities: ReadonlyMap<string, number> | undefined = undefined,
   ): Promise<CachedSceneSvg> {
     const appState = this.api.getAppState();
     const backgroundColor = readBackgroundColor(appState);
-    const fingerprint = `${appState.theme}|${backgroundColor}|hidden:${hiddenPathId ?? "none"}|${getSceneVisualFingerprint(elements)}`;
-    if (this.cached?.fingerprint === fingerprint) return this.cached;
-    if (this.pending && this.pendingFingerprint === fingerprint) return this.pending;
+    const hiddenKey = hiddenElementIds.length > 0 ? hiddenElementIds.join(",") : "none";
+    const opacityKey = originalOpacities
+      ? [...originalOpacities.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([id, opacity]) => `${id}:${opacity}`)
+          .join(",")
+      : "none";
+    const fingerprint = `${appState.theme}|${backgroundColor}|hiddenPath:${hiddenPathId ?? "none"}|hiddenElements:${hiddenKey}|originalOpacity:${opacityKey}|${getSceneVisualFingerprint(elements)}`;
+    const existing = this.cached.get(fingerprint);
+    if (existing) return existing;
+    const pending = this.pending.get(fingerprint);
+    if (pending) return pending;
 
-    this.pendingFingerprint = fingerprint;
-    this.pending = (async () => {
+    const exportPromise = withEaExportLock(this.ea, async () => {
+      const afterWait = this.cached.get(fingerprint);
+      if (afterWait) return afterWait;
       const bounds = this.ea.getBoundingBox(elements);
       // Frame outlines are intentionally omitted from thumbnails. createViewSVG can therefore
       // calculate a tighter export origin from visible child content than getBoundingBox() does.
@@ -111,6 +176,14 @@ export class SlidePreviewService {
         this.ea.copyViewElementsToEAforEditing(elements);
         const hiddenPath = hiddenPathId ? this.ea.getElement(hiddenPathId) : undefined;
         if (hiddenPath) hiddenPath.opacity = 0;
+        for (const [id, opacity] of originalOpacities ?? []) {
+          const element = this.ea.getElement(id);
+          if (element) element.opacity = opacity;
+        }
+        for (const id of hiddenElementIds) {
+          const element = this.ea.getElement(id);
+          if (element) element.opacity = 0;
+        }
 
         const anchorId = this.ea.addRect(bounds.topX, bounds.topY, bounds.width, bounds.height);
         const anchor = this.ea.getElement(anchorId);
@@ -134,38 +207,41 @@ export class SlidePreviewService {
           embedScene: false,
           elementsOverride: this.ea.getElements(),
         });
-        const cached = {
+        return this.remember({
           fingerprint,
           svgMarkup: svg.outerHTML,
           sceneBounds: { topX: bounds.topX, topY: bounds.topY },
           backgroundColor,
-        };
-        this.cached = cached;
-        return cached;
+        });
       } finally {
         this.ea.clear();
       }
-    })();
+    });
+    this.pending.set(fingerprint, exportPromise);
     try {
-      return await this.pending;
+      return await exportPromise;
     } finally {
-      if (this.pendingFingerprint === fingerprint) {
-        this.pending = null;
-        this.pendingFingerprint = "";
-      }
+      if (this.pending.get(fingerprint) === exportPromise) this.pending.delete(fingerprint);
     }
   }
 
-  /** Creates a cropped SVG preview in the sidepanel's current owner document. */
+  /** Creates a cropped SVG preview in the caller's current owner document. */
   public async createPreview(
     slide: SlideDeckSlide,
     ownerDocument: Document,
+    state: SlidePreviewState = {},
   ): Promise<SVGSVGElement | null> {
     const elements = this.ea.getViewElements();
     if (elements.length === 0) return null;
+    const hiddenElementIds =
+      slide.kind === "frame"
+        ? getHiddenBuildElementIds(slide, state.completedAnimationSteps, elements)
+        : [];
     const cached = await this.ensureSceneSvg(
       elements,
       slide.kind === "path" ? slide.pathId : undefined,
+      hiddenElementIds,
+      state.originalOpacities,
     );
     const host = ownerDocument.createElement("div");
     host.innerHTML = cached.svgMarkup;

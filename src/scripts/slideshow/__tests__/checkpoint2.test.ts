@@ -877,7 +877,6 @@ describe("slideshow checkpoint 2 presenter-note lifecycle", () => {
       icons: {} as never,
       config: {} as never,
       startPresentation: async () => undefined,
-      startPresenterView: async () => undefined,
       printPresentation: async () => undefined,
       onClosed: () => undefined,
     });

@@ -381,6 +381,13 @@ export class AnimationRuntime {
     };
   }
 
+  /** Returns original opacity for active animated elements, for presenter build previews. */
+  public getOriginalOpacities(): ReadonlyMap<string, number> {
+    const opacities = new Map<string, number>();
+    for (const [id, element] of this.active?.originals ?? []) opacities.set(id, element.opacity);
+    return opacities;
+  }
+
   /** Restores the prior slide, resolves the destination's dynamic targets, and applies its build state. */
   public async enterSlide(
     slide: FrameDeckSlide,

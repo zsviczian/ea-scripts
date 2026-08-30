@@ -5,6 +5,7 @@
 
 import type { Component, WorkspaceLeaf } from "obsidian";
 
+import { moveWindowToDisplay } from "./desktopDisplays";
 import { SlidePreviewService } from "./SlidePreviewService";
 import type { SlideDeckSlide } from "./SlideDeck";
 import type { SlideshowTranslator } from "./lang";
@@ -34,6 +35,8 @@ export interface PresenterViewControllerOptions {
   icons: SlideshowIcons;
   t: SlideshowTranslator;
   callbacks: PresenterViewCallbacks;
+  targetDisplayId?: number;
+  getAnimationOriginalOpacities?(): ReadonlyMap<string, number>;
   onClosed(): void;
 }
 
@@ -72,6 +75,7 @@ export class PresenterViewController {
   private nextPreviewEl: HTMLElement | null = null;
   private notesEl: HTMLElement | null = null;
   private progressEl: HTMLElement | null = null;
+  private nextSectionTitleEl: HTMLElement | null = null;
   private markdownComponent: Component | null = null;
   private lastNotesSlideId: string | null = null;
   private updateGeneration = 0;
@@ -109,6 +113,9 @@ export class PresenterViewController {
     win.addEventListener("beforeunload", this.windowClosingListener, { once: true });
     this.update(initialState);
     await app.workspace.revealLeaf(leaf);
+    if (this.options.targetDisplayId !== undefined) {
+      moveWindowToDisplay(win, this.options.targetDisplayId, true);
+    }
     app.workspace.setActiveLeaf(leaf, { focus: true });
   }
 
@@ -141,6 +148,12 @@ export class PresenterViewController {
               total: state.animationStepCount,
             })
           : this.options.t("presenterNoAnimations");
+    }
+    if (this.nextSectionTitleEl) {
+      this.nextSectionTitleEl.textContent =
+        state.nextAction === "build"
+          ? this.options.t("presenterNextBuild")
+          : this.options.t("presenterNextSlide");
     }
     const generation = ++this.updateGeneration;
     if (state.currentSlideId !== this.lastNotesSlideId) {
@@ -240,7 +253,8 @@ export class PresenterViewController {
     const nextColumn = doc.createElement("section");
     nextColumn.className = "slideshow-presenter__column";
     grid.appendChild(nextColumn);
-    nextColumn.appendChild(this.sectionTitle(doc, this.options.t("presenterNextSlide")));
+    this.nextSectionTitleEl = this.sectionTitle(doc, this.options.t("presenterNextSlide"));
+    nextColumn.appendChild(this.nextSectionTitleEl);
     this.nextPreviewEl = doc.createElement("div");
     this.nextPreviewEl.className = "slideshow-presenter__preview slideshow-presenter__next-preview";
     this.nextPreviewEl.style.aspectRatio = this.previewService.getAspectRatio();
@@ -316,10 +330,33 @@ export class PresenterViewController {
     const doc = currentHost.ownerDocument;
     const currentSlide = this.getSlide(state.currentSlideId);
     const nextSlide = this.getSlide(state.nextSlideId);
-    const [currentPreview, nextPreview] = await Promise.all([
-      currentSlide ? this.previewService.createPreview(currentSlide, doc) : Promise.resolve(null),
-      nextSlide ? this.previewService.createPreview(nextSlide, doc) : Promise.resolve(null),
-    ]);
+    const originalOpacities = this.options.getAnimationOriginalOpacities?.();
+    // EA is a shared workbench. Keep current/next exports sequential, especially when
+    // the next navigation is another build state of the same slide.
+    const currentPreview = currentSlide
+      ? await this.previewService.createPreview(
+          currentSlide,
+          doc,
+          currentSlide.kind === "frame"
+            ? {
+                completedAnimationSteps: state.completedAnimationSteps,
+                ...(originalOpacities ? { originalOpacities } : {}),
+              }
+            : {},
+        )
+      : null;
+    const nextPreview = nextSlide
+      ? await this.previewService.createPreview(
+          nextSlide,
+          doc,
+          nextSlide.kind === "frame"
+            ? {
+                completedAnimationSteps: state.nextCompletedAnimationSteps ?? 0,
+                ...(originalOpacities ? { originalOpacities } : {}),
+              }
+            : {},
+        )
+      : null;
     if (generation !== this.updateGeneration || this.closed) return;
     currentHost.replaceChildren();
     if (currentPreview) currentHost.appendChild(currentPreview);
@@ -339,6 +376,7 @@ export class PresenterViewController {
     const action = getPresenterKeyboardAction(event.key);
     if (!action) return;
     event.preventDefault();
+    event.stopImmediatePropagation();
     switch (action) {
       case "next":
         this.options.callbacks.next();

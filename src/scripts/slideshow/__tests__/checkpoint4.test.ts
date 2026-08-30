@@ -1,39 +1,65 @@
 import { describe, expect, it } from "vitest";
 
+import { chooseDefaultDisplayTargets, type SlideshowDisplay } from "../desktopDisplays";
 import { getPresenterKeyboardAction } from "../PresenterViewController";
-import { buildFrameSlideDeck } from "../SlideDeck";
+import { buildFrameSlideDeck, type FrameDeckSlide } from "../SlideDeck";
+import { getHiddenBuildElementIds } from "../SlidePreviewService";
 import { buildPresentationState } from "../presentationState";
+import type { AnimationStep } from "../types";
 
 function frame(
   id: string,
   name: string,
   order: number,
   excluded = false,
+  steps: readonly AnimationStep[] = [],
 ): {
   id: string;
+  type: "frame";
   name: string;
   x: number;
   y: number;
   width: number;
   height: number;
+  angle: number;
+  opacity: number;
   customData: Record<string, unknown>;
 } {
   return {
     id,
+    type: "frame",
     name,
     x: order * 100,
     y: 0,
     width: 100,
     height: 60,
+    angle: 0,
+    opacity: 100,
     customData: {
       slideshow: {
         schemaVersion: 2,
         kind: "frame",
         order,
         ...(excluded ? { excluded: true } : {}),
+        ...(steps.length > 0 ? { animation: { steps } } : {}),
       },
     },
   };
+}
+
+function element(id: string, x: number): ExcalidrawElement {
+  return {
+    id,
+    type: "rectangle",
+    x,
+    y: 10,
+    width: 20,
+    height: 20,
+    angle: 0,
+    opacity: 100,
+    groupIds: [],
+    boundElements: null,
+  } as unknown as ExcalidrawElement;
 }
 
 describe("slideshow checkpoint 4 presenter state", () => {
@@ -44,15 +70,30 @@ describe("slideshow checkpoint 4 presenter state", () => {
       frame("c", "C", 2),
     ]);
 
-    expect(
-      buildPresentationState(deck, 0, { completedSteps: 2, stepCount: 4 }),
-    ).toEqual({
+    expect(buildPresentationState(deck, 0)).toEqual({
+      currentSlideId: "a",
+      currentIndex: 0,
+      visibleSlideCount: 2,
+      completedAnimationSteps: 0,
+      animationStepCount: 0,
+      nextSlideId: "c",
+      nextAction: "slide",
+      nextCompletedAnimationSteps: 0,
+    });
+  });
+
+  it("uses the next build of the current slide before the following slide", () => {
+    const deck = buildFrameSlideDeck([frame("a", "A", 0), frame("b", "B", 1)]);
+
+    expect(buildPresentationState(deck, 0, { completedSteps: 2, stepCount: 4 })).toEqual({
       currentSlideId: "a",
       currentIndex: 0,
       visibleSlideCount: 2,
       completedAnimationSteps: 2,
       animationStepCount: 4,
-      nextSlideId: "c",
+      nextSlideId: "a",
+      nextAction: "build",
+      nextCompletedAnimationSteps: 3,
     });
   });
 
@@ -64,6 +105,8 @@ describe("slideshow checkpoint 4 presenter state", () => {
     expect(state.currentIndex).toBe(1);
     expect(state.visibleSlideCount).toBe(2);
     expect(state.nextSlideId).toBeNull();
+    expect(state.nextAction).toBe("end");
+    expect(state.nextCompletedAnimationSteps).toBeNull();
   });
 
   it("maps presenter-window keys directly to slideshow navigation", () => {
@@ -75,5 +118,59 @@ describe("slideshow checkpoint 4 presenter state", () => {
     expect(getPresenterKeyboardAction("End")).toBe("last");
     expect(getPresenterKeyboardAction("Escape")).toBe("finish");
     expect(getPresenterKeyboardAction("x")).toBeNull();
+  });
+
+  it("hides only future build targets in presenter previews", () => {
+    const steps: AnimationStep[] = [
+      {
+        id: "step-a",
+        targets: [{ type: "element", id: "target-a" }],
+        effect: "appear",
+        trigger: "advance",
+      },
+      {
+        id: "step-b",
+        targets: [{ type: "element", id: "target-b" }],
+        effect: "fade",
+        trigger: "advance",
+      },
+    ];
+    const source = frame("frame", "Frame", 0, false, steps);
+    const slide = buildFrameSlideDeck([source]).slides[0] as FrameDeckSlide;
+    const elements = [
+      source as unknown as ExcalidrawElement,
+      element("target-a", 10),
+      element("target-b", 50),
+    ];
+
+    expect(getHiddenBuildElementIds(slide, 0, elements)).toEqual(["target-a", "target-b"]);
+    expect(getHiddenBuildElementIds(slide, 1, elements)).toEqual(["target-b"]);
+    expect(getHiddenBuildElementIds(slide, 2, elements)).toEqual([]);
+  });
+
+  it("defaults presenter notes to a different display when one is available", () => {
+    const displays: SlideshowDisplay[] = [
+      {
+        id: 1,
+        index: 0,
+        label: "Main",
+        primary: true,
+        bounds: { x: 0, y: 0, width: 1920, height: 1080 },
+        workArea: { x: 0, y: 0, width: 1920, height: 1040 },
+      },
+      {
+        id: 2,
+        index: 1,
+        label: "Sidecar",
+        primary: false,
+        bounds: { x: 1920, y: 0, width: 1366, height: 1024 },
+        workArea: { x: 1920, y: 0, width: 1366, height: 984 },
+      },
+    ];
+
+    expect(chooseDefaultDisplayTargets(displays, 1)).toEqual({
+      presentationDisplayId: 1,
+      presenterDisplayId: 2,
+    });
   });
 });

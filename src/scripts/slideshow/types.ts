@@ -32,6 +32,7 @@ export interface SlideshowIcons {
   edit: string;
   maximize: string;
   minimize: string;
+  currentWindow: string;
   laserOn: string;
   laserOff: string;
   printer: string;
@@ -46,7 +47,6 @@ export interface SlideshowIcons {
   play: string;
   continuePresentation: string;
   presentation: string;
-  refresh: string;
   plus: string;
   trash: string;
   close: string;
@@ -121,6 +121,8 @@ export interface ResolvedSlideDeck {
   frames: NamedFrame[];
 }
 
+export type PresenterNextAction = "build" | "slide" | "end";
+
 export interface PresentationState {
   currentSlideId: string;
   currentIndex: number;
@@ -128,6 +130,8 @@ export interface PresentationState {
   completedAnimationSteps: number;
   animationStepCount: number;
   nextSlideId: string | null;
+  nextAction: PresenterNextAction;
+  nextCompletedAnimationSteps: number | null;
 }
 
 export interface PresentationSetup extends ResolvedSlideDeck {

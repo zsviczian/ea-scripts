@@ -9,6 +9,12 @@ import type { EventRef, WorkspaceLeaf } from "obsidian";
 
 import { getNavigationRect } from "../../sharedUtils/presentationGeometry";
 import { AnimationEditor } from "./AnimationEditor";
+import {
+  chooseDefaultDisplayTargets,
+  getAvailableDisplays,
+  getCurrentDisplayId,
+  type SlideshowDisplay,
+} from "./desktopDisplays";
 import { getVisibleSlideIndex, type FrameDeckSlide, type SlideDeckSlide } from "./SlideDeck";
 import { SlidePreviewService, getSceneVisualFingerprint } from "./SlidePreviewService";
 import { SlideSorter } from "./SlideSorter";
@@ -39,6 +45,14 @@ import {
   type SlideshowIcons,
 } from "./types";
 
+export interface SidepanelPresentationLaunchOptions {
+  initialSlide?: number;
+  startFullscreen: boolean;
+  openPresenterView?: boolean;
+  presentationDisplayId?: number;
+  presenterDisplayId?: number;
+}
+
 export interface SlideshowSidepanelOptions {
   ea: ExcalidrawAutomate;
   tab: ScriptSidepanelTab;
@@ -47,11 +61,7 @@ export interface SlideshowSidepanelOptions {
   config: SlideshowConfig;
   startPresentation(
     presentationType: PresentationPathType,
-    initialSlide?: number,
-  ): Promise<void>;
-  startPresenterView(
-    presentationType: PresentationPathType,
-    initialSlide?: number,
+    options: SidepanelPresentationLaunchOptions,
   ): Promise<void>;
   printPresentation(presentationType: PresentationPathType, event: MouseEvent): Promise<void>;
   onClosed(): void;
@@ -157,6 +167,10 @@ export class SlideshowSidepanel {
   private requestedSlideId: string | null = null;
   private animationEditor: AnimationEditor | null = null;
   private animationEditingSlideId: string | null = null;
+  private startFullscreen = true;
+  private displays: SlideshowDisplay[] = [];
+  private presentationDisplayId: number | null = null;
+  private presenterDisplayId: number | null = null;
 
   public constructor(private readonly options: SlideshowSidepanelOptions) {
     this.ownerWindow = options.tab.contentEl.ownerDocument.defaultView ?? window;
@@ -235,11 +249,14 @@ export class SlideshowSidepanel {
       "active-leaf-change",
       (leaf: WorkspaceLeaf | null) => {
         if (this.closed || leaf === ea.getSidepanelLeaf()) return;
-        this.bindView(
-          leaf && ea.isExcalidrawView(leaf.view)
-            ? (leaf.view as unknown as ScriptExcalidrawView)
-            : null,
-        );
+        if (leaf && ea.isExcalidrawView(leaf.view)) {
+          this.bindView(leaf.view as unknown as ScriptExcalidrawView);
+          return;
+        }
+        // Presenter view is hosted in an otherwise empty popout leaf. Focusing it must not
+        // detach the slideshow sidepanel from the drawing that owns the active presentation.
+        if (leaf?.view.getViewType?.() === "empty") return;
+        this.bindView(null);
       },
     );
     ea.onSceneChangeHook = {
@@ -441,18 +458,6 @@ export class SlideshowSidepanel {
     root.appendChild(header);
 
     const noVisibleSlides = Boolean(this.resolved && this.resolved.deck.visibleSlides.length === 0);
-    const startButton = doc.createElement("button");
-    startButton.type = "button";
-    startButton.className = "slideshow-sidepanel__icon-button";
-    startButton.setAttribute("aria-label", t("startPresentation"));
-    startButton.title = noVisibleSlides ? t("allSlidesExcluded") : t("startPresentation");
-    startButton.innerHTML = icons.play;
-    startButton.disabled = !this.resolved || noVisibleSlides;
-    header.appendChild(startButton);
-    startButton.addEventListener("click", () => {
-      void this.startPresentation();
-    });
-
     const resumeSlide =
       this.boundView && this.resolved
         ? getResumeSlideForPresentation(
@@ -462,51 +467,89 @@ export class SlideshowSidepanel {
             this.resolved.deck.visibleSlides.length,
           )
         : null;
-    if (resumeSlide !== null) {
-      const continueButton = doc.createElement("button");
-      continueButton.type = "button";
-      continueButton.className = "slideshow-sidepanel__icon-button";
-      continueButton.setAttribute("aria-label", t("continuePresentation"));
-      continueButton.title = t("continuePresentation");
-      continueButton.innerHTML = icons.continuePresentation;
-      continueButton.addEventListener("click", () => {
-        void this.startPresentation(resumeSlide);
+    const selectedSlideId =
+      this.sorter?.getSelectedSlideId() ??
+      preferredSlideId ??
+      this.resolved?.deck.slides[0]?.id ??
+      null;
+    const selectedVisibleIndex = this.resolved
+      ? getVisibleSlideIndex(this.resolved.deck, selectedSlideId)
+      : null;
+
+    const launchGroup = doc.createElement("div");
+    launchGroup.className = "slideshow-sidepanel__launch-group";
+    header.appendChild(launchGroup);
+
+    const startButton = doc.createElement("button");
+    startButton.type = "button";
+    startButton.className = "slideshow-sidepanel__icon-button slideshow-sidepanel__launch-main";
+    startButton.setAttribute("aria-label", t("startFromBeginning"));
+    startButton.title = noVisibleSlides ? t("allSlidesExcluded") : t("startFromBeginning");
+    startButton.innerHTML = icons.play;
+    startButton.disabled = !this.resolved || noVisibleSlides;
+    launchGroup.appendChild(startButton);
+    startButton.addEventListener("click", () => void this.launchPresentation("beginning"));
+
+    const launchMenuButton = doc.createElement("button");
+    launchMenuButton.type = "button";
+    launchMenuButton.className = "slideshow-sidepanel__icon-button slideshow-sidepanel__launch-menu-button";
+    launchMenuButton.setAttribute("aria-label", t("presentationStartOptions"));
+    launchMenuButton.title = t("presentationStartOptions");
+    launchMenuButton.innerHTML = icons.chevronDown;
+    launchMenuButton.disabled = !this.resolved || noVisibleSlides;
+    launchGroup.appendChild(launchMenuButton);
+
+    const launchMenu = doc.createElement("div");
+    launchMenu.className = "slideshow-sidepanel__launch-menu";
+    launchMenu.hidden = true;
+    launchMenu.setAttribute("role", "menu");
+    launchGroup.appendChild(launchMenu);
+    const addLaunchItem = (
+      label: string,
+      mode: "beginning" | "continue" | "presenter" | "current",
+      disabled = false,
+    ): void => {
+      const item = doc.createElement("button");
+      item.type = "button";
+      item.setAttribute("role", "menuitem");
+      item.textContent = label;
+      item.disabled = disabled;
+      item.addEventListener("click", () => {
+        launchMenu.hidden = true;
+        void this.launchPresentation(mode);
       });
-      header.appendChild(continueButton);
-    }
-
-    const startSelectedButton = doc.createElement("button");
-    startSelectedButton.type = "button";
-    startSelectedButton.className = "slideshow-sidepanel__icon-button";
-    startSelectedButton.setAttribute("aria-label", t("startFromSelectedSlide"));
-    startSelectedButton.title = t("startFromSelectedSlide");
-    startSelectedButton.innerHTML = icons.presentation;
-    startSelectedButton.disabled = !this.resolved || noVisibleSlides;
-    header.appendChild(startSelectedButton);
-    startSelectedButton.addEventListener("click", () => {
-      const selectedId = this.sorter?.getSelectedSlideId() ?? null;
-      const initialSlide = this.resolved
-        ? getVisibleSlideIndex(this.resolved.deck, selectedId)
-        : null;
-      if (initialSlide === null) {
-        new Notice(t("selectedSlideNotPresentable"));
-        return;
-      }
-      void this.startPresentation(initialSlide);
+      launchMenu.appendChild(item);
+    };
+    addLaunchItem(t("startFromBeginning"), "beginning");
+    addLaunchItem(t("continuePresentation"), "continue", resumeSlide === null);
+    addLaunchItem(t("startWithPresenterView"), "presenter", ea.DEVICE.isMobile);
+    addLaunchItem(t("startFromCurrentSlide"), "current", selectedVisibleIndex === null);
+    launchMenuButton.addEventListener("click", () => {
+      launchMenu.hidden = !launchMenu.hidden;
+      if (!launchMenu.hidden) launchMenu.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    });
+    launchGroup.addEventListener("focusout", (event) => {
+      const next = event.relatedTarget as Node | null;
+      if (!next || !launchGroup.contains(next)) launchMenu.hidden = true;
     });
 
-    const presenterButton = doc.createElement("button");
-    presenterButton.type = "button";
-    presenterButton.className = "slideshow-sidepanel__icon-button";
-    const presenterLabel = ea.DEVICE.isMobile ? t("presenterViewDesktopOnly") : t("presenterView");
-    presenterButton.setAttribute("aria-label", presenterLabel);
-    presenterButton.title = presenterLabel;
-    presenterButton.innerHTML = icons.presentation;
-    presenterButton.disabled = ea.DEVICE.isMobile || !this.resolved || noVisibleSlides;
-    header.appendChild(presenterButton);
-    presenterButton.addEventListener("click", () => {
-      void this.startPresenterView();
+    const windowModeButton = doc.createElement("button");
+    windowModeButton.type = "button";
+    windowModeButton.className = "slideshow-sidepanel__icon-button";
+    windowModeButton.setAttribute("role", "switch");
+    const updateWindowModeButton = (): void => {
+      const label = this.startFullscreen ? t("startFullscreen") : t("startCurrentWindow");
+      windowModeButton.setAttribute("aria-checked", String(this.startFullscreen));
+      windowModeButton.setAttribute("aria-label", label);
+      windowModeButton.title = label;
+      windowModeButton.innerHTML = this.startFullscreen ? icons.maximize : icons.currentWindow;
+    };
+    updateWindowModeButton();
+    windowModeButton.addEventListener("click", () => {
+      this.startFullscreen = !this.startFullscreen;
+      updateWindowModeButton();
     });
+    header.appendChild(windowModeButton);
 
     const printButton = doc.createElement("button");
     printButton.type = "button";
@@ -524,26 +567,41 @@ export class SlideshowSidepanel {
       void this.printPresentation(event);
     });
 
-    const refreshButton = doc.createElement("button");
-    refreshButton.type = "button";
-    refreshButton.className = "slideshow-sidepanel__icon-button";
-    refreshButton.setAttribute("aria-label", t("refreshSlides"));
-    refreshButton.title = t("refreshSlides");
-    header.appendChild(refreshButton);
-    refreshButton.innerHTML = icons.refresh;
-    refreshButton.addEventListener("click", () => {
-      void (async () => {
-        await this.sorter?.flushNotes();
-        await this.animationEditor?.destroy();
-        this.animationEditor = null;
-        this.animationEditingSlideId = null;
-        this.previewService?.clear();
-        this.lastFingerprint = "";
-        await this.refresh(true);
-      })();
-    });
-
     this.appendSettingsButton(header, doc);
+
+    this.refreshDisplayTargets();
+    if (!ea.DEVICE.isMobile && this.displays.length > 1) {
+      const displayControls = doc.createElement("div");
+      displayControls.className = "slideshow-sidepanel__display-controls";
+      root.appendChild(displayControls);
+      const appendDisplayPicker = (
+        labelText: string,
+        selectedId: number | null,
+        onChange: (id: number) => void,
+      ): void => {
+        const label = doc.createElement("label");
+        const caption = doc.createElement("span");
+        caption.textContent = labelText;
+        label.appendChild(caption);
+        const select = doc.createElement("select");
+        for (const display of this.displays) {
+          const option = doc.createElement("option");
+          option.value = String(display.id);
+          option.textContent = this.getDisplayLabel(display);
+          select.appendChild(option);
+        }
+        if (selectedId !== null) select.value = String(selectedId);
+        select.addEventListener("change", () => onChange(Number(select.value)));
+        label.appendChild(select);
+        displayControls.appendChild(label);
+      };
+      appendDisplayPicker(t("presentationDisplay"), this.presentationDisplayId, (id) => {
+        this.presentationDisplayId = id;
+      });
+      appendDisplayPicker(t("presenterDisplay"), this.presenterDisplayId, (id) => {
+        this.presenterDisplayId = id;
+      });
+    }
 
     if (!this.resolved || !this.previewService) {
       const empty = doc.createElement("div");
@@ -649,25 +707,84 @@ export class SlideshowSidepanel {
     return this.sorter;
   }
 
-  private async startPresentation(initialSlide?: number): Promise<void> {
-    await this.sorter?.flushNotes();
-    await this.animationEditor?.destroy();
-    this.animationEditor = null;
-    this.animationEditingSlideId = null;
-    if (this.presentationType) {
-      await this.options.startPresentation(this.presentationType, initialSlide);
+  private refreshDisplayTargets(): void {
+    const hostWindow = this.boundView?.ownerWindow ?? this.ownerWindow;
+    this.displays = getAvailableDisplays(hostWindow);
+    if (this.displays.length === 0) {
+      this.presentationDisplayId = null;
+      this.presenterDisplayId = null;
+      return;
     }
+    const presentationValid = this.displays.some(
+      (display) => display.id === this.presentationDisplayId,
+    );
+    const presenterValid = this.displays.some((display) => display.id === this.presenterDisplayId);
+    if (presentationValid && presenterValid) return;
+    const defaults = chooseDefaultDisplayTargets(
+      this.displays,
+      getCurrentDisplayId(hostWindow),
+    );
+    if (!presentationValid) this.presentationDisplayId = defaults.presentationDisplayId;
+    if (!presenterValid) this.presenterDisplayId = defaults.presenterDisplayId;
   }
 
-  private async startPresenterView(initialSlide?: number): Promise<void> {
-    if (this.options.ea.DEVICE.isMobile) return;
+  private getDisplayLabel(display: SlideshowDisplay): string {
+    const resolution = `${display.bounds.width}×${display.bounds.height}`;
+    const primary = display.primary ? ` · ${this.options.t("primaryDisplay")}` : "";
+    const name =
+      display.label || this.options.t("displayLabel", { number: display.index + 1 });
+    return `${name} · ${resolution}${primary}`;
+  }
+
+  private async launchPresentation(
+    mode: "beginning" | "continue" | "presenter" | "current",
+  ): Promise<void> {
+    const view = this.boundView;
+    const resolved = this.resolved;
+    const presentationType = this.presentationType;
+    if (!view || !resolved || !presentationType || resolved.deck.visibleSlides.length === 0) return;
+
+    let initialSlide: number | undefined;
+    if (mode === "continue") {
+      const resume = getResumeSlideForPresentation(
+        getSlideshowProgress(view),
+        getSlideshowProgressType(view),
+        presentationType,
+        resolved.deck.visibleSlides.length,
+      );
+      if (resume === null) return;
+      initialSlide = resume;
+    } else if (mode === "current") {
+      const selectedId = this.sorter?.getSelectedSlideId() ?? null;
+      const selectedIndex = getVisibleSlideIndex(resolved.deck, selectedId);
+      if (selectedIndex === null) {
+        new Notice(this.options.t("selectedSlideNotPresentable"));
+        return;
+      }
+      initialSlide = selectedIndex;
+    } else {
+      initialSlide = 0;
+    }
+
     await this.sorter?.flushNotes();
     await this.animationEditor?.destroy();
     this.animationEditor = null;
     this.animationEditingSlideId = null;
-    if (this.presentationType) {
-      await this.options.startPresenterView(this.presentationType, initialSlide);
-    }
+    const startFullscreen = this.startFullscreen;
+    const launchOptions: SidepanelPresentationLaunchOptions = {
+      initialSlide,
+      startFullscreen,
+      openPresenterView: mode === "presenter",
+      ...(this.presentationDisplayId === null
+        ? {}
+        : { presentationDisplayId: this.presentationDisplayId }),
+      ...(this.presenterDisplayId === null ? {} : { presenterDisplayId: this.presenterDisplayId }),
+    };
+
+    // A windowed presentation and the editing sidepanel compete for horizontal space.
+    // Close the sidepanel first; fullscreen presentations can leave it docked for later reuse.
+    if (!startFullscreen) this.options.tab.close();
+    await this.options.startPresentation(presentationType, launchOptions);
   }
 
   private async printPresentation(event: MouseEvent): Promise<void> {

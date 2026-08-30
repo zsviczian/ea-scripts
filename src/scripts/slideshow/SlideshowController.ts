@@ -8,6 +8,7 @@
 import { getNavigationRect, type NavigationRect } from "../../sharedUtils/presentationGeometry";
 import { sleepInWindow } from "../../sharedUtils/windowTiming";
 import { AnimationRuntime } from "./AnimationRuntime";
+import { moveWindowToDisplay, restoreWindowPlacement, type NativeWindowPlacementSnapshot } from "./desktopDisplays";
 import type { FrameDeckSlide, LineDeckSlide } from "./SlideDeck";
 import { PresentationControls } from "./PresentationControls";
 import { PresenterViewController } from "./PresenterViewController";
@@ -35,6 +36,9 @@ export interface SlideshowControllerOptions {
   icons: SlideshowIcons;
   initialSlide: number;
   startFullscreen: boolean;
+  openPresenterViewOnStart?: boolean;
+  presentationDisplayId?: number;
+  presenterDisplayId?: number;
   t: SlideshowTranslator;
   onSlideChange(slide: number): void;
   onExit(): void;
@@ -57,6 +61,9 @@ export class SlideshowController {
   private readonly icons: SlideshowIcons;
   private readonly statusBarElement: HTMLElement | null;
   private readonly shouldStartFullscreen: boolean;
+  private readonly openPresenterViewOnStart: boolean;
+  private readonly presentationDisplayId: number | undefined;
+  private readonly presenterDisplayId: number | undefined;
   private readonly t: SlideshowTranslator;
   private readonly onSlideChange: (slide: number) => void;
   private readonly onExit: () => void;
@@ -77,6 +84,7 @@ export class SlideshowController {
   private exitPromise: Promise<void> | null = null;
   private navigationQueue: Promise<void> = Promise.resolve();
   private stateEmissionPauseDepth = 0;
+  private hostWindowPlacement: NativeWindowPlacementSnapshot | null = null;
 
   public constructor(options: SlideshowControllerOptions) {
     this.ea = options.ea;
@@ -96,6 +104,9 @@ export class SlideshowController {
       Math.max(options.setup.slides.length - 1, 0),
     );
     this.shouldStartFullscreen = options.startFullscreen;
+    this.openPresenterViewOnStart = options.openPresenterViewOnStart ?? false;
+    this.presentationDisplayId = options.presentationDisplayId;
+    this.presenterDisplayId = options.presenterDisplayId;
     this.t = options.t;
     this.onSlideChange = options.onSlideChange;
     this.onExit = options.onExit;
@@ -140,6 +151,7 @@ export class SlideshowController {
     this.controls?.setSelectedSlide(this.slide + 1);
     this.emitPresentationState();
     this.hostView.clearDirty();
+    if (this.openPresenterViewOnStart) await this.openPresenterView();
   }
 
   /** Advances this presentation when the script is invoked again for its view. */
@@ -183,6 +195,9 @@ export class SlideshowController {
         last: () => this.goToSlide(this.setup.slides.length - 1),
         finish: () => void this.exit(),
       },
+      ...(this.presenterDisplayId === undefined ? {} : { targetDisplayId: this.presenterDisplayId }),
+      getAnimationOriginalOpacities: () =>
+        this.animationRuntime?.getOriginalOpacities() ?? new Map<string, number>(),
       onClosed: () => {
         if (this.presenter === presenter) this.presenter = null;
       },
@@ -200,11 +215,16 @@ export class SlideshowController {
 
   /** Returns the authoritative state shared by floating controls and presenter view. */
   public getPresentationState(): PresentationState {
-    return buildPresentationState(
-      this.setup.deck,
-      this.slide,
-      this.animationRuntime?.getState() ?? { completedSteps: 0, stepCount: 0 },
-    );
+    let animationState = this.animationRuntime?.getState() ?? { completedSteps: 0, stepCount: 0 };
+    if (
+      this.setup.pathType === "frame" &&
+      animationState.stepCount === 0 &&
+      this.setup.deck.visibleSlides[this.slide]?.kind === "frame"
+    ) {
+      const current = this.setup.deck.visibleSlides[this.slide] as FrameDeckSlide;
+      animationState = { completedSteps: 0, stepCount: current.animationSteps.length };
+    }
+    return buildPresentationState(this.setup.deck, this.slide, animationState);
   }
 
   private emitPresentationState(): void {
@@ -304,6 +324,14 @@ export class SlideshowController {
   private async gotoFullscreen(refocus = true): Promise<void> {
     if (this.isFullscreen) return;
     this.preventFullscreenExit = true;
+    if (!this.hostWindowPlacement && this.presentationDisplayId !== undefined) {
+      this.hostWindowPlacement = moveWindowToDisplay(
+        this.ownerWindow,
+        this.presentationDisplayId,
+        true,
+        false,
+      );
+    }
     this.animationRuntime?.pauseTimedStep();
     if (this.ea.DEVICE.isMobile) this.ea.viewToggleFullScreen();
     else await this.contentElement.webkitRequestFullscreen();
@@ -329,6 +357,11 @@ export class SlideshowController {
     await this.waitForExcalidrawResize();
     this.controls?.resetPosition(false);
     this.isFullscreen = false;
+    if (this.hostWindowPlacement) {
+      restoreWindowPlacement(this.ownerWindow, this.hostWindowPlacement);
+      this.hostWindowPlacement = null;
+      await sleepInWindow(this.ownerWindow, 100);
+    }
     if (refocus) await this.scrollToSlide(this.slide, 1);
     this.animationRuntime?.startPendingTimer();
   }
@@ -496,6 +529,7 @@ export class SlideshowController {
   }
 
   private readonly keydownListener = (event: KeyboardEvent): void => {
+    if (!this.ownerDocument.hasFocus()) return;
     if (this.hostLeaf !== app.workspace.activeLeaf) return;
     if (this.hostLeaf.width === 0 && this.hostLeaf.height === 0) return;
     switch (event.key) {
@@ -591,6 +625,10 @@ export class SlideshowController {
       if (this.statusBarElement) this.statusBarElement.style.display = "inherit";
       if (openForEdit) this.hostView.preventAutozoom();
       await this.exitFullscreen(false);
+      if (this.hostWindowPlacement) {
+        restoreWindowPlacement(this.ownerWindow, this.hostWindowPlacement);
+        this.hostWindowPlacement = null;
+      }
       await this.waitForExcalidrawResize();
       this.ea.setViewModeEnabled(false);
 
