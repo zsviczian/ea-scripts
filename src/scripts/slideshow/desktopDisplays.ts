@@ -1,6 +1,6 @@
 /**
  * @file desktopDisplays.ts
- * @overview Best-effort Electron display discovery, diagnostics, and native-window placement.
+ * @overview Best-effort Electron display discovery and native-window placement.
  */
 
 export interface SlideshowDisplay {
@@ -65,21 +65,8 @@ interface WindowGeometryLike {
   outerHeight: number;
 }
 
-const DEBUG_PREFIX = "[Slideshow display debug]";
 const DEVICE_KEY_STORAGE = "excalidraw-slideshow-device-key";
 
-function debug(message: string): void {
-  console.log(`${DEBUG_PREFIX} ${message}`);
-}
-
-function errorText(error: unknown): string {
-  if (error instanceof Error) return `${error.name}: ${error.message}`;
-  return String(error);
-}
-
-function boundsText(bounds: { x: number; y: number; width: number; height: number }): string {
-  return `x=${bounds.x},y=${bounds.y},w=${bounds.width},h=${bounds.height}`;
-}
 
 function getRemote(win: Window): ElectronRemoteLike | null {
   const rendererWindow = win as ElectronRendererWindow;
@@ -192,12 +179,10 @@ export function captureWindowPlacement(win: Window): NativeWindowPlacementSnapsh
     const remote = getRemote(win);
     const screen = remote?.screen;
     if (!remote || !screen) {
-      debug("capture: Electron remote/screen unavailable");
       return null;
     }
     const nativeWindow = getNativeWindow(win);
     if (!nativeWindow) {
-      debug("capture: native window not resolved");
       return null;
     }
     const bounds = nativeWindow.getBounds();
@@ -207,12 +192,8 @@ export function captureWindowPlacement(win: Window): NativeWindowPlacementSnapsh
       bounds: { ...bounds },
       maximized: nativeWindow.isMaximized?.() ?? false,
     };
-    debug(
-      `capture window=${snapshot.windowId ?? "?"},display=${snapshot.sourceDisplayId ?? "?"},bounds(${boundsText(snapshot.bounds)}),max=${snapshot.maximized}`,
-    );
     return snapshot;
-  } catch (error) {
-    debug(`capture failed: ${errorText(error)}`);
+  } catch {
     return null;
   }
 }
@@ -221,7 +202,7 @@ function nativeWindowIdentity(window: ElectronBrowserWindowLike): string {
   const id = getNativeWindowId(window);
   if (id !== null) return `id:${id}`;
   const bounds = window.getBounds();
-  return `title:${window.getTitle?.() ?? ""}|${boundsText(bounds)}`;
+  return `title:${window.getTitle?.() ?? ""}|${bounds.x},${bounds.y},${bounds.width},${bounds.height}`;
 }
 
 /**
@@ -237,21 +218,6 @@ export function resolveSameNativeWindow(host: Window, candidate: Window): boolea
   const candidateId = getNativeWindowId(candidateNative);
   if (hostId !== null && candidateId !== null) return hostId === candidateId;
   return nativeWindowIdentity(hostNative) === nativeWindowIdentity(candidateNative);
-}
-
-/** Writes string-only host/presenter identity diagnostics before any window is moved. */
-export function logWindowIdentityDiagnostics(
-  host: Window,
-  candidate: Window,
-  context: string,
-): void {
-  debug(
-    `${context}: hostDocument===presenterDocument=${host.document === candidate.document},hostWindow===presenterWindow=${host === candidate}`,
-  );
-  const sameNative = resolveSameNativeWindow(host, candidate);
-  debug(`${context}: sameNativeWindow=${sameNative === null ? "unknown" : String(sameNative)}`);
-  logDisplayDiagnostics(host, `${context} host`);
-  logDisplayDiagnostics(candidate, `${context} presenter`);
 }
 
 function toDisplay(
@@ -296,8 +262,7 @@ export function getAvailableDisplays(win: Window): SlideshowDisplay[] {
     if (!screen) return [];
     const primaryId = screen.getPrimaryDisplay().id;
     return screen.getAllDisplays().map((display, index) => toDisplay(display, primaryId, index));
-  } catch (error) {
-    debug(`getAvailableDisplays failed: ${errorText(error)}`);
+  } catch {
     return [];
   }
 }
@@ -310,8 +275,7 @@ export function getCurrentDisplayId(win: Window): number | null {
     if (!remote || !screen) return null;
     const nativeWindow = getNativeWindow(win);
     return nativeWindow ? screen.getDisplayMatching(nativeWindow.getBounds()).id : null;
-  } catch (error) {
-    debug(`getCurrentDisplayId failed: ${errorText(error)}`);
+  } catch {
     return null;
   }
 }
@@ -335,55 +299,6 @@ export function chooseDefaultDisplayTargets(
   };
 }
 
-/** Writes a string-only diagnostic snapshot that can be copied directly from Developer Tools. */
-export function logDisplayDiagnostics(win: Window, context: string): void {
-  try {
-    const geometry = geometryForWindow(win);
-    debug(
-      `${context}: DOM window screenX=${geometry.screenX},screenY=${geometry.screenY},outerWidth=${geometry.outerWidth},outerHeight=${geometry.outerHeight},focus=${win.document.hasFocus()}`,
-    );
-    const remote = getRemote(win);
-    const screen = remote?.screen;
-    if (!remote || !screen) {
-      debug(`${context}: Electron remote/screen unavailable`);
-      return;
-    }
-    const displays = screen.getAllDisplays();
-    debug(
-      `${context}: displays=${displays
-        .map((display) => {
-          const work = display.workArea ?? display.bounds;
-          return `id=${display.id},label=${display.label ?? ""},bounds(${boundsText(display.bounds)}),work(${boundsText(work)})`;
-        })
-        .join(" | ")}`,
-    );
-    const candidates = remote.BrowserWindow?.getAllWindows?.() ?? [];
-    debug(
-      `${context}: native windows=${candidates
-        .map((candidate) => {
-          const bounds = candidate.getBounds();
-          const displayId = screen.getDisplayMatching(bounds).id;
-          return `id=${getNativeWindowId(candidate) ?? "?"},title=${candidate.getTitle?.() ?? ""},display=${displayId},bounds(${boundsText(bounds)}),score=${geometryScore(candidate, geometry)},max=${candidate.isMaximized?.() ?? false},fullscreen=${candidate.isFullScreen?.() ?? false}`;
-        })
-        .join(" | ")}`,
-    );
-    const current = remote.getCurrentWindow();
-    const currentBounds = current.getBounds();
-    debug(
-      `${context}: renderer current id=${getNativeWindowId(current) ?? "?"},display=${screen.getDisplayMatching(currentBounds).id},bounds(${boundsText(currentBounds)}),score=${geometryScore(current, geometry)}`,
-    );
-    const resolved = getNativeWindow(win);
-    if (resolved) {
-      const bounds = resolved.getBounds();
-      debug(
-        `${context}: resolved native id=${getNativeWindowId(resolved) ?? "?"},display=${screen.getDisplayMatching(bounds).id},bounds(${boundsText(bounds)}),score=${geometryScore(resolved, geometry)}`,
-      );
-    }
-  } catch (error) {
-    debug(`${context}: diagnostic failed: ${errorText(error)}`);
-  }
-}
-
 /** Waits until the DOM window's native BrowserWindow is reported on the requested display. */
 export async function waitForWindowOnDisplay(
   win: Window,
@@ -393,12 +308,10 @@ export async function waitForWindowOnDisplay(
   const started = Date.now();
   while (Date.now() - started <= timeoutMs) {
     if (getCurrentDisplayId(win) === displayId) {
-      debug(`waitForWindowOnDisplay target=${displayId}: confirmed after ${Date.now() - started}ms`);
       return true;
     }
     await new Promise<void>((resolve) => win.setTimeout(resolve, 75));
   }
-  debug(`waitForWindowOnDisplay target=${displayId}: timed out after ${Date.now() - started}ms`);
   return false;
 }
 
@@ -414,27 +327,20 @@ export function moveWindowToDisplay(
     const remote = getRemote(win);
     const screen = remote?.screen;
     if (!remote || !screen) {
-      debug(`move target=${displayId}: Electron remote/screen unavailable`);
       return null;
     }
     const target = screen.getAllDisplays().find((display) => display.id === displayId);
     if (!target) {
-      debug(`move target=${displayId}: display not found`);
       return null;
     }
     const nativeWindow = getNativeWindow(win);
     if (!nativeWindow) {
-      debug(`move target=${displayId}: native window not resolved`);
       return null;
     }
     const currentBounds = nativeWindow.getBounds();
     const currentDisplay = screen.getDisplayMatching(currentBounds);
     const windowId = getNativeWindowId(nativeWindow);
-    debug(
-      `move begin window=${windowId ?? "?"},fromDisplay=${currentDisplay.id},toDisplay=${displayId},fill=${fillWorkArea},bounds(${boundsText(currentBounds)})`,
-    );
     if (currentDisplay.id === displayId && !moveIfAlreadyOnDisplay) {
-      debug(`move skipped window=${windowId ?? "?"}: already on display ${displayId}`);
       return null;
     }
     const snapshot: NativeWindowPlacementSnapshot = {
@@ -455,12 +361,8 @@ export function moveWindowToDisplay(
         };
     nativeWindow.setBounds(requestedBounds, false);
     const actual = nativeWindow.getBounds();
-    debug(
-      `move requested window=${windowId ?? "?"},target=${displayId},requested(${boundsText(requestedBounds)}),actual(${boundsText(actual)}),actualDisplay=${screen.getDisplayMatching(actual).id}`,
-    );
     return snapshot;
-  } catch (error) {
-    debug(`move target=${displayId}: failed: ${errorText(error)}`);
+  } catch {
     return null;
   }
 }
@@ -543,22 +445,12 @@ export function restoreWindowPlacement(
   try {
     const resolved = resolveCapturedNativeWindow(win, snapshot);
     if (!resolved) {
-      debug(`restore window=${snapshot.windowId ?? "?"}: captured native window unavailable`);
       return;
     }
     const { screen, nativeWindow } = resolved;
-    const before = nativeWindow.getBounds();
-    const requested = safeRestoreBounds(snapshot, screen.getAllDisplays(), screen.getPrimaryDisplay());
-    debug(
-      `restore begin window=${snapshot.windowId ?? "?"},current(${boundsText(before)}),snapshot(${boundsText(snapshot.bounds)}),requested(${boundsText(requested)}),sourceDisplay=${snapshot.sourceDisplayId ?? "?"}`,
-    );
     applyRestorePlacement(screen, nativeWindow, snapshot);
-    const after = nativeWindow.getBounds();
-    debug(
-      `restore end window=${snapshot.windowId ?? "?"},bounds(${boundsText(after)}),display=${screen.getDisplayMatching(after).id},max=${nativeWindow.isMaximized?.() ?? false}`,
-    );
-  } catch (error) {
-    debug(`restore window=${snapshot.windowId ?? "?"}: failed: ${errorText(error)}`);
+  } catch {
+    // Best-effort desktop window restoration.
   }
 }
 
@@ -580,7 +472,6 @@ export async function restoreWindowPlacementStable(
   if (!snapshot) return;
   const resolved = resolveCapturedNativeWindow(win, snapshot);
   if (!resolved) {
-    debug(`stable restore window=${snapshot.windowId ?? "?"}: captured native window unavailable`);
     return;
   }
   const { screen, nativeWindow } = resolved;
@@ -588,26 +479,13 @@ export async function restoreWindowPlacementStable(
   while (nativeWindow.isFullScreen?.() && Date.now() - started < timeoutMs) {
     await new Promise<void>((resolve) => win.setTimeout(resolve, 75));
   }
-  debug(
-    `stable restore fullscreen-clear window=${snapshot.windowId ?? "?"},elapsed=${Date.now() - started}ms,fullscreen=${nativeWindow.isFullScreen?.() ?? false}`,
-  );
 
   restoreWindowPlacement(win, snapshot);
   const monitorStarted = Date.now();
-  let repairs = 0;
   while (Date.now() - monitorStarted < monitorMs) {
     await new Promise<void>((resolve) => win.setTimeout(resolve, 125));
     if (nativeWindow.isFullScreen?.()) continue;
     if (!placementNeedsRepair(screen, nativeWindow, snapshot)) continue;
-    repairs += 1;
-    const before = nativeWindow.getBounds();
-    debug(
-      `stable restore repair=${repairs},window=${snapshot.windowId ?? "?"},before(${boundsText(before)}),display=${screen.getDisplayMatching(before).id}`,
-    );
     applyRestorePlacement(screen, nativeWindow, snapshot);
   }
-  const finalBounds = nativeWindow.getBounds();
-  debug(
-    `stable restore complete window=${snapshot.windowId ?? "?"},repairs=${repairs},bounds(${boundsText(finalBounds)}),display=${screen.getDisplayMatching(finalBounds).id},visible=${screen.getAllDisplays().some((display) => rectsOverlap(finalBounds, display.bounds))}`,
-  );
 }

@@ -10,7 +10,6 @@ import { sleepInWindow } from "../../sharedUtils/windowTiming";
 import { AnimationRuntime } from "./AnimationRuntime";
 import {
   captureWindowPlacement,
-  logDisplayDiagnostics,
   moveWindowToDisplay,
   restoreWindowPlacementStable,
   waitForWindowOnDisplay,
@@ -86,6 +85,7 @@ export class SlideshowController {
   private stateEmissionPauseDepth = 0;
   private hostWindowPlacement: NativeWindowPlacementSnapshot | null = null;
   private hostPlacementPrepared = false;
+  private hiddenMobileNavbars: Array<{ element: HTMLElement; display: string }> = [];
 
   public constructor(options: SlideshowControllerOptions) {
     this.ea = options.ea;
@@ -103,7 +103,7 @@ export class SlideshowController {
       Math.max(options.initialSlide, 0),
       Math.max(options.setup.slides.length - 1, 0),
     );
-    this.shouldStartFullscreen = options.startFullscreen;
+    this.shouldStartFullscreen = options.ea.DEVICE.isMobile ? true : options.startFullscreen;
     this.openPresenterViewOnStart = options.openPresenterViewOnStart ?? false;
     this.presentationDisplayId = options.presentationDisplayId;
     this.presenterDisplayId = options.presenterDisplayId;
@@ -125,10 +125,7 @@ export class SlideshowController {
   /** Starts the presentation and installs all temporary UI and handlers. */
   public async start(): Promise<void> {
     this.ea.setView(this.hostView);
-    logDisplayDiagnostics(
-      this.ownerWindow,
-      `controller start fullscreen=${this.shouldStartFullscreen},presenter=${this.openPresenterViewOnStart},presentationTarget=${this.presentationDisplayId ?? "none"},presenterTarget=${this.presenterDisplayId ?? "none"}`,
-    );
+    this.hideMobileNavbar();
     if (this.statusBarElement) this.statusBarElement.style.display = "none";
     this.ea.setViewModeEnabled(true);
     const helpButton = this.hostView.excalidrawContainer?.querySelector(
@@ -145,7 +142,6 @@ export class SlideshowController {
     // Capture the host before opening/moving any presenter popout. This snapshot must never be
     // derived from a window state that presenter placement may already have changed.
     this.hostWindowPlacement = captureWindowPlacement(this.ownerWindow);
-    logDisplayDiagnostics(this.ownerWindow, "host captured before presenter open");
     // Create and place presenter notes before macOS enters fullscreen/Spaces. Moving a popout
     // after the host window is fullscreen is unreliable, especially for Sidecar displays.
     if (this.openPresenterViewOnStart) {
@@ -338,28 +334,23 @@ export class SlideshowController {
     // match is confirmed before requesting element fullscreen, otherwise macOS may create the
     // fullscreen Space on the window's previous display.
     await sleepInWindow(this.ownerWindow, 350);
-    logDisplayDiagnostics(
-      this.ownerWindow,
-      `host placement complete target=${this.presentationDisplayId ?? "none"}`,
-    );
     app.workspace.setActiveLeaf(this.hostLeaf, { focus: true });
   }
 
   private async gotoFullscreen(refocus = true): Promise<void> {
     if (this.isFullscreen) return;
-    logDisplayDiagnostics(this.ownerWindow, "before element fullscreen");
     this.preventFullscreenExit = true;
     await this.prepareHostWindowPlacement(true);
     this.animationRuntime?.pauseTimedStep();
     if (this.ea.DEVICE.isMobile) this.ea.viewToggleFullScreen();
     else await this.contentElement.webkitRequestFullscreen();
     await this.waitForExcalidrawResize();
+    this.hideMobileNavbar();
     const layerUiWrapper = this.contentElement.querySelector(".layer-ui__wrapper");
     if (!layerUiWrapper?.hasClass("excalidraw-hidden")) layerUiWrapper?.addClass("excalidraw-hidden");
     this.controls?.setFullscreen(true);
     this.controls?.resetPosition(false);
     this.isFullscreen = true;
-    logDisplayDiagnostics(this.ownerWindow, "after element fullscreen");
     if (refocus) await this.scrollToSlide(this.slide, 1);
     this.animationRuntime?.startPendingTimer();
   }
@@ -600,6 +591,29 @@ export class SlideshowController {
     void this.exit();
   };
 
+  private hideMobileNavbar(): void {
+    if (!this.ea.DEVICE.isMobile) return;
+    const tracked = new Set(this.hiddenMobileNavbars.map(({ element }) => element));
+    const navbars = Array.from(
+      this.ownerDocument.querySelectorAll<HTMLElement>(
+        ".mobile-navbar.excalidraw-mobile-navbar-docked",
+      ),
+    );
+    for (const element of navbars) {
+      if (!tracked.has(element)) {
+        this.hiddenMobileNavbars.push({ element, display: element.style.display });
+      }
+      element.style.display = "none";
+    }
+  }
+
+  private restoreMobileNavbar(): void {
+    for (const { element, display } of this.hiddenMobileNavbars) {
+      element.style.display = display;
+    }
+    this.hiddenMobileNavbars = [];
+  }
+
   private initializeEventListeners(): void {
     this.ownerWindow.addEventListener("keydown", this.keydownListener);
     this.ea.onLinkClickHook = this.linkClickHook;
@@ -634,7 +648,6 @@ export class SlideshowController {
 
   private async performExit(openForEdit: boolean): Promise<void> {
     this.ea.setView(this.hostView);
-    logDisplayDiagnostics(this.ownerWindow, `exit begin openForEdit=${openForEdit}`);
     const presenter = this.presenter;
     this.presenter = null;
     await presenter?.destroy(true).catch(() => undefined);
@@ -650,7 +663,6 @@ export class SlideshowController {
         this.hostWindowPlacement = null;
         this.hostPlacementPrepared = false;
         await restoreWindowPlacementStable(this.ownerWindow, originalPlacement);
-        logDisplayDiagnostics(this.ownerWindow, "exit after host restore");
       }
       await this.waitForExcalidrawResize();
       this.ea.setViewModeEnabled(false);
@@ -670,6 +682,7 @@ export class SlideshowController {
       }
     } finally {
       await this.animationRuntime?.finishActiveSlide().catch(() => undefined);
+      this.restoreMobileNavbar();
       this.removeEventListeners();
       this.ownerWindow.setTimeout(() => {
         this.hostView.refreshCanvasOffset();

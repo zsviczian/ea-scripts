@@ -78,18 +78,26 @@ export class PresentationControls {
     }
 
     const top = contentElement.innerHeight;
-    const left = contentElement.innerWidth / 2;
     this.panel = excalidrawContainer.createDiv({
-      cls: ["excalidraw-presentation-panel"],
+      cls: [
+        "excalidraw-presentation-panel",
+        ...(ea.DEVICE.isMobile ? ["slideshow-presentation-panel--mobile"] : []),
+      ],
       attr: {
         style: `
           width: fit-content;
+          max-width: calc(100% - 12px);
           z-index:5;
           position: absolute;
           top:calc(${top}px - var(--default-button-size)*2);
-          left:calc(${left}px - var(--default-button-size)*5);`,
+          left:50%;
+          transform:translateX(-50%);`,
       },
     });
+    if (ea.DEVICE.isMobile) {
+      this.panel.style.top = "auto";
+      this.panel.style.bottom = "8px";
+    }
     this.setFadeTimeout(this.options.transitionDelay * 3);
 
     const panelColumn = this.panel.createDiv({ cls: "panelColumn" });
@@ -98,24 +106,38 @@ export class PresentationControls {
         cls: ["Island", "buttonList"],
         attr: {
           style: `
-            max-width: unset;
+            max-width: calc(100vw - 12px);
             justify-content: space-between;
             height: calc(var(--default-button-size)*1.5);
-            width: 100%;
+            width: max-content;
             background: var(--island-bg-color);
             display: flex;
             align-items: center;`,
         },
       },
       (buttonList) => {
-        buttonList.createEl("style", { text: " select:focus { box-shadow: var(--input-shadow);} " });
+        buttonList.createEl("style", {
+          text: `
+            .excalidraw-presentation-panel select:focus { box-shadow: var(--input-shadow); }
+            .excalidraw-presentation-panel .buttonList { max-width: calc(100vw - 12px); }
+            .excalidraw-presentation-panel.slideshow-presentation-panel--mobile .buttonList {
+              flex-wrap: wrap;
+              height: auto !important;
+              justify-content: center !important;
+            }
+            .excalidraw-presentation-panel.slideshow-presentation-panel--mobile select {
+              width: clamp(76px, 24vw, 132px);
+              max-width: 132px;
+              text-overflow: ellipsis;
+            }
+          `,
+        });
         buttonList.createEl(
           "button",
           {
             attr: {
               style: "margin-left: calc(var(--default-button-size)*0.25);",
               "aria-label": t("previousSlide"),
-              title: t("previousSlide"),
             },
           },
           (button) => {
@@ -135,7 +157,6 @@ export class PresentationControls {
                 color: var(--color-gray-100);
                 cursor: pointer;`,
               "aria-label": t("navigateToSlide"),
-              title: t("navigateToSlide"),
             },
           },
           (selectElement) => {
@@ -159,25 +180,27 @@ export class PresentationControls {
 
         buttonList.createEl(
           "button",
-          { attr: { "aria-label": t("nextSlide"), title: t("nextSlide") } },
+          { attr: { "aria-label": t("nextSlide") } },
           (button) => {
             button.innerHTML = icons.rightArrow;
             button.onclick = callbacks.next;
           },
         );
-        buttonList.createDiv({
-          attr: {
-            style: `
-              width: 1px;
-              height: var(--default-button-size);
-              background-color: var(--default-border-color);
-              margin: 0px auto;`,
-          },
-        });
+        if (!ea.DEVICE.isMobile) {
+          buttonList.createDiv({
+            attr: {
+              style: `
+                width: 1px;
+                height: var(--default-button-size);
+                background-color: var(--default-border-color);
+                margin: 0px auto;`,
+            },
+          });
+        }
 
         buttonList.createEl(
           "button",
-          { attr: { "aria-label": t("toggleLaser"), title: t("toggleLaser") } },
+          { attr: { "aria-label": t("toggleLaser") } },
           (button) => {
             button.innerHTML = icons.laserOff;
             button.onclick = () => {
@@ -188,28 +211,30 @@ export class PresentationControls {
         );
         buttonList.createEl(
           "button",
-          { attr: { "aria-label": t("refocusSlide"), title: t("refocusSlide") } },
+          { attr: { "aria-label": t("refocusSlide") } },
           (button) => {
             button.innerHTML = icons.refocus;
             button.onclick = callbacks.refocus;
           },
         );
-        buttonList.createEl(
-          "button",
-          { attr: { "aria-label": t("toggleFullscreen"), title: t("toggleFullscreen") } },
-          (button) => {
-            this.fullscreenButton = button;
-            button.innerHTML = this.options.isFullscreen ? icons.minimize : icons.maximize;
-            button.onclick = callbacks.toggleFullscreen;
-          },
-        );
+        if (!ea.DEVICE.isMobile) {
+          buttonList.createEl(
+            "button",
+            { attr: { "aria-label": t("toggleFullscreen") } },
+            (button) => {
+              this.fullscreenButton = button;
+              button.innerHTML = this.options.isFullscreen ? icons.minimize : icons.maximize;
+              button.onclick = callbacks.toggleFullscreen;
+            },
+          );
+        }
 
         if (pathType === "line") {
           if (shouldOfferPathVisibility) {
             let pathHidden = isPathHidden;
             buttonList.createEl(
               "button",
-              { attr: { "aria-label": t("pathVisibility"), title: t("pathVisibility") } },
+              { attr: { "aria-label": t("pathVisibility") } },
               (button) => {
                 const renderPathVisibility = (): void => {
                   const label = pathHidden
@@ -217,7 +242,6 @@ export class PresentationControls {
                     : t("keepPresentationPathVisible");
                   button.innerHTML = pathHidden ? icons.eyeOff : icons.eye;
                   button.setAttribute("aria-label", label);
-                  button.setAttribute("title", label);
                   button.setAttribute("aria-pressed", String(pathHidden));
                 };
                 renderPathVisibility();
@@ -231,7 +255,7 @@ export class PresentationControls {
           }
           buttonList.createEl(
             "button",
-            { attr: { "aria-label": t("editSlide"), title: t("editSlide") } },
+            { attr: { "aria-label": t("editSlide") } },
             (button) => {
               button.innerHTML = icons.edit;
               button.onclick = callbacks.editSlide;
@@ -242,7 +266,7 @@ export class PresentationControls {
 
         buttonList.createEl(
           "button",
-          { attr: { "aria-label": t("openSlideshowPanel"), title: t("openSlideshowPanel") } },
+          { attr: { "aria-label": t("openSlideshowPanel") } },
           (button) => {
             button.innerHTML = icons.settings;
             button.onclick = callbacks.openSidepanel;
@@ -256,7 +280,6 @@ export class PresentationControls {
               attr: {
                 style: "margin-right: calc(var(--default-button-size)*0.25);",
                 "aria-label": t("printPdf", { width: printSlideWidth, height: printSlideHeight }),
-                title: t("printPdf", { width: printSlideWidth, height: printSlideHeight }),
               },
             },
             (button) => {
@@ -271,7 +294,6 @@ export class PresentationControls {
             attr: {
               style: "margin-right: calc(var(--default-button-size)*0.25);",
               "aria-label": t("endPresentation"),
-              title: t("endPresentation"),
             },
           },
           (button) => {
@@ -292,9 +314,15 @@ export class PresentationControls {
   public resetPosition(refocus = true): void {
     if (!this.panel) return;
     const top = this.options.contentElement.innerHeight;
-    const left = this.options.contentElement.innerWidth / 2;
-    this.panel.style.top = `calc(${top}px - var(--default-button-size)*2)`;
-    this.panel.style.left = `calc(${left}px - var(--default-button-size)*5)`;
+    if (this.options.ea.DEVICE.isMobile) {
+      this.panel.style.top = "auto";
+      this.panel.style.bottom = "8px";
+    } else {
+      this.panel.style.top = `calc(${top}px - var(--default-button-size)*2)`;
+      this.panel.style.bottom = "auto";
+    }
+    this.panel.style.left = "50%";
+    this.panel.style.transform = "translateX(-50%)";
     if (refocus) this.options.callbacks.refocus();
   }
 
@@ -350,6 +378,10 @@ export class PresentationControls {
   private readonly onPointerDown = (event: PointerEvent): void => {
     this.clearFadeTimeout();
     this.setFadeTimeout();
+    if (this.panel && this.panel.style.bottom !== "auto" && this.panel.style.bottom !== "") {
+      this.panel.style.top = `${this.panel.offsetTop}px`;
+      this.panel.style.bottom = "auto";
+    }
     this.posX2 = event.clientX;
     this.posY2 = event.clientY;
     this.options.ownerWindow.addEventListener("pointermove", this.onDrag, true);

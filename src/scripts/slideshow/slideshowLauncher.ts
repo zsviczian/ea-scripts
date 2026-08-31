@@ -83,17 +83,18 @@ export function registerSlideshowElementActionProvider(
   context: SlideshowViewContext,
 ): (() => void) | null {
   return context.ea.registerElementActionProvider((element) => {
+    const latestContext = getSlideshowViewContext(context.view) ?? context;
     const presentationSourceKey = getElementPresentationSourceKey(element);
     if (!presentationSourceKey) return [];
     return [
       {
         id: "edit-slideshow",
-        title: context.t("editSlideshow"),
+        title: latestContext.t("editSlideshow"),
         icon: "presentation",
         action: () => {
-          context.ea.setView(context.view);
+          latestContext.ea.setView(latestContext.view);
           void openSlideshowSidepanel(
-            context,
+            latestContext,
             presentationSourceKey,
             presentationSourceKey === "frame" ? element.id : undefined,
           );

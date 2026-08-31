@@ -6,8 +6,6 @@
 import type { Component, WorkspaceLeaf } from "obsidian";
 
 import {
-  logDisplayDiagnostics,
-  logWindowIdentityDiagnostics,
   moveWindowToDisplay,
   resolveSameNativeWindow,
   waitForWindowOnDisplay,
@@ -128,9 +126,6 @@ export class PresenterViewController {
     // reading ownerDocument/defaultView. Without this, the leaf can still report the host window.
     app.workspace.setActiveLeaf(leaf, { focus: true });
     const migrated = await waitForPresenterOwnerWindow(leaf, this.options.hostView.ownerWindow);
-    console.log(
-      `[Slideshow display debug] presenter migration elapsed=${migrated.elapsedMs}ms,distinct=${Boolean(migrated.win)}`,
-    );
     const win = migrated.win;
     if (!win) {
       leaf.detach();
@@ -140,7 +135,6 @@ export class PresenterViewController {
     const container = leaf.view.containerEl;
     const doc = container.ownerDocument;
     this.ownerWindow = win;
-    logWindowIdentityDiagnostics(this.options.hostView.ownerWindow, win, "presenter identity after migration");
     doc.title = this.options.t("presenterViewTitle");
     const headerTitle = container.querySelector(".view-header-title") as HTMLElement | null;
     if (headerTitle) headerTitle.textContent = this.options.t("presenterViewTitle");
@@ -152,24 +146,15 @@ export class PresenterViewController {
     this.update(initialState);
     app.workspace.setActiveLeaf(leaf, { focus: true });
     await sleepInWindow(win, 100);
-    logDisplayDiagnostics(win, `presenter opened target=${this.options.targetDisplayId ?? "none"}`);
     if (this.options.targetDisplayId !== undefined) {
       const sameNative = resolveSameNativeWindow(this.options.hostView.ownerWindow, win);
-      console.log(
-        `[Slideshow display debug] presenter move safety sameNative=${sameNative === null ? "unknown" : String(sameNative)}`,
-      );
-      if (sameNative !== false) {
-        console.log(
-          "[Slideshow display debug] presenter move skipped: presenter native window identity is not safely distinct from host",
-        );
-      } else {
+      if (sameNative === false) {
         const moved = moveWindowToDisplay(win, this.options.targetDisplayId, true);
         if (moved) {
           await waitForWindowOnDisplay(win, this.options.targetDisplayId, 2500);
           await sleepInWindow(win, 150);
         }
       }
-      logDisplayDiagnostics(win, `presenter placement complete target=${this.options.targetDisplayId}`);
     }
   }
 

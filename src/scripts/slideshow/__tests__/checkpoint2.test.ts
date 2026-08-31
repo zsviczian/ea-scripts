@@ -52,6 +52,7 @@ import {
   getConvertibleSelectedLine,
   getPresentationSourceLabels,
   getResumeSlideForPresentation,
+  resolveDeviceLaunchModes,
   getSceneSelectedSlideId,
   SlideshowSidepanel,
 } from "../SlideshowSidepanel";
@@ -973,13 +974,26 @@ describe("slideshow checkpoint 2 temporary progress", () => {
 
     await runSlideshow(scriptEa, { executionSource: "manual" } as ScriptUtils, {} as never);
 
-    expect(providerRegistrations).toBe(2);
+    expect(providerRegistrations).toBe(1);
     expect(autostartRegistrations).toBe(2);
     expect(apiAccesses).toBe(1);
     expect(autostartMessages).toEqual([
       'Autostart is required for registering the "Edit Slide" button. Autostart does not mean slideshows will autostart when opening a drawing.',
       'Autostart is required for registering the "Edit Slide" button. Autostart does not mean slideshows will autostart when opening a drawing.',
     ]);
+  });
+});
+
+describe("slideshow checkpoint 2 mobile launch behavior", () => {
+  it("forces fullscreen slides-only behavior on mobile", () => {
+    expect(resolveDeviceLaunchModes(true, "window", "presenter")).toEqual({
+      startFullscreen: true,
+      openPresenterView: false,
+    });
+    expect(resolveDeviceLaunchModes(false, "window", "presenter")).toEqual({
+      startFullscreen: false,
+      openPresenterView: true,
+    });
   });
 });
 

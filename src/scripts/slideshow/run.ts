@@ -39,8 +39,11 @@ export async function runSlideshow(
     config,
     t,
   };
-  registerSlideshowViewContext(context);
-  registerSlideshowElementActionProvider(context);
+  const wasKnown = registerSlideshowViewContext(context);
+  // Element-action providers are view-local and survive later manual executions of the same script.
+  // Re-registering on every toolbar click causes EA to reject the duplicate provider. A newly seen
+  // view still registers immediately, while later executions only refresh the runtime context.
+  if (!wasKnown) registerSlideshowElementActionProvider(context);
   await scriptEa.registerAutostart(t("autostartExplanation"));
 
   if (scriptUtils.executionSource !== "manual") return;

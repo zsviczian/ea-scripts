@@ -14,7 +14,6 @@ import {
   getAvailableDisplays,
   getCurrentDisplayId,
   getSlideshowDeviceKey,
-  logDisplayDiagnostics,
   type SlideshowDisplay,
 } from "./desktopDisplays";
 import { getVisibleSlideIndex, type FrameDeckSlide, type SlideDeckSlide } from "./SlideDeck";
@@ -218,6 +217,19 @@ export function getResumeSlideForPresentation(
   if (progressType && progressType !== presentationType) return null;
   if (progressSource && presentationSource && progressSource !== presentationSource) return null;
   return Math.min(Math.max(progress, 0), visibleSlideCount - 1);
+}
+
+
+/** Resolves device-specific launch behavior without exposing unsupported mobile modes. */
+export function resolveDeviceLaunchModes(
+  isMobile: boolean,
+  windowMode: SlideshowWindowMode,
+  notesMode: SlideshowNotesMode,
+): { startFullscreen: boolean; openPresenterView: boolean } {
+  return {
+    startFullscreen: isMobile || windowMode === "fullscreen",
+    openPresenterView: !isMobile && notesMode === "presenter",
+  };
 }
 
 /** Manages one non-persistent slideshow sidepanel across Excalidraw view focus changes. */
@@ -716,36 +728,34 @@ export class SlideshowSidepanel {
         void this.persistLaunchPreferences();
       },
     );
-    appendSelect<SlideshowWindowMode>(
-      t("windowMode"),
-      this.windowMode,
-      [
-        { value: "fullscreen", label: t("windowModeFullscreen") },
-        { value: "window", label: t("windowModeWindowed") },
-      ],
-      (mode) => {
-        this.windowMode = mode;
-        void this.persistLaunchPreferences();
-      },
-    );
-    appendSelect<SlideshowNotesMode>(
-      t("notesMode"),
-      ea.DEVICE.isMobile ? "slides" : this.notesMode,
-      [
-        { value: "slides", label: t("notesModeSlidesOnly") },
-        {
-          value: "presenter",
-          label: t("notesModeWithNotes"),
-          disabled: ea.DEVICE.isMobile,
+    if (!ea.DEVICE.isMobile) {
+      appendSelect<SlideshowWindowMode>(
+        t("windowMode"),
+        this.windowMode,
+        [
+          { value: "fullscreen", label: t("windowModeFullscreen") },
+          { value: "window", label: t("windowModeWindowed") },
+        ],
+        (mode) => {
+          this.windowMode = mode;
+          void this.persistLaunchPreferences();
         },
-      ],
-      (mode) => {
-        this.notesMode = mode;
-        void this.persistLaunchPreferences();
-        this.lastFingerprint = "";
-        void this.refresh(true);
-      },
-    );
+      );
+      appendSelect<SlideshowNotesMode>(
+        t("notesMode"),
+        this.notesMode,
+        [
+          { value: "slides", label: t("notesModeSlidesOnly") },
+          { value: "presenter", label: t("notesModeWithNotes") },
+        ],
+        (mode) => {
+          this.notesMode = mode;
+          void this.persistLaunchPreferences();
+          this.lastFingerprint = "";
+          void this.refresh(true);
+        },
+      );
+    }
 
     if (!ea.DEVICE.isMobile && this.notesMode === "presenter" && this.displays.length > 1) {
       const displayControls = doc.createElement("div");
@@ -775,12 +785,10 @@ export class SlideshowSidepanel {
       };
       appendDisplayPicker(t("presentationDisplay"), this.presentationDisplayId, (id) => {
         this.presentationDisplayId = id;
-        logDisplayDiagnostics(this.boundView?.ownerWindow ?? this.ownerWindow, `presentation display selected id=${id}`);
         void this.persistDisplayPreferences();
       });
       appendDisplayPicker(t("presenterDisplay"), this.presenterDisplayId, (id) => {
         this.presenterDisplayId = id;
-        logDisplayDiagnostics(this.boundView?.ownerWindow ?? this.ownerWindow, `presenter display selected id=${id}`);
         void this.persistDisplayPreferences();
       });
     }
@@ -962,8 +970,11 @@ export class SlideshowSidepanel {
     await this.animationEditor?.destroy();
     this.animationEditor = null;
     this.animationEditingSlideId = null;
-    const startFullscreen = this.windowMode === "fullscreen";
-    const openPresenterView = !this.options.ea.DEVICE.isMobile && this.notesMode === "presenter";
+    const { startFullscreen, openPresenterView } = resolveDeviceLaunchModes(
+      this.options.ea.DEVICE.isMobile,
+      this.windowMode,
+      this.notesMode,
+    );
     const launchOptions: SidepanelPresentationLaunchOptions = {
       initialSlide,
       startFullscreen,
@@ -976,10 +987,6 @@ export class SlideshowSidepanel {
         : {}),
     };
 
-    logDisplayDiagnostics(
-      view.ownerWindow,
-      `launch device=${this.deviceKey},source=${presentationSourceKey},type=${presentationType},startPreference=${this.startMode},startEffective=${effectiveStartMode},window=${this.windowMode},notes=${this.notesMode},presentationDisplay=${this.presentationDisplayId ?? "none"},presenterDisplay=${this.presenterDisplayId ?? "none"}`,
-    );
 
     if (!startFullscreen) this.hideSidepanelForWindowedPresentation();
     await this.options.startPresentation(presentationSourceKey, launchOptions);
