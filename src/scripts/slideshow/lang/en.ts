@@ -149,7 +149,7 @@ export const en = {
   notesPlaceholder: "Add presenter notes for this slide…",
   notesHint: "Notes support Markdown and are saved automatically.",
   lineReorderBound:
-    "This presentation path has a bound start or end. Unbind both endpoints before reordering line slides.",
+    "This presentation path is an arrow. The arrow has a bound start or end. Slides reordering is disabled until you unbind both endpoints.",
   lineAnimationUnsupported:
     "Element animation currently requires frame-based slides because frames provide stable slide membership.",
   showPresentationPath: "Show presentation path",
