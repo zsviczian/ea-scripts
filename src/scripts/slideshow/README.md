@@ -14,11 +14,16 @@ script is emitted to `build/slideshow/slideshow.md`.
 - Select a frame or line/arrow carrying slideshow metadata and use its Lucide presentation action
   to open/focus the **Slideshow** sidepanel for that element's frame or line deck.
 - After a view is registered, invoking the script from its toolbar icon, Obsidian command, or
-  hotkey starts that view's presentation. Invoking it again while that presentation is active
-  advances the existing controller instead of creating another instance.
+  hotkey starts that view's presentation. A normal invocation starts fullscreen; whether presenter
+  notes open follows the persisted sidepanel setting. Shift resumes saved progress, Alt/Option
+  starts windowed, and Cmd/Ctrl opens/focuses the Slideshow sidepanel instead of presenting.
+  Invoking the script again while a presentation is active advances the existing controller unless
+  Cmd/Ctrl is held, in which case the presentation ends and the sidepanel opens.
 - Slideshow uses `utils.executionSource` so autostart remains registration-only while the very
   first manual toolbar, command, or hotkey invocation can start presenting immediately.
 - The presentation toolbar's settings button ends the active presentation and opens the sidepanel.
+  Presentation-source switching and presenter-view launch are intentionally configured from the
+  sidepanel rather than duplicated on the compact presentation toolbar.
 - The sidepanel is a single non-persistent instance. It follows the most recently focused
   Excalidraw drawing across main-window/popout contexts and shows an empty state for Markdown notes.
 
@@ -91,11 +96,11 @@ The sidepanel also includes a small support link to [Ko-fi](https://ko-fi.com/zs
 
 ## Presentation launch, displays, and PDF behavior
 
-The sidepanel has one compact **Play** button. Launch behavior is configured independently through dropdowns instead of overloading the play action: **Start / Resume / Current**, **Fullscreen / Windowed**, and **Slides only / With Notes**. If both frame and line decks exist, a separate presentation-type dropdown is shown. Changing a dropdown never starts the presentation; pressing Play uses the currently selected combination. These choices are persisted in script settings. Windowed launches hide the entire Excalidraw sidepanel before presentation so the deck receives the full workspace width.
+The sidepanel has one compact **Play** button. Launch behavior is configured independently through dropdowns instead of overloading the play action: **Start / Resume / Current**, **Fullscreen / Windowed**, and **Slides only / With Notes**. If multiple presentation sources exist, a separate presentation selector is shown. Changing a dropdown never starts the presentation; pressing Play uses the currently selected combination. These choices are persisted in script settings. The launch/display controls live in a collapsible **Presentation settings** section so the sorter can use most of the panel height. Windowed launches hide the entire Excalidraw sidepanel before presentation so the deck receives the full workspace width.
 
 On desktop, display selectors are shown only when **With Notes** is selected. The default keeps the presentation on the current/primary display and chooses another display for presenter notes when available. Presentation and notes display selections are persisted in script settings under a stable local device key, allowing different machines that share the script settings to keep independent monitor choices.
 
-Presenter placement is deliberately fail-safe. The host native-window placement is captured **before** a presenter popout is opened. After `openPopoutLeaf()`, Slideshow waits until Obsidian has actually migrated the presenter leaf into a DOM `Window` distinct from the host, then verifies that the two DOM windows resolve to different native Electron `BrowserWindow`s before moving either presenter window. If identity cannot be established unambiguously, presenter movement is skipped instead of risking moving the main Obsidian window. The host is then moved to the requested presentation display and fullscreen is requested only after Electron confirms the display transition. Native restoration uses Electron's `BrowserWindow.id` when available and clamps stale/off-screen bounds to an available display.
+Presenter placement is deliberately fail-safe. The host native-window placement is captured **before** a presenter popout is opened. After `openPopoutLeaf()`, Slideshow waits until Obsidian has actually migrated the presenter leaf into a DOM `Window` distinct from the host, then verifies that the two DOM windows resolve to different native Electron `BrowserWindow`s before moving either presenter window. If identity cannot be established unambiguously, presenter movement is skipped instead of risking moving the main Obsidian window. The host is then moved to the requested presentation display and fullscreen is requested only after Electron confirms the display transition. Native restoration uses Electron's `BrowserWindow.id`, waits for macOS native fullscreen to finish exiting, and briefly monitors the captured host for a late Sidecar/Spaces drift; only a window that moves off its original display or fully off-screen is repaired.
 
 Display handling remains best-effort because Obsidian does not expose a first-class presentation-display API to scripts. For diagnosis, display operations write string-only console messages prefixed with `[Slideshow display debug]`, including popout migration timing, host/presenter DOM identity, native BrowserWindow ids, candidate geometry scores, detected displays, movement confirmation, fullscreen state, and restoration.
 
@@ -110,10 +115,12 @@ Presentation navigation, the toolbar slide picker, and PDF export consume the ca
 - **Toggle fullscreen:** F
 - **Return to the current slide:** Home
 - **Go to the final slide:** End
+- **Normal script invocation:** start fullscreen. Slides-only vs presenter notes follows the sidepanel setting.
 - **Run in a window:** Hold Alt/Option while launching the script.
 - **Resume from the last slide:** Hold Shift while launching the script. Progress is held only in
   temporary runtime memory and is tracked independently for each concrete Excalidraw view, even
   when two views show the same file. It can be combined with Alt/Option.
+- **Open the Slideshow sidepanel:** Hold Cmd on macOS or Ctrl on Windows/Linux while invoking the script.
 
 ## Source structure
 

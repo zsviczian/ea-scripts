@@ -242,6 +242,7 @@ export class SlideshowSidepanel {
   private startMode: SlideshowStartMode = "beginning";
   private windowMode: SlideshowWindowMode = "fullscreen";
   private notesMode: SlideshowNotesMode = "slides";
+  private launchSettingsExpanded = false;
   private preferredPresentationType: PresentationPathType | undefined;
   private displays: SlideshowDisplay[] = [];
   private presentationDisplayId: number | null = null;
@@ -638,9 +639,21 @@ export class SlideshowSidepanel {
       return null;
     }
 
+    const launchSettings = doc.createElement("details");
+    launchSettings.className = "slideshow-sidepanel__launch-settings";
+    launchSettings.open = this.launchSettingsExpanded;
+    launchSettings.addEventListener("toggle", () => {
+      this.launchSettingsExpanded = launchSettings.open;
+    });
+    const launchSummary = doc.createElement("summary");
+    launchSummary.className = "slideshow-sidepanel__launch-settings-summary";
+    launchSummary.textContent = t("presentationSettings");
+    launchSettings.appendChild(launchSummary);
+    root.appendChild(launchSettings);
+
     const launchOptions = doc.createElement("div");
     launchOptions.className = "slideshow-sidepanel__launch-options";
-    root.appendChild(launchOptions);
+    launchSettings.appendChild(launchOptions);
 
     const appendSelect = <T extends string>(
       labelText: string,
@@ -737,7 +750,7 @@ export class SlideshowSidepanel {
     if (!ea.DEVICE.isMobile && this.notesMode === "presenter" && this.displays.length > 1) {
       const displayControls = doc.createElement("div");
       displayControls.className = "slideshow-sidepanel__display-controls";
-      root.appendChild(displayControls);
+      launchSettings.appendChild(displayControls);
       const appendDisplayPicker = (
         labelText: string,
         selectedId: number | null,

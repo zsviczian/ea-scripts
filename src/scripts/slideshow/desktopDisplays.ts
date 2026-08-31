@@ -492,6 +492,48 @@ function safeRestoreBounds(
   };
 }
 
+function resolveCapturedNativeWindow(
+  win: Window,
+  snapshot: NativeWindowPlacementSnapshot,
+): { remote: ElectronRemoteLike; screen: ElectronScreenLike; nativeWindow: ElectronBrowserWindowLike } | null {
+  const remote = getRemote(win);
+  const screen = remote?.screen;
+  if (!remote || !screen) return null;
+  const nativeWindow =
+    getNativeWindowById(remote, snapshot.windowId) ??
+    (snapshot.windowId === null ? getNativeWindow(win) : null);
+  return nativeWindow ? { remote, screen, nativeWindow } : null;
+}
+
+function applyRestorePlacement(
+  screen: ElectronScreenLike,
+  nativeWindow: ElectronBrowserWindowLike,
+  snapshot: NativeWindowPlacementSnapshot,
+): { x: number; y: number; width: number; height: number } {
+  const requested = safeRestoreBounds(
+    snapshot,
+    screen.getAllDisplays(),
+    screen.getPrimaryDisplay(),
+  );
+  if (nativeWindow.isMaximized?.()) nativeWindow.unmaximize?.();
+  nativeWindow.setBounds(requested, false);
+  if (snapshot.maximized) nativeWindow.maximize?.();
+  return requested;
+}
+
+function placementNeedsRepair(
+  screen: ElectronScreenLike,
+  nativeWindow: ElectronBrowserWindowLike,
+  snapshot: NativeWindowPlacementSnapshot,
+): boolean {
+  const bounds = nativeWindow.getBounds();
+  const displays = screen.getAllDisplays();
+  const visible = displays.some((display) => rectsOverlap(bounds, display.bounds));
+  if (!visible) return true;
+  if (snapshot.sourceDisplayId === null) return false;
+  return screen.getDisplayMatching(bounds).id !== snapshot.sourceDisplayId;
+}
+
 /** Restores the exact native window captured by moveWindowToDisplay, never a geometry-rematched peer. */
 export function restoreWindowPlacement(
   win: Window,
@@ -499,31 +541,18 @@ export function restoreWindowPlacement(
 ): void {
   if (!snapshot) return;
   try {
-    const remote = getRemote(win);
-    const screen = remote?.screen;
-    if (!remote || !screen) {
-      debug(`restore window=${snapshot.windowId ?? "?"}: Electron remote/screen unavailable`);
+    const resolved = resolveCapturedNativeWindow(win, snapshot);
+    if (!resolved) {
+      debug(`restore window=${snapshot.windowId ?? "?"}: captured native window unavailable`);
       return;
     }
-    const nativeWindow =
-      getNativeWindowById(remote, snapshot.windowId) ??
-      (snapshot.windowId === null ? getNativeWindow(win) : null);
-    if (!nativeWindow) {
-      debug(`restore window=${snapshot.windowId ?? "?"}: captured native window no longer exists`);
-      return;
-    }
+    const { screen, nativeWindow } = resolved;
     const before = nativeWindow.getBounds();
-    const requested = safeRestoreBounds(
-      snapshot,
-      screen.getAllDisplays(),
-      screen.getPrimaryDisplay(),
-    );
+    const requested = safeRestoreBounds(snapshot, screen.getAllDisplays(), screen.getPrimaryDisplay());
     debug(
       `restore begin window=${snapshot.windowId ?? "?"},current(${boundsText(before)}),snapshot(${boundsText(snapshot.bounds)}),requested(${boundsText(requested)}),sourceDisplay=${snapshot.sourceDisplayId ?? "?"}`,
     );
-    if (nativeWindow.isMaximized?.()) nativeWindow.unmaximize?.();
-    nativeWindow.setBounds(requested, false);
-    if (snapshot.maximized) nativeWindow.maximize?.();
+    applyRestorePlacement(screen, nativeWindow, snapshot);
     const after = nativeWindow.getBounds();
     debug(
       `restore end window=${snapshot.windowId ?? "?"},bounds(${boundsText(after)}),display=${screen.getDisplayMatching(after).id},max=${nativeWindow.isMaximized?.() ?? false}`,
@@ -531,4 +560,54 @@ export function restoreWindowPlacement(
   } catch (error) {
     debug(`restore window=${snapshot.windowId ?? "?"}: failed: ${errorText(error)}`);
   }
+}
+
+/**
+ * Restores a moved/fullscreen host after macOS has finished its native fullscreen transition.
+ *
+ * Safari/Electron's DOM fullscreen promise can resolve before macOS has finished moving the native
+ * window out of its fullscreen Space. The OS can therefore overwrite a correct setBounds call a
+ * fraction of a second later. This helper waits for native fullscreen to clear, restores once, then
+ * watches briefly and repairs only if the captured window drifts off its original display or fully
+ * off-screen.
+ */
+export async function restoreWindowPlacementStable(
+  win: Window,
+  snapshot: NativeWindowPlacementSnapshot | null,
+  timeoutMs = 2400,
+  monitorMs = 900,
+): Promise<void> {
+  if (!snapshot) return;
+  const resolved = resolveCapturedNativeWindow(win, snapshot);
+  if (!resolved) {
+    debug(`stable restore window=${snapshot.windowId ?? "?"}: captured native window unavailable`);
+    return;
+  }
+  const { screen, nativeWindow } = resolved;
+  const started = Date.now();
+  while (nativeWindow.isFullScreen?.() && Date.now() - started < timeoutMs) {
+    await new Promise<void>((resolve) => win.setTimeout(resolve, 75));
+  }
+  debug(
+    `stable restore fullscreen-clear window=${snapshot.windowId ?? "?"},elapsed=${Date.now() - started}ms,fullscreen=${nativeWindow.isFullScreen?.() ?? false}`,
+  );
+
+  restoreWindowPlacement(win, snapshot);
+  const monitorStarted = Date.now();
+  let repairs = 0;
+  while (Date.now() - monitorStarted < monitorMs) {
+    await new Promise<void>((resolve) => win.setTimeout(resolve, 125));
+    if (nativeWindow.isFullScreen?.()) continue;
+    if (!placementNeedsRepair(screen, nativeWindow, snapshot)) continue;
+    repairs += 1;
+    const before = nativeWindow.getBounds();
+    debug(
+      `stable restore repair=${repairs},window=${snapshot.windowId ?? "?"},before(${boundsText(before)}),display=${screen.getDisplayMatching(before).id}`,
+    );
+    applyRestorePlacement(screen, nativeWindow, snapshot);
+  }
+  const finalBounds = nativeWindow.getBounds();
+  debug(
+    `stable restore complete window=${snapshot.windowId ?? "?"},repairs=${repairs},bounds(${boundsText(finalBounds)}),display=${screen.getDisplayMatching(finalBounds).id},visible=${screen.getAllDisplays().some((display) => rectsOverlap(finalBounds, display.bounds))}`,
+  );
 }

@@ -6,9 +6,11 @@ import {
   chooseDefaultDisplayTargets,
   resolveSameNativeWindow,
   restoreWindowPlacement,
+  restoreWindowPlacementStable,
   type SlideshowDisplay,
 } from "../desktopDisplays";
 import { getPresenterKeyboardAction, waitForPresenterOwnerWindow } from "../PresenterViewController";
+import { resolveManualInvocationIntent } from "../slideshowLauncher";
 import { buildFrameSlideDeck, type FrameDeckSlide } from "../SlideDeck";
 import { getHiddenBuildElementIds } from "../SlidePreviewService";
 import { buildPresentationState } from "../presentationState";
@@ -394,6 +396,102 @@ describe("slideshow checkpoint 4 presenter state", () => {
       presenterDisplayId: 11,
     });
     expect(settings.unrelated).toBe("keep");
+  });
+
+  it("maps script-button modifiers to panel, resume, fullscreen, and windowed actions", () => {
+    const base = { altKey: false, shiftKey: false, ctrlKey: false, metaKey: false };
+    expect(resolveManualInvocationIntent(base)).toEqual({
+      openSidepanel: false,
+      resume: false,
+      startFullscreen: true,
+    });
+    expect(resolveManualInvocationIntent({ ...base, shiftKey: true })).toEqual({
+      openSidepanel: false,
+      resume: true,
+      startFullscreen: true,
+    });
+    expect(resolveManualInvocationIntent({ ...base, altKey: true })).toEqual({
+      openSidepanel: false,
+      resume: false,
+      startFullscreen: false,
+    });
+    expect(resolveManualInvocationIntent({ ...base, altKey: true, shiftKey: true })).toEqual({
+      openSidepanel: false,
+      resume: true,
+      startFullscreen: false,
+    });
+    expect(resolveManualInvocationIntent({ ...base, metaKey: true })).toEqual({
+      openSidepanel: true,
+      resume: false,
+      startFullscreen: true,
+    });
+    expect(resolveManualInvocationIntent({ ...base, ctrlKey: true })).toEqual({
+      openSidepanel: true,
+      resume: false,
+      startFullscreen: true,
+    });
+  });
+
+  it("repairs a late macOS window drift after fullscreen restoration", async () => {
+    let bounds = { x: -1100, y: 25, width: 1000, height: 700 };
+    let setCount = 0;
+    let driftScheduled = false;
+    const nativeWindow = {
+      id: 7,
+      getBounds: () => ({ ...bounds }),
+      setBounds: (next: typeof bounds) => {
+        bounds = { ...next };
+        setCount += 1;
+        if (!driftScheduled) {
+          driftScheduled = true;
+          setTimeout(() => {
+            bounds = { x: -1500, y: -900, width: 1000, height: 700 };
+          }, 20);
+        }
+      },
+      isMaximized: () => false,
+      isFullScreen: () => false,
+    };
+    const displays = [
+      { id: 1, bounds: { x: 0, y: 0, width: 1680, height: 1050 }, workArea: { x: 0, y: 25, width: 1680, height: 1025 } },
+      { id: 5, bounds: { x: -1194, y: 0, width: 1194, height: 834 }, workArea: { x: -1194, y: 25, width: 1194, height: 809 } },
+    ];
+    const remote = {
+      getCurrentWindow: () => nativeWindow,
+      BrowserWindow: {
+        getAllWindows: () => [nativeWindow],
+        fromId: (id: number) => (id === 7 ? nativeWindow : null),
+      },
+      screen: {
+        getAllDisplays: () => displays,
+        getPrimaryDisplay: () => displays[0],
+        getDisplayMatching: (candidate: typeof bounds) =>
+          candidate.x < 0 ? displays[1] : displays[0],
+      },
+    };
+    const fakeWindow = {
+      require: () => remote,
+      setTimeout: globalThis.setTimeout.bind(globalThis),
+      screenX: 0,
+      screenY: 25,
+      outerWidth: 1680,
+      outerHeight: 1025,
+    } as unknown as Window;
+
+    await restoreWindowPlacementStable(
+      fakeWindow,
+      {
+        windowId: 7,
+        sourceDisplayId: 1,
+        bounds: { x: 0, y: 25, width: 1680, height: 1025 },
+        maximized: false,
+      },
+      100,
+      180,
+    );
+
+    expect(setCount).toBeGreaterThanOrEqual(2);
+    expect(bounds).toEqual({ x: 0, y: 25, width: 1680, height: 1025 });
   });
 
 });

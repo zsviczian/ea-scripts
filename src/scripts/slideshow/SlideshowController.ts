@@ -12,7 +12,7 @@ import {
   captureWindowPlacement,
   logDisplayDiagnostics,
   moveWindowToDisplay,
-  restoreWindowPlacement,
+  restoreWindowPlacementStable,
   waitForWindowOnDisplay,
   type NativeWindowPlacementSnapshot,
 } from "./desktopDisplays";
@@ -27,7 +27,6 @@ import {
   type Direction,
   type EditableLinearElement,
   type PresentationSetup,
-  type PresentationSourceKey,
   type PresentationState,
   type SlideshowConfig,
   type SlideshowIcons,
@@ -39,7 +38,6 @@ export interface SlideshowControllerOptions {
   hostView: ScriptExcalidrawView;
   statusBarElement: HTMLElement | null;
   setup: PresentationSetup;
-  alternatePresentationSourceKey: PresentationSourceKey | null;
   config: SlideshowConfig;
   icons: SlideshowIcons;
   initialSlide: number;
@@ -51,7 +49,6 @@ export interface SlideshowControllerOptions {
   onSlideChange(slide: number): void;
   onExit(): void;
   openSidepanel(): Promise<void>;
-  switchPresentation(presentationSourceKey: PresentationSourceKey, startFullscreen: boolean): Promise<void>;
 }
 
 /** Owns one active presentation from setup through guaranteed animation/path restoration. */
@@ -64,7 +61,6 @@ export class SlideshowController {
   private readonly ownerDocument: Document;
   private readonly contentElement: ScriptContentElement;
   private readonly setup: PresentationSetup;
-  private readonly alternatePresentationSourceKey: PresentationSourceKey | null;
   private readonly config: SlideshowConfig;
   private readonly icons: SlideshowIcons;
   private readonly statusBarElement: HTMLElement | null;
@@ -76,10 +72,6 @@ export class SlideshowController {
   private readonly onSlideChange: (slide: number) => void;
   private readonly onExit: () => void;
   private readonly openSidepanel: () => Promise<void>;
-  private readonly switchPresentation: (
-    presentationSourceKey: PresentationSourceKey,
-    startFullscreen: boolean,
-  ) => Promise<void>;
   private readonly animationRuntime: AnimationRuntime | null;
   private controls: PresentationControls | null = null;
   private presenter: PresenterViewController | null = null;
@@ -104,7 +96,6 @@ export class SlideshowController {
     this.ownerDocument = options.hostView.ownerDocument;
     this.contentElement = options.hostView.contentEl;
     this.setup = options.setup;
-    this.alternatePresentationSourceKey = options.alternatePresentationSourceKey;
     this.config = options.config;
     this.icons = options.icons;
     this.statusBarElement = options.statusBarElement;
@@ -120,7 +111,6 @@ export class SlideshowController {
     this.onSlideChange = options.onSlideChange;
     this.onExit = options.onExit;
     this.openSidepanel = options.openSidepanel;
-    this.switchPresentation = options.switchPresentation;
     this.animationRuntime =
       options.setup.pathType === "frame"
         ? new AnimationRuntime({
@@ -272,9 +262,6 @@ export class SlideshowController {
       contentElement: this.contentElement,
       slidesCount: this.setup.slides.length,
       pathType: this.setup.pathType,
-      alternatePresentationType: this.alternatePresentationSourceKey
-        ? (this.alternatePresentationSourceKey === "frame" ? "frame" : "line")
-        : null,
       slideTitles: this.setup.slideTitles,
       shouldOfferPathVisibility: this.setup.shouldHidePathAfterPresentation,
       isPathHidden: this.setup.isHidden,
@@ -308,24 +295,14 @@ export class SlideshowController {
           if (this.setup.shouldHidePathAfterPresentation) void this.togglePathVisibility(false);
           void this.exit(true);
         },
-        switchPresentation: () => void this.switchToAlternatePresentation(),
         openSidepanel: () => {
           void this.exit().then(() => this.openSidepanel());
         },
-        openPresenterView: () => void this.openPresenterView(),
         print: (event) => void this.print(event),
         finish: () => void this.exit(),
       },
     });
     this.controls.create();
-  }
-
-  private async switchToAlternatePresentation(): Promise<void> {
-    if (!this.alternatePresentationSourceKey) return;
-    const startFullscreen = this.isFullscreen;
-    const alternate = this.alternatePresentationSourceKey;
-    await this.exit();
-    await this.switchPresentation(alternate, startFullscreen);
   }
 
   private toggleLaser(): boolean {
@@ -387,7 +364,7 @@ export class SlideshowController {
     this.animationRuntime?.startPendingTimer();
   }
 
-  private async exitFullscreen(refocus = true): Promise<void> {
+  private async exitFullscreen(refocus = true, restoreHostPlacement = true): Promise<void> {
     if (!this.isFullscreen) return;
     this.preventFullscreenExit = true;
     this.animationRuntime?.pauseTimedStep();
@@ -399,10 +376,9 @@ export class SlideshowController {
     await this.waitForExcalidrawResize();
     this.controls?.resetPosition(false);
     this.isFullscreen = false;
-    if (this.hostWindowPlacement && this.hostPlacementPrepared) {
-      restoreWindowPlacement(this.ownerWindow, this.hostWindowPlacement);
+    if (restoreHostPlacement && this.hostWindowPlacement && this.hostPlacementPrepared) {
+      await restoreWindowPlacementStable(this.ownerWindow, this.hostWindowPlacement);
       this.hostPlacementPrepared = false;
-      await sleepInWindow(this.ownerWindow, 100);
     }
     if (refocus) await this.scrollToSlide(this.slide, 1);
     this.animationRuntime?.startPendingTimer();
@@ -668,12 +644,12 @@ export class SlideshowController {
       this.isLaserOn = false;
       if (this.statusBarElement) this.statusBarElement.style.display = "inherit";
       if (openForEdit) this.hostView.preventAutozoom();
-      await this.exitFullscreen(false);
+      await this.exitFullscreen(false, false);
       if (this.hostWindowPlacement) {
-        restoreWindowPlacement(this.ownerWindow, this.hostWindowPlacement);
+        const originalPlacement = this.hostWindowPlacement;
         this.hostWindowPlacement = null;
         this.hostPlacementPrepared = false;
-        await sleepInWindow(this.ownerWindow, 150);
+        await restoreWindowPlacementStable(this.ownerWindow, originalPlacement);
         logDisplayDiagnostics(this.ownerWindow, "exit after host restore");
       }
       await this.waitForExcalidrawResize();

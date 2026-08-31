@@ -3,9 +3,14 @@
  * @overview View-aware presentation, element-action, and sidepanel launch helpers.
  */
 
+import {
+  chooseDefaultDisplayTargets,
+  getAvailableDisplays,
+  getCurrentDisplayId,
+  getSlideshowDeviceKey,
+} from "./desktopDisplays";
 import { getSlideshowIcons } from "./icons";
 import {
-  getAlternatePresentationSourceKey,
   getLinePresentationSourceKey,
   resolvePresentationSetup,
   resolvePresentationSource,
@@ -15,6 +20,10 @@ import { SlideshowController } from "./SlideshowController";
 import { SlideshowSidepanel } from "./SlideshowSidepanel";
 import { printSlideshowToPdf } from "./printToPdf";
 import { readFrameSlideshowData } from "./slideshowMetadata";
+import {
+  loadSlideshowDisplayPreferences,
+  loadSlideshowLaunchPreferences,
+} from "./slideshowSettings";
 import {
   getSlideshowProgress,
   getSlideshowProgressSource,
@@ -37,9 +46,25 @@ export interface PresentationLaunchOptions {
   presenterDisplayId?: number;
 }
 
+export interface ManualSlideshowInvocationIntent {
+  openSidepanel: boolean;
+  resume: boolean;
+  startFullscreen: boolean;
+}
+
+/** Resolves the script-button modifier contract without depending on DOM event timing. */
+export function resolveManualInvocationIntent(
+  modifiers: Pick<ScriptExcalidrawView["modifierKeyDown"], "altKey" | "shiftKey" | "ctrlKey" | "metaKey">,
+): ManualSlideshowInvocationIntent {
+  return {
+    openSidepanel: modifiers.ctrlKey || modifiers.metaKey,
+    resume: modifiers.shiftKey,
+    startFullscreen: !modifiers.altKey,
+  };
+}
+
 function resolveLaunchModifiers(view: ScriptExcalidrawView): { startFullscreen: boolean } {
-  const ctrlKey = view.modifierKeyDown.ctrlKey || view.modifierKeyDown.metaKey;
-  return { startFullscreen: !(view.modifierKeyDown.altKey || ctrlKey) };
+  return { startFullscreen: !view.modifierKeyDown.altKey };
 }
 
 function getElementPresentationSourceKey(element: ExcalidrawElement): PresentationSourceKey | null {
@@ -101,7 +126,6 @@ export async function startSlideshowPresentation(
     launch.presentationSourceKey ?? launch.presentationType ?? choices.defaultSourceKey ?? undefined;
   const setup = resolvePresentationSetup(ea, api, t, requestedSource);
   if (!setup || setup.slides.length === 0) return;
-  const alternatePresentationSourceKey = getAlternatePresentationSourceKey(choices, setup.sourceKey);
   app.workspace.setActiveLeaf(view.leaf, { focus: true });
   const modifierDefaults = resolveLaunchModifiers(view);
   const savedProgressType = getSlideshowProgressType(view);
@@ -120,7 +144,6 @@ export async function startSlideshowPresentation(
     hostView: view,
     statusBarElement: view.ownerDocument.querySelector<HTMLElement>("div.status-bar"),
     setup,
-    alternatePresentationSourceKey,
     config,
     icons: getSlideshowIcons(ea),
     initialSlide,
@@ -142,11 +165,6 @@ export async function startSlideshowPresentation(
       }
     },
     openSidepanel: () => openSlideshowSidepanel(context, setup.sourceKey),
-    switchPresentation: (presentationSourceKey, startFullscreen) =>
-      startSlideshowPresentation(context, {
-        presentationSourceKey,
-        startFullscreen,
-      }),
   });
   runtime.presentations.set(view, controller);
   setSlideshowProgress(view, initialSlide, setup.sourceKey);
@@ -269,13 +287,49 @@ export async function openSlideshowSidepanel(
 
 /** Routes a script-button, command-palette, or hotkey invocation for the current view. */
 export async function runManualSlideshowInvocation(context: SlideshowViewContext): Promise<void> {
+  const intent = resolveManualInvocationIntent(context.view.modifierKeyDown);
+  if (intent.openSidepanel) {
+    await openSlideshowSidepanel(context);
+    return;
+  }
+
   const active = getSlideshowRuntime().presentations.get(context.view);
   if (active) {
     active.advance();
     return;
   }
+
   context.ea.setView(context.view);
-  await startSlideshowPresentation(context, {
-    resume: context.view.modifierKeyDown.shiftKey,
-  });
+  const preferences = loadSlideshowLaunchPreferences(context.ea);
+  const openPresenterView = !context.ea.DEVICE.isMobile && preferences.notesMode === "presenter";
+  const launch: PresentationLaunchOptions = {
+    resume: intent.resume,
+    startFullscreen: intent.startFullscreen,
+    openPresenterView,
+  };
+
+  if (openPresenterView) {
+    const ownerWindow = context.view.ownerWindow;
+    const deviceKey = getSlideshowDeviceKey(ownerWindow);
+    const savedDisplays = loadSlideshowDisplayPreferences(context.ea, deviceKey);
+    const displays = getAvailableDisplays(ownerWindow);
+    const defaults = chooseDefaultDisplayTargets(displays, getCurrentDisplayId(ownerWindow));
+    const validDisplayIds = new Set(displays.map((display) => display.id));
+    const presentationDisplayId =
+      savedDisplays?.presentationDisplayId !== null &&
+      savedDisplays?.presentationDisplayId !== undefined &&
+      validDisplayIds.has(savedDisplays.presentationDisplayId)
+        ? savedDisplays.presentationDisplayId
+        : defaults.presentationDisplayId;
+    const presenterDisplayId =
+      savedDisplays?.presenterDisplayId !== null &&
+      savedDisplays?.presenterDisplayId !== undefined &&
+      validDisplayIds.has(savedDisplays.presenterDisplayId)
+        ? savedDisplays.presenterDisplayId
+        : defaults.presenterDisplayId;
+    if (presentationDisplayId !== null) launch.presentationDisplayId = presentationDisplayId;
+    if (presenterDisplayId !== null) launch.presenterDisplayId = presenterDisplayId;
+  }
+
+  await startSlideshowPresentation(context, launch);
 }

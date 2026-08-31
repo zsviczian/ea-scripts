@@ -38,6 +38,7 @@ export const en = {
   startPresentation: "Start presentation",
   startFromBeginning: "From beginning",
   presentationStartOptions: "Presentation start options",
+  presentationSettings: "Presentation settings",
   startWithPresenterView: "With presenter notes",
   startFromCurrentSlide: "Current slide",
   startFullscreen: "Start fullscreen",

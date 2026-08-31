@@ -17,9 +17,7 @@ export interface PresentationControlCallbacks {
   toggleFullscreen(): void;
   togglePathVisibility(hidden: boolean): void;
   editSlide(): void;
-  switchPresentation(): void;
   openSidepanel(): void;
-  openPresenterView(): void;
   print(event: MouseEvent): void;
   finish(): void;
 }
@@ -31,7 +29,6 @@ export interface PresentationControlsOptions {
   contentElement: ScriptContentElement;
   slidesCount: number;
   pathType: PresentationPathType;
-  alternatePresentationType: PresentationPathType | null;
   slideTitles: readonly string[];
   shouldOfferPathVisibility: boolean;
   isPathHidden: boolean;
@@ -64,7 +61,6 @@ export class PresentationControls {
       contentElement,
       slidesCount,
       pathType,
-      alternatePresentationType,
       slideTitles,
       shouldOfferPathVisibility,
       isPathHidden,
@@ -119,6 +115,7 @@ export class PresentationControls {
             attr: {
               style: "margin-left: calc(var(--default-button-size)*0.25);",
               "aria-label": t("previousSlide"),
+              title: t("previousSlide"),
             },
           },
           (button) => {
@@ -138,6 +135,7 @@ export class PresentationControls {
                 color: var(--color-gray-100);
                 cursor: pointer;`,
               "aria-label": t("navigateToSlide"),
+              title: t("navigateToSlide"),
             },
           },
           (selectElement) => {
@@ -161,7 +159,7 @@ export class PresentationControls {
 
         buttonList.createEl(
           "button",
-          { attr: { "aria-label": t("nextSlide") } },
+          { attr: { "aria-label": t("nextSlide"), title: t("nextSlide") } },
           (button) => {
             button.innerHTML = icons.rightArrow;
             button.onclick = callbacks.next;
@@ -179,7 +177,7 @@ export class PresentationControls {
 
         buttonList.createEl(
           "button",
-          { attr: { "aria-label": t("toggleLaser") } },
+          { attr: { "aria-label": t("toggleLaser"), title: t("toggleLaser") } },
           (button) => {
             button.innerHTML = icons.laserOff;
             button.onclick = () => {
@@ -190,7 +188,7 @@ export class PresentationControls {
         );
         buttonList.createEl(
           "button",
-          { attr: { "aria-label": t("refocusSlide") } },
+          { attr: { "aria-label": t("refocusSlide"), title: t("refocusSlide") } },
           (button) => {
             button.innerHTML = icons.refocus;
             button.onclick = callbacks.refocus;
@@ -198,7 +196,7 @@ export class PresentationControls {
         );
         buttonList.createEl(
           "button",
-          { attr: { "aria-label": t("toggleFullscreen") } },
+          { attr: { "aria-label": t("toggleFullscreen"), title: t("toggleFullscreen") } },
           (button) => {
             this.fullscreenButton = button;
             button.innerHTML = this.options.isFullscreen ? icons.minimize : icons.maximize;
@@ -211,7 +209,7 @@ export class PresentationControls {
             let pathHidden = isPathHidden;
             buttonList.createEl(
               "button",
-              { attr: { "aria-label": t("pathVisibility") } },
+              { attr: { "aria-label": t("pathVisibility"), title: t("pathVisibility") } },
               (button) => {
                 const renderPathVisibility = (): void => {
                   const label = pathHidden
@@ -219,6 +217,7 @@ export class PresentationControls {
                     : t("keepPresentationPathVisible");
                   button.innerHTML = pathHidden ? icons.eyeOff : icons.eye;
                   button.setAttribute("aria-label", label);
+                  button.setAttribute("title", label);
                   button.setAttribute("aria-pressed", String(pathHidden));
                 };
                 renderPathVisibility();
@@ -232,7 +231,7 @@ export class PresentationControls {
           }
           buttonList.createEl(
             "button",
-            { attr: { "aria-label": t("editSlide") } },
+            { attr: { "aria-label": t("editSlide"), title: t("editSlide") } },
             (button) => {
               button.innerHTML = icons.edit;
               button.onclick = callbacks.editSlide;
@@ -240,25 +239,10 @@ export class PresentationControls {
           );
         }
 
-        if (alternatePresentationType) {
-          const switchLabel =
-            alternatePresentationType === "frame"
-              ? t("switchToFrameSlideshow")
-              : t("switchToLineSlideshow");
-          buttonList.createEl(
-            "button",
-            { attr: { "aria-label": switchLabel } },
-            (button) => {
-              button.innerHTML =
-                pathType === "frame" ? icons.frameSlideshow : icons.lineSlideshow;
-              button.onclick = callbacks.switchPresentation;
-            },
-          );
-        }
 
         buttonList.createEl(
           "button",
-          { attr: { "aria-label": t("openSlideshowPanel") } },
+          { attr: { "aria-label": t("openSlideshowPanel"), title: t("openSlideshowPanel") } },
           (button) => {
             button.innerHTML = icons.settings;
             button.onclick = callbacks.openSidepanel;
@@ -268,18 +252,11 @@ export class PresentationControls {
         if (ea.DEVICE.isDesktop) {
           buttonList.createEl(
             "button",
-            { attr: { "aria-label": t("presenterView") } },
-            (button) => {
-              button.innerHTML = icons.presentation;
-              button.onclick = callbacks.openPresenterView;
-            },
-          );
-          buttonList.createEl(
-            "button",
             {
               attr: {
                 style: "margin-right: calc(var(--default-button-size)*0.25);",
                 "aria-label": t("printPdf", { width: printSlideWidth, height: printSlideHeight }),
+                title: t("printPdf", { width: printSlideWidth, height: printSlideHeight }),
               },
             },
             (button) => {
@@ -294,6 +271,7 @@ export class PresentationControls {
             attr: {
               style: "margin-right: calc(var(--default-button-size)*0.25);",
               "aria-label": t("endPresentation"),
+              title: t("endPresentation"),
             },
           },
           (button) => {
