@@ -44,7 +44,12 @@ import {
 } from "../slideshowRuntime";
 import { runSlideshow } from "../run";
 import { buildFrameSlideDeck } from "../SlideDeck";
-import { SlideSorter } from "../SlideSorter";
+import {
+  getDragAutoScrollVelocity,
+  getDropInsertionIndex,
+  getDropMoveTarget,
+  SlideSorter,
+} from "../SlideSorter";
 import {
   chooseSidepanelPresentationSourceKey,
   chooseSidepanelPresentationType,
@@ -54,6 +59,7 @@ import {
   getResumeSlideForPresentation,
   resolveDeviceLaunchModes,
   getSceneSelectedSlideId,
+  getSorterSceneSelectionSignature,
   SlideshowSidepanel,
 } from "../SlideshowSidepanel";
 
@@ -74,10 +80,7 @@ function frame(
   } as unknown as ExcalidrawFrameElement;
 }
 
-function line(
-  customData?: Record<string, unknown>,
-  id = "path",
-): ExcalidrawLinearElement {
+function line(customData?: Record<string, unknown>, id = "path"): ExcalidrawLinearElement {
   return {
     id,
     type: "line",
@@ -406,26 +409,32 @@ describe("slideshow checkpoint 2 deck consumption", () => {
   });
 
   it("enumerates multiple named line presentations and disambiguates duplicate names", () => {
-    const first = line({
-      slideshow: {
-        schemaVersion: 2,
-        kind: "path",
-        name: "Lecture",
-        hidden: false,
-        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
-        slides: [{ id: "a1" }, { id: "a2" }, { id: "a3" }],
+    const first = line(
+      {
+        slideshow: {
+          schemaVersion: 2,
+          kind: "path",
+          name: "Lecture",
+          hidden: false,
+          originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+          slides: [{ id: "a1" }, { id: "a2" }, { id: "a3" }],
+        },
       },
-    }, "path-a");
-    const second = line({
-      slideshow: {
-        schemaVersion: 2,
-        kind: "path",
-        name: "Lecture",
-        hidden: false,
-        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
-        slides: [{ id: "b1" }, { id: "b2" }, { id: "b3" }],
+      "path-a",
+    );
+    const second = line(
+      {
+        slideshow: {
+          schemaVersion: 2,
+          kind: "path",
+          name: "Lecture",
+          hidden: false,
+          originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+          slides: [{ id: "b1" }, { id: "b2" }, { id: "b3" }],
+        },
       },
-    }, "path-b");
+      "path-b",
+    );
     const ordinary = line(undefined, "ordinary");
     const elements: ExcalidrawElement[] = [frame("frame-a", "Frames"), first, second, ordinary];
     const ea = {
@@ -438,7 +447,9 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(choices.lines.map((source) => source.key)).toEqual(["line:path-a", "line:path-b"]);
     expect(resolvePresentationSource(choices, "line:path-b")?.pathElement?.id).toBe("path-b");
     expect(getAlternatePresentationSourceKey(choices, "frame")).toBeNull();
-    expect(chooseSidepanelPresentationSourceKey(choices, "line:path-b", "frame")).toBe("line:path-b");
+    expect(chooseSidepanelPresentationSourceKey(choices, "line:path-b", "frame")).toBe(
+      "line:path-b",
+    );
     expect(getPresentationSourceLabels(choices, "Frames", "Line presentation")).toEqual([
       { key: "frame", label: "Frames" },
       { key: "line:path-a", label: "Lecture (1)" },
@@ -484,6 +495,24 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(getSceneSelectedSlideId(resolved, selection({ a: true, b: true }))).toBeNull();
   });
 
+  it("changes sorter navigation state only when the canvas selection changes", () => {
+    const first = getSorterSceneSelectionSignature({
+      selectedElementIds: { frameA: true },
+      selectedLinearElement: null,
+    });
+    const sameSelectionAfterMetadataChange = getSorterSceneSelectionSignature({
+      selectedElementIds: { frameA: true },
+      selectedLinearElement: null,
+    });
+    const nextSelection = getSorterSceneSelectionSignature({
+      selectedElementIds: { frameB: true },
+      selectedLinearElement: null,
+    });
+
+    expect(sameSelectionAfterMetadataChange).toBe(first);
+    expect(nextSelection).not.toBe(first);
+  });
+
   it("maps selected line points only when every point belongs to one slide pair", () => {
     const path = line({
       slideshow: {
@@ -491,7 +520,11 @@ describe("slideshow checkpoint 2 deck consumption", () => {
         kind: "path",
         hidden: false,
         originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
-        slides: [{ id: "slideshow-path-1" }, { id: "slideshow-path-2" }, { id: "slideshow-path-3" }],
+        slides: [
+          { id: "slideshow-path-1" },
+          { id: "slideshow-path-2" },
+          { id: "slideshow-path-3" },
+        ],
       },
     });
     const ea = {
@@ -827,13 +860,45 @@ describe("slideshow checkpoint 2 element actions", () => {
     vi.unstubAllGlobals();
   });
 
+  it("offers slideshow editing on every frame when the scene contains a presentation frame", () => {
+    vi.stubGlobal("app", {});
+    const slideshowFrame = frame("a", "Alpha", {
+      slideshow: { schemaVersion: 2, kind: "frame", order: 0 },
+    });
+    const plainFrame = frame("b", "Bravo");
+    let provider:
+      ((element: ExcalidrawElement) => readonly SelectedElementMenuAction[]) | undefined;
+    const view = {} as ScriptExcalidrawView;
+    const ea = {
+      registerElementActionProvider: (
+        getActions: (element: ExcalidrawElement) => readonly SelectedElementMenuAction[],
+      ) => {
+        provider = getActions;
+        return () => undefined;
+      },
+      getViewElements: () => [slideshowFrame, plainFrame],
+    } as unknown as ExcalidrawAutomate;
+
+    registerSlideshowElementActionProvider({
+      ea,
+      utils: {} as ScriptUtils,
+      view,
+      config: {} as never,
+      t: createSlideshowTranslator("en"),
+    });
+
+    expect(provider?.(plainFrame)).toEqual([
+      expect.objectContaining({ id: "edit-slideshow", title: "Edit slideshow" }),
+    ]);
+    resetSlideshowRuntimeForTests();
+    vi.unstubAllGlobals();
+  });
+
   it("clears a selected line when the dropdown explicitly switches to frames", () => {
     const selectElements = vi.fn();
-    clearLineSelectionForDeckSwitch(
-      "frame",
-      line(),
-      { selectElements } as unknown as ExcalidrawAPI,
-    );
+    clearLineSelectionForDeckSwitch("frame", line(), {
+      selectElements,
+    } as unknown as ExcalidrawAPI);
     expect(selectElements).toHaveBeenCalledOnce();
     expect(selectElements).toHaveBeenCalledWith([]);
   });
@@ -882,6 +947,82 @@ describe("slideshow checkpoint 2 element actions", () => {
     expect(scrollIntoView).toHaveBeenCalledTimes(2);
     expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "center" });
   });
+
+  it("pins sorter selection while a frame animation editor is active", async () => {
+    const sorter = new SlideSorter({
+      ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
+      container: {
+        ownerDocument: { defaultView: {} },
+      } as unknown as HTMLElement,
+      deck: buildFrameSlideDeck([frame("a", "Alpha"), frame("b", "Bravo")]),
+      previewService: {} as SlidePreviewService,
+      icons: {} as never,
+      t: createSlideshowTranslator("en"),
+      reorderEnabled: true,
+      animationEditingSlideId: "a",
+      callbacks: {
+        move: async () => undefined,
+        toggleInclusion: async () => undefined,
+        zoomToSlide: () => undefined,
+        saveNotes: async () => undefined,
+        requestAnimationEditor: () => undefined,
+        editLineSlide: async () => undefined,
+        notesBlurred: () => undefined,
+      },
+    });
+
+    await sorter.selectFromScene("b");
+
+    expect(sorter.getSelectedSlideId()).toBe("a");
+  });
+
+  it("resolves moving insertion gaps and edge autoscroll", () => {
+    expect(getDropInsertionIndex([100, 200, 300], 50)).toBe(0);
+    expect(getDropInsertionIndex([100, 200, 300], 250)).toBe(2);
+    expect(getDropInsertionIndex([100, 200, 300], 350)).toBe(3);
+
+    expect(getDropMoveTarget(1, 0, 4)).toBe(0);
+    expect(getDropMoveTarget(1, 2, 4)).toBeNull();
+    expect(getDropMoveTarget(1, 4, 4)).toBe(3);
+
+    expect(getDragAutoScrollVelocity(105, 100, 500)).toBeLessThan(0);
+    expect(getDragAutoScrollVelocity(300, 100, 500)).toBe(0);
+    expect(getDragAutoScrollVelocity(495, 100, 500)).toBeGreaterThan(0);
+  });
+
+  it("ignores canvas selection synchronization while presenter notes have focus", async () => {
+    const notesDocument: { activeElement: object | null } = { activeElement: null };
+    const sorter = new SlideSorter({
+      ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
+      container: {
+        ownerDocument: { defaultView: {} },
+      } as unknown as HTMLElement,
+      deck: buildFrameSlideDeck([frame("a", "Alpha"), frame("b", "Bravo")]),
+      previewService: {} as SlidePreviewService,
+      icons: {} as never,
+      t: createSlideshowTranslator("en"),
+      reorderEnabled: true,
+      callbacks: {
+        move: async () => undefined,
+        toggleInclusion: async () => undefined,
+        zoomToSlide: () => undefined,
+        saveNotes: async () => undefined,
+        requestAnimationEditor: () => undefined,
+        editLineSlide: async () => undefined,
+        notesBlurred: () => undefined,
+      },
+    });
+    const internals = sorter as unknown as {
+      notesTextarea: { ownerDocument: { activeElement: object | null } } | null;
+    };
+    const textarea = { ownerDocument: notesDocument };
+    notesDocument.activeElement = textarea;
+    internals.notesTextarea = textarea;
+
+    await sorter.selectFromScene("b");
+
+    expect(sorter.getSelectedSlideId()).toBe("a");
+  });
 });
 
 describe("slideshow checkpoint 2 temporary progress", () => {
@@ -916,8 +1057,12 @@ describe("slideshow checkpoint 2 temporary progress", () => {
     setSlideshowProgress(view, 2, "line:path-b");
     expect(getSlideshowProgressType(view)).toBe("line");
     expect(getSlideshowProgressSource(view)).toBe("line:path-b");
-    expect(getResumeSlideForPresentation(2, "line", "line", 5, "line:path-b", "line:path-b")).toBe(2);
-    expect(getResumeSlideForPresentation(2, "line", "line", 5, "line:path-b", "line:path-a")).toBeNull();
+    expect(getResumeSlideForPresentation(2, "line", "line", 5, "line:path-b", "line:path-b")).toBe(
+      2,
+    );
+    expect(
+      getResumeSlideForPresentation(2, "line", "line", 5, "line:path-b", "line:path-a"),
+    ).toBeNull();
   });
 
   it("upgrades an existing runtime when presentation-type progress was not available yet", () => {
@@ -940,6 +1085,7 @@ describe("slideshow checkpoint 2 temporary progress", () => {
       modifierKeyDown: { shiftKey: false, altKey: false, ctrlKey: false, metaKey: false },
       isDirty: () => false,
       forceSave: async () => undefined,
+      ownerWindow: {} as Window,
     } as ScriptExcalidrawView;
     let apiAccesses = 0;
     let providerRegistrations = 0;
@@ -947,6 +1093,7 @@ describe("slideshow checkpoint 2 temporary progress", () => {
     const autostartMessages: Array<string | undefined> = [];
     const scriptEa = {
       targetView: view,
+      DEVICE: { isMobile: false },
       obsidian: { moment: { locale: () => "en" } },
       verifyMinimumPluginVersion: () => true,
       skipSidepanelScriptRestore: () => false,
@@ -986,13 +1133,17 @@ describe("slideshow checkpoint 2 temporary progress", () => {
 
 describe("slideshow checkpoint 2 mobile launch behavior", () => {
   it("forces fullscreen slides-only behavior on mobile", () => {
-    expect(resolveDeviceLaunchModes(true, "window", "presenter")).toEqual({
+    expect(resolveDeviceLaunchModes(true, "window", "presenter", true)).toEqual({
       startFullscreen: true,
       openPresenterView: false,
     });
-    expect(resolveDeviceLaunchModes(false, "window", "presenter")).toEqual({
+    expect(resolveDeviceLaunchModes(false, "window", "presenter", true)).toEqual({
       startFullscreen: false,
       openPresenterView: true,
+    });
+    expect(resolveDeviceLaunchModes(false, "fullscreen", "presenter", false)).toEqual({
+      startFullscreen: true,
+      openPresenterView: false,
     });
   });
 });
@@ -1021,7 +1172,10 @@ describe("slideshow checkpoint 2 presenter-note lifecycle", () => {
     });
     const internals = sidepanel as unknown as {
       boundView: ScriptExcalidrawView | null;
-      saveNotes(slide: ReturnType<typeof buildFrameSlideDeck>["slides"][number], notes: string): Promise<void>;
+      saveNotes(
+        slide: ReturnType<typeof buildFrameSlideDeck>["slides"][number],
+        notes: string,
+      ): Promise<void>;
     };
     internals.boundView = view;
 

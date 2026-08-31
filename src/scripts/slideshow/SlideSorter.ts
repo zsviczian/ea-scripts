@@ -33,6 +33,52 @@ export interface SlideSorterOptions {
   callbacks: SlideSorterCallbacks;
 }
 
+/** Returns the insertion gap nearest the pointer, using each slide row's vertical midpoint. */
+export function getDropInsertionIndex(rowMidpoints: readonly number[], pointerY: number): number {
+  const index = rowMidpoints.findIndex((midpoint) => pointerY < midpoint);
+  return index === -1 ? rowMidpoints.length : index;
+}
+
+/** Converts a pre-removal insertion gap into the slide's final index. */
+export function getDropMoveTarget(
+  fromIndex: number,
+  insertionIndex: number,
+  slideCount: number,
+): number | null {
+  if (
+    fromIndex < 0 ||
+    fromIndex >= slideCount ||
+    insertionIndex < 0 ||
+    insertionIndex > slideCount
+  ) {
+    return null;
+  }
+  const target = insertionIndex > fromIndex ? insertionIndex - 1 : insertionIndex;
+  return target === fromIndex ? null : target;
+}
+
+/** Returns proportional drag autoscroll speed near a sorter's top or bottom edge. */
+export function getDragAutoScrollVelocity(
+  pointerY: number,
+  containerTop: number,
+  containerBottom: number,
+  edgeSize = 72,
+  maximumSpeed = 18,
+): number {
+  const availableHeight = Math.max(containerBottom - containerTop, 0);
+  const edge = Math.min(edgeSize, availableHeight / 2);
+  if (edge <= 0) return 0;
+  if (pointerY < containerTop + edge) {
+    const strength = Math.min(Math.max((containerTop + edge - pointerY) / edge, 0), 1);
+    return -maximumSpeed * strength;
+  }
+  if (pointerY > containerBottom - edge) {
+    const strength = Math.min(Math.max((pointerY - (containerBottom - edge)) / edge, 0), 1);
+    return maximumSpeed * strength;
+  }
+  return 0;
+}
+
 /** Owns one rendered sorter instance and pending presenter-note edits. */
 export class SlideSorter {
   private selectedSlideId: string | null = null;
@@ -42,11 +88,18 @@ export class SlideSorter {
   private ownerWindow: Window;
   private renderGeneration = 0;
   private draggedIndex: number | null = null;
+  private dropTargetIndex: number | null = null;
+  private dragPointerY: number | null = null;
+  private autoScrollVelocity = 0;
+  private autoScrollFrame = 0;
   private notesSaveInFlight: Promise<void> | null = null;
 
   public constructor(private readonly options: SlideSorterOptions) {
     this.ownerWindow = options.container.ownerDocument.defaultView ?? window;
     this.selectedSlideId = options.deck.slides[0]?.id ?? null;
+    options.container.addEventListener?.("dragover", this.handleContainerDragOver);
+    options.container.addEventListener?.("dragleave", this.handleContainerDragLeave);
+    options.container.addEventListener?.("drop", this.handleContainerDrop);
   }
 
   /** Rebinds timer behavior after the sidepanel DOM migrates between windows. */
@@ -56,6 +109,7 @@ export class SlideSorter {
       this.notesTimer = 0;
       this.scheduleNotesSave();
     }
+    this.stopAutoScroll();
     this.ownerWindow = ownerWindow;
   }
 
@@ -67,6 +121,16 @@ export class SlideSorter {
   /** Returns the slide whose inline notes editor is expanded, if any. */
   public getExpandedNotesSlideId(): string | null {
     return this.expandedNotesSlideId;
+  }
+
+  /** Returns the current vertical sorter position for preservation across deck refreshes. */
+  public getScrollTop(): number {
+    return this.options.container.scrollTop ?? 0;
+  }
+
+  /** Restores a vertical sorter position after its rows have been rebuilt. */
+  public restoreScrollTop(scrollTop: number): void {
+    this.options.container.scrollTop = scrollTop;
   }
 
   /** Scrolls the requested slide row into the visible sorter viewport. */
@@ -89,6 +153,7 @@ export class SlideSorter {
 
   /** Mirrors an unambiguous canvas selection without taking keyboard focus from the drawing. */
   public async selectFromScene(slideId: string): Promise<void> {
+    if (this.options.animationEditingSlideId || this.isEditingNotes()) return;
     if (!this.options.deck.slides.some((slide) => slide.id === slideId)) return;
     if (slideId !== this.selectedSlideId) {
       await this.flushNotes();
@@ -107,6 +172,7 @@ export class SlideSorter {
     this.renderGeneration += 1;
     const generation = this.renderGeneration;
     const { container, deck } = this.options;
+    const scrollTop = container.scrollTop;
     container.replaceChildren();
     this.notesTextarea = null;
     if (deck.slides.length === 0) return;
@@ -138,6 +204,7 @@ export class SlideSorter {
           .catch(() => undefined);
       }
     });
+    container.scrollTop = scrollTop;
   }
 
   private createIconButton(
@@ -203,26 +270,18 @@ export class SlideSorter {
       top.classList.add("is-draggable");
       top.setAttribute("aria-label", t("dragSlide"));
       top.addEventListener("dragstart", (event) => {
+        this.selectedSlideId = slide.id;
+        this.options.container
+          .querySelectorAll<HTMLElement>(".slideshow-sorter__row.is-selected")
+          .forEach((selectedRow) => selectedRow.classList.remove("is-selected"));
+        row.classList.add("is-selected");
         this.draggedIndex = index;
         row.classList.add("is-dragging");
         event.dataTransfer?.setData("text/plain", String(index));
         if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
       });
       top.addEventListener("dragend", () => {
-        this.draggedIndex = null;
-        row.classList.remove("is-dragging");
-      });
-      row.addEventListener("dragover", (event) => {
-        event.preventDefault();
-        if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
-      });
-      row.addEventListener("drop", (event) => {
-        event.preventDefault();
-        const dataIndex = Number.parseInt(event.dataTransfer?.getData("text/plain") ?? "", 10);
-        const fromIndex = this.draggedIndex ?? dataIndex;
-        if (Number.isInteger(fromIndex) && fromIndex !== index) {
-          void this.options.callbacks.move(fromIndex, index);
-        }
+        this.finishDrag();
       });
     }
 
@@ -425,6 +484,102 @@ export class SlideSorter {
     this.scheduleNotesSave();
   }
 
+  private readonly handleContainerDragOver = (event: DragEvent): void => {
+    if (this.draggedIndex === null) return;
+    event.preventDefault();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    this.dragPointerY = event.clientY;
+    this.updateDropTarget(event.clientY);
+    this.updateAutoScroll(event.clientY);
+  };
+
+  private readonly handleContainerDragLeave = (event: DragEvent): void => {
+    const relatedTarget = event.relatedTarget;
+    if (relatedTarget && this.options.container.contains(relatedTarget as Node)) return;
+    this.clearDropIndicator();
+    this.stopAutoScroll();
+  };
+
+  private readonly handleContainerDrop = (event: DragEvent): void => {
+    if (this.draggedIndex === null) return;
+    event.preventDefault();
+    const fromIndex = this.draggedIndex;
+    const insertionIndex = this.dropTargetIndex;
+    this.finishDrag();
+    if (insertionIndex === null) return;
+    const target = getDropMoveTarget(fromIndex, insertionIndex, this.options.deck.slides.length);
+    if (target !== null) void this.options.callbacks.move(fromIndex, target);
+  };
+
+  private updateDropTarget(pointerY: number): void {
+    const rows = Array.from(
+      this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__row"),
+    );
+    const insertionIndex = getDropInsertionIndex(
+      rows.map((row) => {
+        const rect = row.getBoundingClientRect();
+        return rect.top + rect.height / 2;
+      }),
+      pointerY,
+    );
+    if (insertionIndex === this.dropTargetIndex) return;
+    this.clearDropIndicator();
+    this.dropTargetIndex = insertionIndex;
+    if (insertionIndex < rows.length) rows[insertionIndex]?.classList.add("is-drop-before");
+    else rows[rows.length - 1]?.classList.add("is-drop-after");
+  }
+
+  private clearDropIndicator(): void {
+    const rows =
+      this.options.container.querySelectorAll?.<HTMLElement>(".is-drop-before, .is-drop-after") ??
+      [];
+    rows.forEach((row) => row.classList.remove("is-drop-before", "is-drop-after"));
+    this.dropTargetIndex = null;
+  }
+
+  private updateAutoScroll(pointerY: number): void {
+    const rect = this.options.container.getBoundingClientRect();
+    this.autoScrollVelocity = getDragAutoScrollVelocity(pointerY, rect.top, rect.bottom);
+    if (this.autoScrollVelocity === 0) {
+      this.stopAutoScroll();
+      return;
+    }
+    if (!this.autoScrollFrame) {
+      this.autoScrollFrame = this.ownerWindow.requestAnimationFrame(this.runAutoScroll);
+    }
+  }
+
+  private readonly runAutoScroll = (): void => {
+    this.autoScrollFrame = 0;
+    if (this.draggedIndex === null || this.autoScrollVelocity === 0) return;
+    const previousScrollTop = this.options.container.scrollTop;
+    this.options.container.scrollTop += this.autoScrollVelocity;
+    if (this.options.container.scrollTop === previousScrollTop) {
+      this.autoScrollVelocity = 0;
+      return;
+    }
+    if (this.dragPointerY !== null) this.updateDropTarget(this.dragPointerY);
+    this.autoScrollFrame = this.ownerWindow.requestAnimationFrame(this.runAutoScroll);
+  };
+
+  private stopAutoScroll(): void {
+    if (this.autoScrollFrame) this.ownerWindow.cancelAnimationFrame(this.autoScrollFrame);
+    this.autoScrollFrame = 0;
+    this.autoScrollVelocity = 0;
+  }
+
+  private finishDrag(): void {
+    this.stopAutoScroll();
+    this.clearDropIndicator();
+    const rows =
+      this.options.container.querySelectorAll?.<HTMLElement>(
+        ".slideshow-sorter__row.is-dragging",
+      ) ?? [];
+    rows.forEach((row) => row.classList.remove("is-dragging"));
+    this.draggedIndex = null;
+    this.dragPointerY = null;
+  }
+
   private scheduleNotesSave(): void {
     if (!this.notesTextarea || !this.expandedNotesSlideId) return;
     if (this.notesTimer) this.ownerWindow.clearTimeout(this.notesTimer);
@@ -466,5 +621,9 @@ export class SlideSorter {
     if (this.notesTimer) this.ownerWindow.clearTimeout(this.notesTimer);
     this.notesTimer = 0;
     this.notesTextarea = null;
+    this.finishDrag();
+    this.options.container.removeEventListener?.("dragover", this.handleContainerDragOver);
+    this.options.container.removeEventListener?.("dragleave", this.handleContainerDragLeave);
+    this.options.container.removeEventListener?.("drop", this.handleContainerDrop);
   }
 }

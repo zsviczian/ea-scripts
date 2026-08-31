@@ -29,13 +29,33 @@ interface ElectronDisplayLike {
 interface ElectronScreenLike {
   getAllDisplays(): ElectronDisplayLike[];
   getPrimaryDisplay(): ElectronDisplayLike;
-  getDisplayMatching(bounds: { x: number; y: number; width: number; height: number }): ElectronDisplayLike;
+  getDisplayMatching(bounds: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): ElectronDisplayLike;
+  on?(
+    event: "display-added" | "display-removed" | "display-metrics-changed",
+    listener: (...args: unknown[]) => void,
+  ): ElectronScreenLike;
+  off?(
+    event: "display-added" | "display-removed" | "display-metrics-changed",
+    listener: (...args: unknown[]) => void,
+  ): ElectronScreenLike;
+  removeListener?(
+    event: "display-added" | "display-removed" | "display-metrics-changed",
+    listener: (...args: unknown[]) => void,
+  ): ElectronScreenLike;
 }
 
 interface ElectronBrowserWindowLike {
   readonly id?: number;
   getBounds(): { x: number; y: number; width: number; height: number };
-  setBounds(bounds: { x: number; y: number; width: number; height: number }, animate?: boolean): void;
+  setBounds(
+    bounds: { x: number; y: number; width: number; height: number },
+    animate?: boolean,
+  ): void;
   getTitle?(): string;
   getId?(): number;
   isMaximized?(): boolean;
@@ -67,11 +87,11 @@ interface WindowGeometryLike {
 
 const DEVICE_KEY_STORAGE = "excalidraw-slideshow-device-key";
 
-
 function getRemote(win: Window): ElectronRemoteLike | null {
   const rendererWindow = win as ElectronRendererWindow;
   try {
-    const contextRemote = rendererWindow.require?.("@electron/remote") as ElectronRemoteLike | undefined;
+    const contextRemote = rendererWindow.require?.("@electron/remote") as
+      ElectronRemoteLike | undefined;
     if (contextRemote?.getCurrentWindow) return contextRemote;
   } catch {
     // Fall back to Obsidian's exposed bridge below.
@@ -164,9 +184,9 @@ function getNativeWindowById(
     const direct = remote.BrowserWindow?.fromId?.(id);
     if (direct) return direct;
     return (
-      remote.BrowserWindow
-        ?.getAllWindows?.()
-        .find((candidate) => getNativeWindowId(candidate) === id) ?? null
+      remote.BrowserWindow?.getAllWindows?.().find(
+        (candidate) => getNativeWindowId(candidate) === id,
+      ) ?? null
     );
   } catch {
     return null;
@@ -265,6 +285,29 @@ export function getAvailableDisplays(win: Window): SlideshowDisplay[] {
   } catch {
     return [];
   }
+}
+
+/** Subscribes to Electron display topology and geometry changes when the desktop bridge supports it. */
+export function onDisplayConfigurationChanged(win: Window, callback: () => void): () => void {
+  const screen = getRemote(win)?.screen;
+  if (!screen?.on) return () => undefined;
+  const events = ["display-added", "display-removed", "display-metrics-changed"] as const;
+  const listener = (): void => callback();
+  try {
+    for (const event of events) screen.on(event, listener);
+  } catch {
+    return () => undefined;
+  }
+  return () => {
+    for (const event of events) {
+      try {
+        if (screen.off) screen.off(event, listener);
+        else screen.removeListener?.(event, listener);
+      } catch {
+        // The Electron bridge may already have been destroyed with its renderer.
+      }
+    }
+  };
 }
 
 /** Returns the display currently containing the native Obsidian window. */
@@ -397,7 +440,11 @@ function safeRestoreBounds(
 function resolveCapturedNativeWindow(
   win: Window,
   snapshot: NativeWindowPlacementSnapshot,
-): { remote: ElectronRemoteLike; screen: ElectronScreenLike; nativeWindow: ElectronBrowserWindowLike } | null {
+): {
+  remote: ElectronRemoteLike;
+  screen: ElectronScreenLike;
+  nativeWindow: ElectronBrowserWindowLike;
+} | null {
   const remote = getRemote(win);
   const screen = remote?.screen;
   if (!remote || !screen) return null;

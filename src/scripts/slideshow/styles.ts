@@ -26,12 +26,17 @@ export const SLIDESHOW_SIDEPANEL_STYLES = `
 .slideshow-sidepanel__path-actions { display:flex; flex-wrap:wrap; gap:8px; }
 .slideshow-sidepanel__path-actions button { display:inline-flex; align-items:center; gap:6px; }
 .slideshow-sorter { display:flex; flex-direction:column; gap:8px; min-height:0; overflow:auto; padding-right:2px; }
-.slideshow-sorter__row { display:flex; flex-direction:column; gap:7px; border:1px solid var(--background-modifier-border); border-radius:8px; padding:8px; background:var(--background-primary); outline:none; }
+.slideshow-sorter__row { position:relative; display:flex; flex-direction:column; gap:7px; border:1px solid var(--background-modifier-border); border-radius:8px; padding:8px; background:var(--background-primary); outline:none; transition:margin .1s ease; }
 .slideshow-sorter__row:focus, .slideshow-sorter__row.is-selected { border-color:var(--interactive-accent); box-shadow:0 0 0 1px var(--interactive-accent); }
 .slideshow-sorter__row.is-excluded { opacity:.5; }
 .slideshow-sorter__row.is-dragging { opacity:.35; }
+.slideshow-sorter__row.is-drop-before { margin-top:22px; }
+.slideshow-sorter__row.is-drop-after { margin-bottom:22px; }
+.slideshow-sorter__row.is-drop-before::before, .slideshow-sorter__row.is-drop-after::after { content:""; position:absolute; left:8px; right:8px; border-top:2px dashed var(--interactive-accent); pointer-events:none; }
+.slideshow-sorter__row.is-drop-before::before { top:-13px; }
+.slideshow-sorter__row.is-drop-after::after { bottom:-13px; }
 .slideshow-sorter__top { display:flex; flex-wrap:wrap; gap:5px 8px; align-items:flex-start; padding:6px 8px; border-radius:6px; background:var(--background-secondary); }
-.slideshow-sorter__top.is-draggable { cursor:grab; user-select:none; }
+.slideshow-sorter__top.is-draggable { cursor:grab; user-select:none; background-color:var(--background-secondary); background-image:radial-gradient(circle, var(--background-modifier-border-hover) .8px, transparent .9px); background-size:5px 5px; }
 .slideshow-sorter__top.is-draggable:active { cursor:grabbing; }
 .slideshow-sorter__title { flex:1 1 220px; min-width:0; font-weight:600; white-space:normal; overflow-wrap:break-word; word-break:normal; line-height:1.35; }
 .slideshow-sorter__badges { flex:0 1 auto; min-width:0; display:flex; gap:5px; flex-wrap:wrap; justify-content:flex-end; color:var(--text-muted); font-size:var(--font-ui-smaller); }

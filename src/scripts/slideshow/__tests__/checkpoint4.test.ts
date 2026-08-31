@@ -4,12 +4,16 @@ import {
   captureWindowPlacement,
   chooseClosestNativeWindow,
   chooseDefaultDisplayTargets,
+  onDisplayConfigurationChanged,
   resolveSameNativeWindow,
   restoreWindowPlacement,
   restoreWindowPlacementStable,
   type SlideshowDisplay,
 } from "../desktopDisplays";
-import { getPresenterKeyboardAction, waitForPresenterOwnerWindow } from "../PresenterViewController";
+import {
+  getPresenterKeyboardAction,
+  waitForPresenterOwnerWindow,
+} from "../PresenterViewController";
 import { resolveManualInvocationIntent } from "../slideshowLauncher";
 import { buildFrameSlideDeck, type FrameDeckSlide } from "../SlideDeck";
 import { getHiddenBuildElementIds } from "../SlidePreviewService";
@@ -188,6 +192,33 @@ describe("slideshow checkpoint 4 presenter state", () => {
       presenterDisplayId: 2,
     });
   });
+
+  it("subscribes to and disposes Electron display configuration events", () => {
+    const listeners = new Map<string, (...args: unknown[]) => void>();
+    const on = (event: string, listener: (...args: unknown[]) => void): void => {
+      listeners.set(event, listener);
+    };
+    const offCalls: string[] = [];
+    const callbackCalls: number[] = [];
+    const fakeWindow = {
+      require: () => ({
+        getCurrentWindow: () => ({ getBounds: () => ({ x: 0, y: 0, width: 1, height: 1 }) }),
+        screen: {
+          on,
+          off: (event: string) => offCalls.push(event),
+        },
+      }),
+    } as unknown as Window;
+
+    const dispose = onDisplayConfigurationChanged(fakeWindow, () => callbackCalls.push(1));
+    listeners.get("display-added")?.();
+    listeners.get("display-removed")?.();
+    listeners.get("display-metrics-changed")?.();
+    dispose();
+
+    expect(callbackCalls).toHaveLength(3);
+    expect(offCalls).toEqual(["display-added", "display-removed", "display-metrics-changed"]);
+  });
   it("matches a popout DOM window to the closest Electron BrowserWindow", () => {
     const main = { getBounds: () => ({ x: 0, y: 0, width: 1440, height: 900 }) };
     const sidecar = { getBounds: () => ({ x: 1440, y: 0, width: 1024, height: 768 }) };
@@ -202,7 +233,6 @@ describe("slideshow checkpoint 4 presenter state", () => {
     ).toBe(sidecar);
   });
 
-
   it("uses Electron BrowserWindow.id for native identity and immutable host placement snapshots", () => {
     const hostNative = {
       id: 41,
@@ -215,24 +245,32 @@ describe("slideshow checkpoint 4 presenter state", () => {
       isMaximized: () => false,
     };
     const displays = [
-      { id: 1, bounds: { x: 0, y: 0, width: 1680, height: 1050 }, workArea: { x: 0, y: 25, width: 1680, height: 1025 } },
+      {
+        id: 1,
+        bounds: { x: 0, y: 0, width: 1680, height: 1050 },
+        workArea: { x: 0, y: 25, width: 1680, height: 1025 },
+      },
     ];
-    const makeWindow = (nativeWindow: typeof hostNative | typeof presenterNative, geometry: { x: number; y: number; width: number; height: number }) => ({
-      require: () => ({
-        getCurrentWindow: () => nativeWindow,
-        BrowserWindow: { getAllWindows: () => [hostNative, presenterNative] },
-        screen: {
-          getAllDisplays: () => displays,
-          getPrimaryDisplay: () => displays[0],
-          getDisplayMatching: () => displays[0],
-        },
-      }),
-      screenX: geometry.x,
-      screenY: geometry.y,
-      outerWidth: geometry.width,
-      outerHeight: geometry.height,
-      document: {},
-    }) as unknown as Window;
+    const makeWindow = (
+      nativeWindow: typeof hostNative | typeof presenterNative,
+      geometry: { x: number; y: number; width: number; height: number },
+    ) =>
+      ({
+        require: () => ({
+          getCurrentWindow: () => nativeWindow,
+          BrowserWindow: { getAllWindows: () => [hostNative, presenterNative] },
+          screen: {
+            getAllDisplays: () => displays,
+            getPrimaryDisplay: () => displays[0],
+            getDisplayMatching: () => displays[0],
+          },
+        }),
+        screenX: geometry.x,
+        screenY: geometry.y,
+        outerWidth: geometry.width,
+        outerHeight: geometry.height,
+        document: {},
+      }) as unknown as Window;
     const host = makeWindow(hostNative, { x: 0, y: 25, width: 1680, height: 1025 });
     const presenter = makeWindow(presenterNative, { x: 300, y: 80, width: 1024, height: 800 });
 
@@ -291,8 +329,16 @@ describe("slideshow checkpoint 4 presenter state", () => {
       isMaximized: () => false,
     };
     const displays = [
-      { id: 10, bounds: { x: 0, y: 0, width: 1600, height: 900 }, workArea: { x: 0, y: 0, width: 1600, height: 860 } },
-      { id: 11, bounds: { x: 1600, y: 0, width: 1200, height: 900 }, workArea: { x: 1600, y: 0, width: 1200, height: 860 } },
+      {
+        id: 10,
+        bounds: { x: 0, y: 0, width: 1600, height: 900 },
+        workArea: { x: 0, y: 0, width: 1600, height: 860 },
+      },
+      {
+        id: 11,
+        bounds: { x: 1600, y: 0, width: 1200, height: 900 },
+        workArea: { x: 1600, y: 0, width: 1200, height: 860 },
+      },
     ];
     const remote = {
       getCurrentWindow: () => popout,
@@ -453,8 +499,16 @@ describe("slideshow checkpoint 4 presenter state", () => {
       isFullScreen: () => false,
     };
     const displays = [
-      { id: 1, bounds: { x: 0, y: 0, width: 1680, height: 1050 }, workArea: { x: 0, y: 25, width: 1680, height: 1025 } },
-      { id: 5, bounds: { x: -1194, y: 0, width: 1194, height: 834 }, workArea: { x: -1194, y: 25, width: 1194, height: 809 } },
+      {
+        id: 1,
+        bounds: { x: 0, y: 0, width: 1680, height: 1050 },
+        workArea: { x: 0, y: 25, width: 1680, height: 1025 },
+      },
+      {
+        id: 5,
+        bounds: { x: -1194, y: 0, width: 1194, height: 834 },
+        workArea: { x: -1194, y: 25, width: 1194, height: 809 },
+      },
     ];
     const remote = {
       getCurrentWindow: () => nativeWindow,
@@ -493,5 +547,4 @@ describe("slideshow checkpoint 4 presenter state", () => {
     expect(setCount).toBeGreaterThanOrEqual(2);
     expect(bounds).toEqual({ x: 0, y: 25, width: 1680, height: 1025 });
   });
-
 });

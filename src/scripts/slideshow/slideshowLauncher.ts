@@ -33,7 +33,12 @@ import {
   setSlideshowProgress,
   type SlideshowViewContext,
 } from "./slideshowRuntime";
-import { isFrameElement, isLinearPathElement, type PresentationPathType, type PresentationSourceKey } from "./types";
+import {
+  isFrameElement,
+  isLinearPathElement,
+  type PresentationPathType,
+  type PresentationSourceKey,
+} from "./types";
 
 export interface PresentationLaunchOptions {
   initialSlide?: number;
@@ -54,7 +59,10 @@ export interface ManualSlideshowInvocationIntent {
 
 /** Resolves the script-button modifier contract without depending on DOM event timing. */
 export function resolveManualInvocationIntent(
-  modifiers: Pick<ScriptExcalidrawView["modifierKeyDown"], "altKey" | "shiftKey" | "ctrlKey" | "metaKey">,
+  modifiers: Pick<
+    ScriptExcalidrawView["modifierKeyDown"],
+    "altKey" | "shiftKey" | "ctrlKey" | "metaKey"
+  >,
 ): ManualSlideshowInvocationIntent {
   return {
     openSidepanel: modifiers.ctrlKey || modifiers.metaKey,
@@ -84,7 +92,16 @@ export function registerSlideshowElementActionProvider(
 ): (() => void) | null {
   return context.ea.registerElementActionProvider((element) => {
     const latestContext = getSlideshowViewContext(context.view) ?? context;
-    const presentationSourceKey = getElementPresentationSourceKey(element);
+    const presentationSourceKey =
+      getElementPresentationSourceKey(element) ??
+      (isFrameElement(element) &&
+      latestContext.ea
+        .getViewElements()
+        .some(
+          (candidate) => isFrameElement(candidate) && readFrameSlideshowData(candidate.customData),
+        )
+        ? "frame"
+        : null);
     if (!presentationSourceKey) return [];
     return [
       {
@@ -124,7 +141,10 @@ export async function startSlideshowPresentation(
 
   const choices = resolveSlideDeckChoices(ea);
   const requestedSource =
-    launch.presentationSourceKey ?? launch.presentationType ?? choices.defaultSourceKey ?? undefined;
+    launch.presentationSourceKey ??
+    launch.presentationType ??
+    choices.defaultSourceKey ??
+    undefined;
   const setup = resolvePresentationSetup(ea, api, t, requestedSource);
   if (!setup || setup.slides.length === 0) return;
   app.workspace.setActiveLeaf(view.leaf, { focus: true });
@@ -302,7 +322,10 @@ export async function runManualSlideshowInvocation(context: SlideshowViewContext
 
   context.ea.setView(context.view);
   const preferences = loadSlideshowLaunchPreferences(context.ea);
-  const openPresenterView = !context.ea.DEVICE.isMobile && preferences.notesMode === "presenter";
+  const ownerWindow = context.view.ownerWindow;
+  const displays = context.ea.DEVICE.isMobile ? [] : getAvailableDisplays(ownerWindow);
+  const openPresenterView =
+    !context.ea.DEVICE.isMobile && preferences.notesMode === "presenter" && displays.length > 1;
   const launch: PresentationLaunchOptions = {
     resume: intent.resume,
     startFullscreen: intent.startFullscreen,
@@ -310,10 +333,8 @@ export async function runManualSlideshowInvocation(context: SlideshowViewContext
   };
 
   if (openPresenterView) {
-    const ownerWindow = context.view.ownerWindow;
     const deviceKey = getSlideshowDeviceKey(ownerWindow);
     const savedDisplays = loadSlideshowDisplayPreferences(context.ea, deviceKey);
-    const displays = getAvailableDisplays(ownerWindow);
     const defaults = chooseDefaultDisplayTargets(displays, getCurrentDisplayId(ownerWindow));
     const validDisplayIds = new Set(displays.map((display) => display.id));
     const presentationDisplayId =

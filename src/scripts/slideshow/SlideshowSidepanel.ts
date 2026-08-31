@@ -14,6 +14,7 @@ import {
   getAvailableDisplays,
   getCurrentDisplayId,
   getSlideshowDeviceKey,
+  onDisplayConfigurationChanged,
   type SlideshowDisplay,
 } from "./desktopDisplays";
 import { getVisibleSlideIndex, type FrameDeckSlide, type SlideDeckSlide } from "./SlideDeck";
@@ -52,8 +53,13 @@ import {
   type SlideshowStartMode,
   type SlideshowWindowMode,
 } from "./slideshowSettings";
+import { openSlideshowQuickGuideModal } from "./slideshowQuickGuide";
 import { SLIDESHOW_SIDEPANEL_STYLES } from "./styles";
-import { getSlideshowProgress, getSlideshowProgressSource, getSlideshowProgressType } from "./slideshowRuntime";
+import {
+  getSlideshowProgress,
+  getSlideshowProgressSource,
+  getSlideshowProgressType,
+} from "./slideshowRuntime";
 import {
   isLinearPathElement,
   type LinePresentationSource,
@@ -181,6 +187,26 @@ interface SorterSceneSelection {
   } | null;
 }
 
+/** Returns a stable key for only the canvas selection state that can navigate the sorter. */
+export function getSorterSceneSelectionSignature(appState: SorterSceneSelection): string {
+  const selectedElementIds = Object.keys(appState.selectedElementIds)
+    .filter((id) => appState.selectedElementIds[id])
+    .sort();
+  const editor = appState.selectedLinearElement;
+  return JSON.stringify({
+    selectedElementIds,
+    selectedLinearElement: editor
+      ? {
+          elementId: editor.elementId,
+          isEditing: editor.isEditing,
+          selectedPointsIndices: editor.selectedPointsIndices
+            ? [...editor.selectedPointsIndices].sort((a, b) => a - b)
+            : null,
+        }
+      : null,
+  });
+}
+
 /** Resolves a canvas selection to one sorter slide, or null when it is ambiguous. */
 export function getSceneSelectedSlideId(
   resolved: ResolvedSlideDeck | null,
@@ -219,16 +245,16 @@ export function getResumeSlideForPresentation(
   return Math.min(Math.max(progress, 0), visibleSlideCount - 1);
 }
 
-
 /** Resolves device-specific launch behavior without exposing unsupported mobile modes. */
 export function resolveDeviceLaunchModes(
   isMobile: boolean,
   windowMode: SlideshowWindowMode,
   notesMode: SlideshowNotesMode,
+  hasSecondaryDisplay: boolean,
 ): { startFullscreen: boolean; openPresenterView: boolean } {
   return {
     startFullscreen: isMobile || windowMode === "fullscreen",
-    openPresenterView: !isMobile && notesMode === "presenter",
+    openPresenterView: !isMobile && notesMode === "presenter" && hasSecondaryDisplay,
   };
 }
 
@@ -237,13 +263,21 @@ export class SlideshowSidepanel {
   private sorter: SlideSorter | null = null;
   private previewService: SlidePreviewService | null = null;
   private resolved: ResolvedSlideDeck | null = null;
-  private choices: SlideDeckChoices = { frame: null, lines: [], line: null, defaultSourceKey: null, defaultType: null };
+  private choices: SlideDeckChoices = {
+    frame: null,
+    lines: [],
+    line: null,
+    defaultSourceKey: null,
+    defaultType: null,
+  };
   private presentationSourceKey: PresentationSourceKey | null = null;
   private readonly presentationSourceByDrawing = new Map<string, PresentationSourceKey>();
   private refreshTimer = 0;
   private ownerWindow: Window;
   private lastFingerprint = "";
   private pendingRefresh = false;
+  private sceneSelectionSignature: string | null = null;
+  private pendingSceneSlideId: string | null = null;
   private closed = false;
   private bindGeneration = 0;
   private activeLeafChangeRef: EventRef | null = null;
@@ -261,6 +295,8 @@ export class SlideshowSidepanel {
   private presenterDisplayId: number | null = null;
   private deviceKey: string;
   private settingsWriteQueue: Promise<void> = Promise.resolve();
+  private removeDisplayChangeListener: (() => void) | null = null;
+  private displayRefreshTimer = 0;
 
   public constructor(private readonly options: SlideshowSidepanelOptions) {
     this.ownerWindow = options.tab.contentEl.ownerDocument.defaultView ?? window;
@@ -322,7 +358,12 @@ export class SlideshowSidepanel {
     tab.onOpen = () => void this.refresh(true);
     tab.onFocus = (view) => this.bindView(view);
     tab.onWindowMigrated = (win) => {
+      if (this.displayRefreshTimer) this.ownerWindow.clearTimeout(this.displayRefreshTimer);
+      this.displayRefreshTimer = 0;
+      this.removeDisplayChangeListener?.();
+      this.removeDisplayChangeListener = null;
       this.ownerWindow = win;
+      this.bindDisplayChangeListener();
       this.sorter?.onWindowMigrated(win);
       void this.animationEditor?.destroy();
       this.animationEditor = null;
@@ -336,6 +377,10 @@ export class SlideshowSidepanel {
       this.closed = true;
       if (this.refreshTimer) this.ownerWindow.clearTimeout(this.refreshTimer);
       this.refreshTimer = 0;
+      if (this.displayRefreshTimer) this.ownerWindow.clearTimeout(this.displayRefreshTimer);
+      this.displayRefreshTimer = 0;
+      this.removeDisplayChangeListener?.();
+      this.removeDisplayChangeListener = null;
       const sorter = this.sorter;
       this.sorter = null;
       void sorter?.flushNotes().finally(() => sorter.destroy());
@@ -377,15 +422,25 @@ export class SlideshowSidepanel {
       triggerWhenInvisible: false,
       callback: (elements, appState, _files, view) => {
         if (!this.boundView || view !== this.boundView) return;
+        if (this.sorter?.isEditingNotes()) {
+          this.pendingRefresh = true;
+          return;
+        }
         if (this.animationEditor) {
           this.animationEditor.handleSceneChange(elements, appState);
           return;
         }
-        const selectedSlideId = getSceneSelectedSlideId(this.resolved, appState);
-        if (selectedSlideId) void this.sorter?.selectFromScene(selectedSlideId);
+        const selectionSignature = getSorterSceneSelectionSignature(appState);
+        if (selectionSignature !== this.sceneSelectionSignature) {
+          this.sceneSelectionSignature = selectionSignature;
+          const selectedSlideId = getSceneSelectedSlideId(this.resolved, appState);
+          this.pendingSceneSlideId = selectedSlideId;
+          if (selectedSlideId) void this.sorter?.selectFromScene(selectedSlideId);
+        }
         this.scheduleRefresh();
       },
     };
+    this.bindDisplayChangeListener();
     if (this.boundView) void this.refresh(true);
     else this.renderUnavailable();
   }
@@ -416,8 +471,16 @@ export class SlideshowSidepanel {
     this.previewService?.clear();
     this.previewService = null;
     this.resolved = null;
-    this.choices = { frame: null, lines: [], line: null, defaultSourceKey: null, defaultType: null };
+    this.choices = {
+      frame: null,
+      lines: [],
+      line: null,
+      defaultSourceKey: null,
+      defaultType: null,
+    };
     this.presentationSourceKey = null;
+    this.sceneSelectionSignature = null;
+    this.pendingSceneSlideId = null;
     this.lastFingerprint = "";
     this.boundView = view;
     this.options.ea.setView(view);
@@ -477,6 +540,30 @@ export class SlideshowSidepanel {
     header.appendChild(settingsButton);
   }
 
+  private appendInfoButton(header: HTMLElement, doc: Document): void {
+    const { ea, icons, t } = this.options;
+    const infoButton = doc.createElement("button");
+    infoButton.type = "button";
+    infoButton.className = "slideshow-sidepanel__icon-button";
+    infoButton.setAttribute("aria-label", t("quickGuideButton"));
+    infoButton.innerHTML = icons.info;
+    infoButton.addEventListener("click", () => openSlideshowQuickGuideModal(ea, t));
+    header.appendChild(infoButton);
+  }
+
+  private bindDisplayChangeListener(): void {
+    this.removeDisplayChangeListener?.();
+    this.removeDisplayChangeListener = onDisplayConfigurationChanged(this.ownerWindow, () => {
+      if (this.closed) return;
+      if (this.displayRefreshTimer) this.ownerWindow.clearTimeout(this.displayRefreshTimer);
+      this.displayRefreshTimer = this.ownerWindow.setTimeout(() => {
+        this.displayRefreshTimer = 0;
+        this.lastFingerprint = "";
+        void this.refresh(true);
+      }, 120);
+    });
+  }
+
   private renderUnavailable(): void {
     const { tab, t } = this.options;
     tab.setDisabled(false);
@@ -492,6 +579,7 @@ export class SlideshowSidepanel {
     const header = doc.createElement("div");
     header.className = "slideshow-sidepanel__header";
     root.appendChild(header);
+    this.appendInfoButton(header, doc);
     this.appendSettingsButton(header, doc);
     const empty = tab.contentEl.ownerDocument.createElement("div");
     empty.className = "slideshow-empty";
@@ -505,6 +593,10 @@ export class SlideshowSidepanel {
     const view = this.boundView;
     if (this.closed || !view) {
       this.renderUnavailable();
+      return;
+    }
+    if (this.sorter?.isEditingNotes()) {
+      this.pendingRefresh = true;
       return;
     }
     if (ea.targetView !== view) ea.setView(view);
@@ -521,7 +613,8 @@ export class SlideshowSidepanel {
       storedSource,
       this.preferredPresentationType,
     );
-    if (presentationSourceKey) this.presentationSourceByDrawing.set(drawingKey, presentationSourceKey);
+    if (presentationSourceKey)
+      this.presentationSourceByDrawing.set(drawingKey, presentationSourceKey);
     const resolved = resolvePresentationSource(choices, presentationSourceKey);
     const appState = api.getAppState();
     const lineFingerprint = choices.lines
@@ -532,10 +625,18 @@ export class SlideshowSidepanel {
     if (!force && compositeFingerprint === this.lastFingerprint) return;
 
     const requestedSlideId = this.requestedSlideId;
-    const sceneSelectedSlideId = getSceneSelectedSlideId(resolved, appState);
+    if (this.sceneSelectionSignature === null) {
+      this.sceneSelectionSignature = getSorterSceneSelectionSignature(appState);
+      this.pendingSceneSlideId = getSceneSelectedSlideId(resolved, appState);
+    }
     const selectedId =
-      requestedSlideId ?? sceneSelectedSlideId ?? this.sorter?.getSelectedSlideId() ?? null;
+      this.animationEditingSlideId ??
+      requestedSlideId ??
+      this.pendingSceneSlideId ??
+      this.sorter?.getSelectedSlideId() ??
+      null;
     const expandedNotesId = this.sorter?.getExpandedNotesSlideId() ?? null;
+    const sorterScrollTop = this.sorter?.getScrollTop() ?? 0;
     this.sorter?.destroy();
     this.sorter = null;
     this.choices = choices;
@@ -545,8 +646,11 @@ export class SlideshowSidepanel {
     this.pendingRefresh = false;
     this.previewService ??= new SlidePreviewService(ea, api, this.options.config);
     const renderedSorter = this.render(selectedId, expandedNotesId);
+    this.pendingSceneSlideId = null;
     if (requestedSlideId) {
       renderedSorter?.scrollToSlide(requestedSlideId);
+    } else {
+      renderedSorter?.restoreScrollTop(sorterScrollTop);
     }
   }
 
@@ -625,7 +729,10 @@ export class SlideshowSidepanel {
       createPathButton.className = "slideshow-sidepanel__icon-button";
       createPathButton.setAttribute("aria-label", t("createLinePresentation"));
       createPathButton.innerHTML = icons.plus;
-      createPathButton.addEventListener("click", () => void this.convertSelectedLineToPresentation());
+      createPathButton.addEventListener(
+        "click",
+        () => void this.convertSelectedLineToPresentation(),
+      );
       header.appendChild(createPathButton);
     } else if (this.presentationSourceKey !== "frame" && this.resolved?.pathElement) {
       const pathHidden = isPresentationPathHidden(this.resolved.pathElement);
@@ -641,6 +748,7 @@ export class SlideshowSidepanel {
       header.appendChild(pathButton);
     }
 
+    this.appendInfoButton(header, doc);
     this.appendSettingsButton(header, doc);
 
     if (!this.resolved || !this.previewService) {
@@ -741,12 +849,17 @@ export class SlideshowSidepanel {
           void this.persistLaunchPreferences();
         },
       );
+      const hasSecondaryDisplay = this.displays.length > 1;
       appendSelect<SlideshowNotesMode>(
         t("notesMode"),
-        this.notesMode,
+        hasSecondaryDisplay ? this.notesMode : "slides",
         [
           { value: "slides", label: t("notesModeSlidesOnly") },
-          { value: "presenter", label: t("notesModeWithNotes") },
+          {
+            value: "presenter",
+            label: t("notesModeWithNotes"),
+            disabled: !hasSecondaryDisplay,
+          },
         ],
         (mode) => {
           this.notesMode = mode;
@@ -807,10 +920,13 @@ export class SlideshowSidepanel {
     if (deck.kind === "path") {
       const presentationSettingsButton = doc.createElement("button");
       presentationSettingsButton.type = "button";
-      presentationSettingsButton.className = "slideshow-sidepanel__icon-button slideshow-sidepanel__presentation-settings";
+      presentationSettingsButton.className =
+        "slideshow-sidepanel__icon-button slideshow-sidepanel__presentation-settings";
       presentationSettingsButton.setAttribute("aria-label", t("linePresentationSettings"));
       presentationSettingsButton.innerHTML = icons.moreHorizontal;
-      presentationSettingsButton.addEventListener("click", () => this.openLinePresentationSettings());
+      presentationSettingsButton.addEventListener("click", () =>
+        this.openLinePresentationSettings(),
+      );
       summaryRow.appendChild(presentationSettingsButton);
     }
 
@@ -871,10 +987,7 @@ export class SlideshowSidepanel {
     );
     const presenterValid = this.displays.some((display) => display.id === this.presenterDisplayId);
     if (presentationValid && presenterValid) return;
-    const defaults = chooseDefaultDisplayTargets(
-      this.displays,
-      getCurrentDisplayId(hostWindow),
-    );
+    const defaults = chooseDefaultDisplayTargets(this.displays, getCurrentDisplayId(hostWindow));
     if (!presentationValid) this.presentationDisplayId = defaults.presentationDisplayId;
     if (!presenterValid) this.presenterDisplayId = defaults.presenterDisplayId;
   }
@@ -882,8 +995,7 @@ export class SlideshowSidepanel {
   private getDisplayLabel(display: SlideshowDisplay): string {
     const resolution = `${display.bounds.width}×${display.bounds.height}`;
     const primary = display.primary ? ` · ${this.options.t("primaryDisplay")}` : "";
-    const name =
-      display.label || this.options.t("displayLabel", { number: display.index + 1 });
+    const name = display.label || this.options.t("displayLabel", { number: display.index + 1 });
     return `${name} · ${resolution}${primary}`;
   }
 
@@ -930,7 +1042,8 @@ export class SlideshowSidepanel {
     const view = this.boundView;
     const resolved = this.resolved;
     const presentationSourceKey = this.presentationSourceKey;
-    if (!view || !resolved || !presentationSourceKey || resolved.deck.visibleSlides.length === 0) return;
+    if (!view || !resolved || !presentationSourceKey || resolved.deck.visibleSlides.length === 0)
+      return;
     const presentationType = getPresentationSourceType(presentationSourceKey);
 
     await this.persistLaunchPreferences();
@@ -970,10 +1083,12 @@ export class SlideshowSidepanel {
     await this.animationEditor?.destroy();
     this.animationEditor = null;
     this.animationEditingSlideId = null;
+    this.refreshDisplayTargets();
     const { startFullscreen, openPresenterView } = resolveDeviceLaunchModes(
       this.options.ea.DEVICE.isMobile,
       this.windowMode,
       this.notesMode,
+      this.displays.length > 1,
     );
     const launchOptions: SidepanelPresentationLaunchOptions = {
       initialSlide,
@@ -986,7 +1101,6 @@ export class SlideshowSidepanel {
         ? { presenterDisplayId: this.presenterDisplayId }
         : {}),
     };
-
 
     if (!startFullscreen) this.hideSidepanelForWindowedPresentation();
     await this.options.startPresentation(presentationSourceKey, launchOptions);
@@ -1007,7 +1121,8 @@ export class SlideshowSidepanel {
   }
 
   private async selectPresentationSource(sourceKey: PresentationSourceKey): Promise<void> {
-    if (!hasPresentationSource(this.choices, sourceKey) || sourceKey === this.presentationSourceKey) return;
+    if (!hasPresentationSource(this.choices, sourceKey) || sourceKey === this.presentationSourceKey)
+      return;
     await this.sorter?.flushNotes();
     await this.animationEditor?.destroy();
     this.animationEditor = null;
@@ -1061,7 +1176,9 @@ export class SlideshowSidepanel {
     });
     input.style.width = "100%";
     input.style.marginBottom = "1rem";
-    const actions = modal.contentEl.createDiv({ cls: "slideshow-line-presentation-settings__actions" });
+    const actions = modal.contentEl.createDiv({
+      cls: "slideshow-line-presentation-settings__actions",
+    });
     actions.style.display = "flex";
     actions.style.gap = "0.5rem";
     actions.style.flexWrap = "wrap";

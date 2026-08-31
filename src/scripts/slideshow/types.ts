@@ -52,6 +52,7 @@ export interface SlideshowIcons {
   trash: string;
   close: string;
   settings: string;
+  info: string;
   frameSlideshow: string;
   lineSlideshow: string;
   moreHorizontal: string;

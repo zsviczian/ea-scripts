@@ -5,7 +5,8 @@ export const en = {
     'Autostart is required for registering the "Edit Slide" button. Autostart does not mean slideshows will autostart when opening a drawing.',
   noActiveView: "Open an Excalidraw drawing before starting the slideshow.",
   cannotAccessView: "Could not access the active Excalidraw view.",
-  noPresentationPath: "No configured slideshow is available. Add frames or create a line presentation.",
+  noPresentationPath:
+    "No configured slideshow is available. Add frames or create a line presentation.",
   selectedPathOverridesHidden:
     "Using the selected line instead of the hidden presentation path. Run the slideshow without selecting an element to use the hidden path.",
   allFramesExcluded: "All frame slides are excluded. Include at least one frame before presenting.",
@@ -27,7 +28,8 @@ export const en = {
   settingsPrintSlideWidth: "Slide width",
   settingsPrintSlideWidthDesc: "Presentation/PDF width. Sidepanel previews use this aspect ratio.",
   settingsPrintSlideHeight: "Slide height",
-  settingsPrintSlideHeightDesc: "Presentation/PDF height. Sidepanel previews use this aspect ratio.",
+  settingsPrintSlideHeightDesc:
+    "Presentation/PDF height. Sidepanel previews use this aspect ratio.",
   settingsMaxZoom: "Maximum zoom",
   settingsMaxZoomDesc: "Maximum zoom level",
   settingsSave: "Save",
@@ -35,6 +37,25 @@ export const en = {
   settingsCancel: "Cancel",
   settingsSaved: "Slideshow settings saved.",
   settingsSaveFailed: "Could not save slideshow settings.",
+  quickGuideTitle: "Slideshow quick guide",
+  quickGuideButton: "Open slideshow quick guide",
+  quickGuideShortcutsTitle: "Script button shortcuts",
+  quickGuideClick: "Click — start the slideshow in fullscreen mode.",
+  quickGuideWindowed: "Option/Alt+click — start the slideshow in a window.",
+  quickGuideEditor: "Command/Ctrl+click — open the slideshow editor sidepanel.",
+  quickGuideResumeFullscreen: "Shift+click — continue the slideshow in fullscreen mode.",
+  quickGuideResumeWindowed: "Shift+Option/Alt+click — continue the slideshow in a window.",
+  quickGuideAuthoringTitle: "Building a slideshow",
+  quickGuideFrameSlides:
+    "Frame slides use the drawing's frames. Reorder slides, exclude frames, and edit slide content from the sorter.",
+  quickGuideLineSlides:
+    "Line slides follow consecutive point pairs on a configured presentation line, which is useful for free-form camera paths.",
+  quickGuideMarkerFrames:
+    "Marker frames are ideal slideshow markers: they define a slide without changing the visual grouping of the drawing.",
+  quickGuideAnimations:
+    "Frame slides can reveal elements or groups in a sequence using appear, fade, slide-in, zoom-in, and timed animation steps.",
+  quickGuideNotes:
+    "Add presenter notes per slide. With a second display, presenter mode shows notes and the next slide separately from the audience view.",
   startPresentation: "Start presentation",
   startFromBeginning: "From beginning",
   presentationStartOptions: "Presentation start options",
@@ -106,10 +127,10 @@ export const en = {
   animationDelayMs: "Delay (ms)",
   animationDurationMs: "Duration (ms)",
   animationDirection: "Direction",
-  animationDirectionLeft: "Left",
-  animationDirectionRight: "Right",
-  animationDirectionUp: "Up",
-  animationDirectionDown: "Down",
+  animationDirectionLeft: "From left",
+  animationDirectionRight: "From right",
+  animationDirectionUp: "From top",
+  animationDirectionDown: "From bottom",
   addAnimationStep: "Add step",
   updateAnimationStep: "Update step",
   newAnimationStep: "New step",
