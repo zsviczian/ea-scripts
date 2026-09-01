@@ -1113,7 +1113,7 @@ describe("slideshow checkpoint 2 temporary progress", () => {
       },
     } as unknown as ExcalidrawAutomate;
 
-    await runSlideshow(scriptEa, { executionSource: "autostart" } as ScriptUtils, {} as never);
+    await runSlideshow(scriptEa, { executionSource: "view-autostart" } as ScriptUtils, {} as never);
 
     expect(providerRegistrations).toBe(1);
     expect(autostartRegistrations).toBe(1);

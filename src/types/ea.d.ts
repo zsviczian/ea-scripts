@@ -58,7 +58,14 @@ declare global {
 
   interface ScriptUtils {
     readonly scriptFile: TFile;
-    readonly executionSource: "manual" | "autostart" | "sidepanel-restore" | "drawing-onload";
+    /** The trigger for this invocation, independent of compilation-cache reuse. */
+    readonly executionSource:
+      | "manual"
+      | "plugin-startup"
+      | "view-autostart"
+      | "sidepanel-restore"
+      | "sidepanel-reload"
+      | "drawing-onload";
   }
 
   interface ElementStyle {
@@ -192,6 +199,11 @@ declare global {
       getActions: (element: ExcalidrawElement) => readonly SelectedElementMenuAction[],
     ): (() => void) | null;
     registerAutostart(message?: string): Promise<"allow" | "deny" | "pending">;
+    /**
+     * Registers synchronous cleanup owned by this EA instance.
+     * @returns A function that unregisters the callback without running it.
+     */
+    registerCleanup(cleanup: () => void): () => void;
     skipSidepanelScriptRestore(scriptName?: string): boolean;
     checkForActiveSidepanelTabForScript(scriptName?: string): ScriptSidepanelTab | null;
     createSidepanelTab(
