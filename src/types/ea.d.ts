@@ -109,6 +109,21 @@ declare global {
     embedScene?: boolean;
     /** Complete replacement export set; it is not merged with the view scene. */
     elementsOverride?: readonly ExcalidrawElement[];
+    exportArea?: ViewExportArea;
+  }
+
+  interface ViewExportArea {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    margin?: number;
+    includeMarkerFrames?: boolean;
+    includeBoundElements?: boolean;
+  }
+
+  interface ViewPngOptions extends Omit<ViewSvgOptions, "skipInliningFonts"> {
+    scale?: number;
   }
 
   interface PdfPageProperties {
@@ -247,7 +262,26 @@ declare global {
       width: number;
       height: number;
     };
+    getElementsInArea(
+      elements: readonly ExcalidrawElement[],
+      area: { x: number; y: number; width: number; height: number; id?: string },
+      options?: {
+        margin?: number;
+        includeMarkerFrames?: boolean;
+        includeBoundElements?: boolean;
+      },
+    ): ExcalidrawElement[];
+    getElementsIntersectionArea(
+      elements: readonly ExcalidrawElement[],
+      area: { x: number; y: number; width: number; height: number; id?: string },
+      options?: {
+        margin?: number;
+        includeMarkerFrames?: boolean;
+        includeBoundElements?: boolean;
+      },
+    ): ExcalidrawElement[];
     createViewSVG(options: ViewSvgOptions): Promise<SVGSVGElement>;
+    createViewPNG(options: ViewPngOptions): Promise<Blob>;
     createPDF(options: {
       SVG: SVGSVGElement[];
       scale?: { fitToPage?: boolean | number; zoom?: number };

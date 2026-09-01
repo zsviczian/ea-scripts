@@ -403,11 +403,12 @@ export class PresenterViewController {
           currentSlide,
           doc,
           currentSlide.kind === "frame"
-            ? {
-                completedAnimationSteps: state.completedAnimationSteps,
-                ...(originalOpacities ? { originalOpacities } : {}),
-              }
-            : {},
+              ? {
+                  completedAnimationSteps: state.completedAnimationSteps,
+                  ...(originalOpacities ? { originalOpacities } : {}),
+                  targetWidth: 1280,
+                }
+              : { targetWidth: 1280 },
         )
       : null;
     const nextPreview = nextSlide
@@ -415,11 +416,12 @@ export class PresenterViewController {
           nextSlide,
           doc,
           nextSlide.kind === "frame"
-            ? {
-                completedAnimationSteps: state.nextCompletedAnimationSteps ?? 0,
-                ...(originalOpacities ? { originalOpacities } : {}),
-              }
-            : {},
+              ? {
+                  completedAnimationSteps: state.nextCompletedAnimationSteps ?? 0,
+                  ...(originalOpacities ? { originalOpacities } : {}),
+                  targetWidth: 1280,
+                }
+              : { targetWidth: 1280 },
         )
       : null;
     if (generation !== this.updateGeneration || this.closed) return;

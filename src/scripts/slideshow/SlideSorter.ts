@@ -93,6 +93,7 @@ export class SlideSorter {
   private autoScrollVelocity = 0;
   private autoScrollFrame = 0;
   private notesSaveInFlight: Promise<void> | null = null;
+  private previewObserver: IntersectionObserver | null = null;
 
   public constructor(private readonly options: SlideSorterOptions) {
     this.ownerWindow = options.container.ownerDocument.defaultView ?? window;
@@ -110,7 +111,10 @@ export class SlideSorter {
       this.scheduleNotesSave();
     }
     this.stopAutoScroll();
+    this.previewObserver?.disconnect();
+    this.previewObserver = null;
     this.ownerWindow = ownerWindow;
+    this.render();
   }
 
   /** Returns the currently selected stable slide id. */
@@ -173,6 +177,8 @@ export class SlideSorter {
     const generation = this.renderGeneration;
     const { container, deck } = this.options;
     const scrollTop = container.scrollTop;
+    this.previewObserver?.disconnect();
+    this.previewObserver = this.createPreviewObserver(generation);
     container.replaceChildren();
     this.notesTextarea = null;
     if (deck.slides.length === 0) return;
@@ -193,18 +199,47 @@ export class SlideSorter {
       container.appendChild(row);
       const previewHost = row.querySelector<HTMLElement>(".slideshow-sorter__preview");
       if (previewHost) {
-        void this.options.previewService
-          .createPreview(slide, row.ownerDocument)
-          .then((preview) => {
-            if (!preview || generation !== this.renderGeneration || !previewHost.isConnected)
-              return;
-            previewHost.replaceChildren();
-            previewHost.appendChild(preview);
-          })
-          .catch(() => undefined);
+        previewHost.dataset.slideId = slide.id;
+        if (this.previewObserver) this.previewObserver.observe(previewHost);
+        else this.renderPreview(previewHost, slide, generation);
       }
     });
     container.scrollTop = scrollTop;
+  }
+
+  private createPreviewObserver(generation: number): IntersectionObserver | null {
+    const Observer = (
+      this.ownerWindow as Window & { IntersectionObserver?: typeof IntersectionObserver }
+    ).IntersectionObserver;
+    if (typeof Observer !== "function") return null;
+    return new Observer(
+      (entries: IntersectionObserverEntry[], observer: IntersectionObserver) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          observer.unobserve(entry.target);
+          const host = entry.target as HTMLElement;
+          const slide = this.options.deck.slides.find(
+            (candidate) => candidate.id === host.dataset.slideId,
+          );
+          if (slide) this.renderPreview(host, slide, generation);
+        }
+      },
+      { root: this.options.container, rootMargin: "240px 0px" },
+    );
+  }
+
+  private renderPreview(
+    previewHost: HTMLElement,
+    slide: SlideDeckSlide,
+    generation: number,
+  ): void {
+    void this.options.previewService
+      .createPreview(slide, previewHost.ownerDocument, { targetWidth: 480 })
+      .then((preview) => {
+        if (!preview || generation !== this.renderGeneration || !previewHost.isConnected) return;
+        previewHost.replaceChildren(preview);
+      })
+      .catch(() => undefined);
   }
 
   private createIconButton(
@@ -618,6 +653,8 @@ export class SlideSorter {
   /** Cancels timers and invalidates asynchronous preview insertions. */
   public destroy(): void {
     this.renderGeneration += 1;
+    this.previewObserver?.disconnect();
+    this.previewObserver = null;
     if (this.notesTimer) this.ownerWindow.clearTimeout(this.notesTimer);
     this.notesTimer = 0;
     this.notesTextarea = null;

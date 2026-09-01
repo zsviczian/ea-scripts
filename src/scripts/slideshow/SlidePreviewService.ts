@@ -1,25 +1,22 @@
 /**
  * @file SlidePreviewService.ts
- * @overview Generates cached scene SVGs, then crops clones for sorter and presenter previews.
+ * @overview Generates bounded, cached PNG previews for sorter and presenter views.
  */
 
-import {
-  getNavigationRect,
-  translateNavigationRect,
-  type SceneBounds,
-} from "../../sharedUtils/presentationGeometry";
+import { AsyncTaskQueue } from "../../sharedUtils/AsyncTaskQueue";
+import { ByteBudgetLruCache } from "../../sharedUtils/ByteBudgetLruCache";
+import { getNavigationRect } from "../../sharedUtils/presentationGeometry";
 import { resolveAnimationTargetElementIds } from "./AnimationRuntime";
 import type { FrameDeckSlide, SlideDeckSlide } from "./SlideDeck";
 import type { SlideshowConfig } from "./types";
 
-const EXPORT_PADDING = 10;
 const FALLBACK_BACKGROUND = "#ffffff";
-const MAX_CACHE_ENTRIES = 12;
+const PREVIEW_CACHE_BYTES = 64 * 1024 * 1024;
+const DEFAULT_PREVIEW_WIDTH = 960;
+const MAX_PREVIEW_SCALE = 2;
 
-interface CachedSceneSvg {
-  fingerprint: string;
-  svgMarkup: string;
-  sceneBounds: SceneBounds;
+interface CachedPreview {
+  objectUrl: string;
   backgroundColor: string;
 }
 
@@ -28,6 +25,8 @@ export interface SlidePreviewState {
   completedAnimationSteps?: number;
   /** Restores animation-time opacity overrides before applying the requested preview build. */
   originalOpacities?: ReadonlyMap<string, number>;
+  /** Target raster width. Sorter thumbnails should use less than presenter previews. */
+  targetWidth?: number;
 }
 
 const EA_EXPORT_QUEUES = new WeakMap<object, Promise<void>>();
@@ -48,7 +47,7 @@ async function withEaExportLock<T>(ea: ExcalidrawAutomate, task: () => Promise<T
   }
 }
 
-/** Calculates sorter crops using the configured presentation/print viewport. */
+/** Calculates preview bounds using the configured presentation/print viewport. */
 export function getPreviewNavigationRect(
   slide: SlideDeckSlide,
   maxZoom: number,
@@ -94,7 +93,10 @@ export function getHiddenBuildElementIds(
   elements: readonly ExcalidrawElement[],
 ): string[] {
   if (completedAnimationSteps === undefined) return [];
-  const completed = Math.min(Math.max(Math.trunc(completedAnimationSteps), 0), slide.animationSteps.length);
+  const completed = Math.min(
+    Math.max(Math.trunc(completedAnimationSteps), 0),
+    slide.animationSteps.length,
+  );
   const ids = new Set<string>();
   for (const step of slide.animationSteps.slice(completed)) {
     for (const id of resolveAnimationTargetElementIds(slide.frameId, step.targets, elements)) {
@@ -104,10 +106,16 @@ export function getHiddenBuildElementIds(
   return [...ids].sort();
 }
 
-/** Owns the expensive whole-scene SVG exports used by slide thumbnails and presenter builds. */
+/** Owns bounded slide preview exports and their size-aware object-URL cache. */
 export class SlidePreviewService {
-  private readonly cached = new Map<string, CachedSceneSvg>();
-  private readonly pending = new Map<string, Promise<CachedSceneSvg>>();
+  private readonly queue = new AsyncTaskQueue<string>();
+  private readonly cached = new ByteBudgetLruCache<string, CachedPreview>(
+    PREVIEW_CACHE_BYTES,
+    (preview) => URL.revokeObjectURL(preview.objectUrl),
+  );
+  private generation = 0;
+  private lastElements: readonly ExcalidrawElement[] | null = null;
+  private lastFingerprint = "";
 
   public constructor(
     private readonly ea: ExcalidrawAutomate,
@@ -115,7 +123,7 @@ export class SlidePreviewService {
     private readonly config: SlideshowConfig,
   ) {}
 
-  /** Returns the drawing background used behind crop areas outside exported scene bounds. */
+  /** Returns the drawing background used behind previews. */
   public getBackgroundColor(): string {
     return readBackgroundColor(this.api.getAppState());
   }
@@ -125,57 +133,74 @@ export class SlidePreviewService {
     return `${this.config.printSlideWidth} / ${this.config.printSlideHeight}`;
   }
 
-  /** Drops all cached SVG state, for example after switching drawings. */
+  /** Drops cached previews and invalidates queued work, for example after switching drawings. */
   public clear(): void {
+    this.generation += 1;
+    this.queue.clear();
     this.cached.clear();
-    this.pending.clear();
+    this.lastElements = null;
+    this.lastFingerprint = "";
   }
 
-  private remember(cached: CachedSceneSvg): CachedSceneSvg {
-    this.cached.delete(cached.fingerprint);
-    this.cached.set(cached.fingerprint, cached);
-    while (this.cached.size > MAX_CACHE_ENTRIES) {
-      const oldest = this.cached.keys().next().value as string | undefined;
-      if (!oldest) break;
-      this.cached.delete(oldest);
-    }
-    return cached;
+  private getFingerprint(elements: readonly ExcalidrawElement[]): string {
+    if (elements === this.lastElements) return this.lastFingerprint;
+    this.lastElements = elements;
+    this.lastFingerprint = getSceneVisualFingerprint(elements);
+    return this.lastFingerprint;
   }
 
-  private async ensureSceneSvg(
+  private createPreviewElement(
+    cached: CachedPreview,
+    ownerDocument: Document,
+  ): HTMLImageElement {
+    const image = ownerDocument.createElement("img");
+    image.src = cached.objectUrl;
+    image.alt = "";
+    image.decoding = "async";
+    image.draggable = false;
+    image.setAttribute("aria-hidden", "true");
+    image.style.width = "100%";
+    image.style.height = "100%";
+    image.style.objectFit = "contain";
+    image.style.backgroundColor = cached.backgroundColor;
+    return image;
+  }
+
+  private async exportPreview(
     elements: readonly ExcalidrawElement[],
-    hiddenPathId?: string,
-    hiddenElementIds: readonly string[] = [],
-    originalOpacities: ReadonlyMap<string, number> | undefined = undefined,
-  ): Promise<CachedSceneSvg> {
+    slide: SlideDeckSlide,
+    hiddenElementIds: readonly string[],
+    originalOpacities: ReadonlyMap<string, number> | undefined,
+    targetWidth: number,
+    generation: number,
+    cacheKey: string,
+  ): Promise<CachedPreview | undefined> {
     const appState = this.api.getAppState();
-    const backgroundColor = readBackgroundColor(appState);
-    const hiddenKey = hiddenElementIds.length > 0 ? hiddenElementIds.join(",") : "none";
-    const opacityKey = originalOpacities
-      ? [...originalOpacities.entries()]
-          .sort(([left], [right]) => left.localeCompare(right))
-          .map(([id, opacity]) => `${id}:${opacity}`)
-          .join(",")
-      : "none";
-    const fingerprint = `${appState.theme}|${backgroundColor}|hiddenPath:${hiddenPathId ?? "none"}|hiddenElements:${hiddenKey}|originalOpacity:${opacityKey}|${getSceneVisualFingerprint(elements)}`;
-    const existing = this.cached.get(fingerprint);
-    if (existing) return existing;
-    const pending = this.pending.get(fingerprint);
-    if (pending) return pending;
+    const rect = getPreviewNavigationRect(
+      slide,
+      this.config.maxZoom,
+      this.config.printSlideWidth,
+      this.config.printSlideHeight,
+    );
+    const exportArea = {
+      x: Math.min(rect.left, rect.right),
+      y: Math.min(rect.top, rect.bottom),
+      width: Math.abs(rect.right - rect.left),
+      height: Math.abs(rect.bottom - rect.top),
+    };
+    const localElements = this.ea.getElementsIntersectionArea(elements, exportArea, {
+      includeBoundElements: true,
+    });
 
-    const exportPromise = withEaExportLock(this.ea, async () => {
-      const afterWait = this.cached.get(fingerprint);
-      if (afterWait) return afterWait;
-      const bounds = this.ea.getBoundingBox(elements);
-      // Frame outlines are intentionally omitted from thumbnails. createViewSVG can therefore
-      // calculate a tighter export origin from visible child content than getBoundingBox() does.
-      // Anchor the export to the complete scene bounds with an invisible rectangle so cropping
-      // and scene-coordinate translation share the same origin.
+    return await withEaExportLock(this.ea, async () => {
+      if (generation !== this.generation) return undefined;
       this.ea.clear();
       try {
-        this.ea.copyViewElementsToEAforEditing(elements);
-        const hiddenPath = hiddenPathId ? this.ea.getElement(hiddenPathId) : undefined;
-        if (hiddenPath) hiddenPath.opacity = 0;
+        this.ea.copyViewElementsToEAforEditing(localElements);
+        if (slide.kind === "path") {
+          const hiddenPath = this.ea.getElement(slide.pathId);
+          if (hiddenPath) hiddenPath.opacity = 0;
+        }
         for (const [id, opacity] of originalOpacities ?? []) {
           const element = this.ea.getElement(id);
           if (element) element.opacity = opacity;
@@ -185,14 +210,11 @@ export class SlidePreviewService {
           if (element) element.opacity = 0;
         }
 
-        const anchorId = this.ea.addRect(bounds.topX, bounds.topY, bounds.width, bounds.height);
-        const anchor = this.ea.getElement(anchorId);
-        if (anchor) {
-          anchor.opacity = 0;
-          anchor.strokeWidth = 0.01;
-          anchor.roughness = 0;
-        }
-        const svg = await this.ea.createViewSVG({
+        const scale = Math.min(
+          MAX_PREVIEW_SCALE,
+          Math.max(targetWidth / Math.max(exportArea.width, 1), 0.01),
+        );
+        const blob = await this.ea.createViewPNG({
           withBackground: true,
           theme: appState.theme,
           frameRendering: {
@@ -201,71 +223,80 @@ export class SlidePreviewService {
             outline: false,
             clip: false,
           },
-          padding: EXPORT_PADDING,
+          padding: 0,
           selectedOnly: false,
-          skipInliningFonts: false,
           embedScene: false,
           elementsOverride: this.ea.getElements(),
+          exportArea,
+          scale,
         });
-        return this.remember({
-          fingerprint,
-          svgMarkup: svg.outerHTML,
-          sceneBounds: { topX: bounds.topX, topY: bounds.topY },
-          backgroundColor,
-        });
+        if (generation !== this.generation) return undefined;
+        const cached = {
+          objectUrl: URL.createObjectURL(blob),
+          backgroundColor: readBackgroundColor(appState),
+        };
+        this.cached.set(cacheKey, cached, blob.size);
+        return cached;
       } finally {
         this.ea.clear();
       }
     });
-    this.pending.set(fingerprint, exportPromise);
-    try {
-      return await exportPromise;
-    } finally {
-      if (this.pending.get(fingerprint) === exportPromise) this.pending.delete(fingerprint);
-    }
   }
 
-  /** Creates a cropped SVG preview in the caller's current owner document. */
+  /** Creates a bounded raster preview in the caller's owner document. */
   public async createPreview(
     slide: SlideDeckSlide,
     ownerDocument: Document,
     state: SlidePreviewState = {},
-  ): Promise<SVGSVGElement | null> {
+  ): Promise<HTMLImageElement | null> {
     const elements = this.ea.getViewElements();
     if (elements.length === 0) return null;
     const hiddenElementIds =
       slide.kind === "frame"
         ? getHiddenBuildElementIds(slide, state.completedAnimationSteps, elements)
         : [];
-    const cached = await this.ensureSceneSvg(
-      elements,
-      slide.kind === "path" ? slide.pathId : undefined,
-      hiddenElementIds,
-      state.originalOpacities,
+    const appState = this.api.getAppState();
+    const targetWidth = Math.max(Math.trunc(state.targetWidth ?? DEFAULT_PREVIEW_WIDTH), 1);
+    const opacityKey = state.originalOpacities
+      ? [...state.originalOpacities.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([id, opacity]) => `${id}:${opacity}`)
+          .join(",")
+      : "none";
+    const rect = getPreviewNavigationRect(
+      slide,
+      this.config.maxZoom,
+      this.config.printSlideWidth,
+      this.config.printSlideHeight,
     );
-    const host = ownerDocument.createElement("div");
-    host.innerHTML = cached.svgMarkup;
-    const clone = host.firstElementChild as SVGSVGElement | null;
-    if (!clone || clone.tagName.toLowerCase() !== "svg") return null;
+    const cacheKey = [
+      appState.theme,
+      readBackgroundColor(appState),
+      slide.kind === "path" ? `path:${slide.pathId}` : "frame",
+      `hidden:${hiddenElementIds.join(",")}`,
+      `opacity:${opacityKey}`,
+      `area:${rect.left},${rect.top},${rect.right},${rect.bottom}`,
+      `width:${targetWidth}`,
+      this.getFingerprint(elements),
+    ].join("|");
+    const existing = this.cached.get(cacheKey);
+    if (existing) return this.createPreviewElement(existing, ownerDocument);
 
-    const rect = translateNavigationRect(
-      getPreviewNavigationRect(
-        slide,
-        this.config.maxZoom,
-        this.config.printSlideWidth,
-        this.config.printSlideHeight,
-      ),
-      cached.sceneBounds,
-      EXPORT_PADDING,
+    const generation = this.generation;
+    const cached = await this.queue.enqueue(
+      cacheKey,
+      () =>
+        this.exportPreview(
+          elements,
+          slide,
+          hiddenElementIds,
+          state.originalOpacities,
+          targetWidth,
+          generation,
+          cacheKey,
+        ),
+      () => generation === this.generation,
     );
-    const width = Math.abs(rect.right - rect.left);
-    const height = Math.abs(rect.bottom - rect.top);
-    clone.setAttribute("viewBox", `${rect.left} ${rect.top} ${width} ${height}`);
-    clone.setAttribute("width", "100%");
-    clone.setAttribute("height", "100%");
-    clone.setAttribute("preserveAspectRatio", "xMidYMid meet");
-    clone.setAttribute("aria-hidden", "true");
-    clone.style.backgroundColor = cached.backgroundColor;
-    return clone;
+    return cached ? this.createPreviewElement(cached, ownerDocument) : null;
   }
 }

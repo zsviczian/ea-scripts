@@ -67,6 +67,8 @@ ea-scripts/
 │   │       ├── main.ts
 │   │       └── preview.svg
 │   ├── sharedUtils/
+│   │   ├── AsyncTaskQueue.ts
+│   │   ├── ByteBudgetLruCache.ts
 │   │   ├── i18n.ts
 │   │   ├── notice.ts
 │   │   ├── SingleNotice.ts
@@ -95,7 +97,7 @@ ea-scripts/
 | `npm run new-script -- --name "My Script"` | Creates a complete script workspace with bootstrap, runner, language catalogs, test, README, and preview                                                                                           |
 | `npm test`                                 | Runs every co-located `src/**/__tests__/**/*.test.ts` suite once with Vitest                                                                                                                       |
 | `npm run test:watch`                       | Re-runs affected Vitest suites while developing                                                                                                                                                    |
-| `npm run test:slideshow`                   | Runs only the migrated slideshow checkpoint-1 suite                                                                                                                                                |
+| `npm run test:slideshow`                   | Runs all slideshow checkpoint and performance suites                                                                                                                                              |
 | `npm run check`                            | Typecheck + lint + all tests                                                                                                                                                                       |
 | `npm run sync-refs`                        | Copies the full generated skill snapshot from sibling `obsidian-excalidraw-plugin/docs/AITrainingData/excalidraw-automate/` into `.ai/excalidraw-automate/` and renames reference scripts to `.js` |
 
@@ -111,6 +113,12 @@ second, mirrored directory tree. Keep `main.ts` as the executable bootstrap and
 put behavior in import-safe modules; tests must not import `main.ts`, because it
 runs immediately against Obsidian globals. Vitest discovers all suites through
 one root configuration, and `npm run check` is the universal repository gate.
+
+Reusable performance infrastructure belongs in `src/sharedUtils`: use
+`AsyncTaskQueue` to serialize expensive rendering and invalidate stale queued
+work, and `ByteBudgetLruCache` when cached values have materially different
+memory costs. Keep scene selection, cache keys, and DOM visibility policy in
+the owning script.
 
 ## Localization convention
 

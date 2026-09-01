@@ -86,7 +86,9 @@ On desktop, presenter view runs in a script-owned Obsidian popout. The presenter
 
 ## Thumbnails
 
-`SlidePreviewService` exports the drawing once as SVG for a visual scene fingerprint and crops per-slide clones in the sidepanel's current owner document. The export is anchored to the full scene bounds with an invisible sizing element so hidden frame chrome cannot shift the crop origin. Preview navigation uses the configured `printSlideWidth` × `printSlideHeight` viewport, and the preview container uses the same aspect ratio. Slideshow metadata-only changes do not invalidate the visual SVG cache.
+`SlidePreviewService` calculates each slide's configured `printSlideWidth` × `printSlideHeight` navigation rectangle and exports only elements intersecting that viewport. Sorter and presenter previews are bounded-resolution PNG blobs rather than full-scene SVG clones, so off-slide embedded images are not repeated in every thumbnail. Sorter previews are requested lazily with `IntersectionObserver` and rendered through a serialized queue. A byte-budgeted LRU cache owns object URLs and revokes them on eviction or drawing changes. Slideshow metadata-only changes do not invalidate visual previews.
+
+PDF pages use the same area-selection and exact viewport anchoring through `ea.createViewSVG({ exportArea })`, but remain vector SVGs. Each page is self-contained and includes only image files referenced by elements intersecting that page instead of retaining the complete drawing behind a changed `viewBox`.
 
 ## Slideshow settings
 
@@ -144,8 +146,8 @@ Presentation navigation, the toolbar slide picker, and PDF export consume the ca
 - `desktopDisplays.ts`: best-effort desktop monitor discovery, target selection, window placement, and restoration.
 - `presentationState.ts`: pure authoritative presenter-state construction shared with the presentation controller.
 - `SlideSorter.ts`: rows, drag/drop, keyboard controls, frame/line inclusion, notes, and animation entry UI.
-- `SlidePreviewService.ts`: cached whole-scene SVG export and slide cropping.
-- `printToPdf.ts`: PDF page generation from the canonical visible slide rectangles.
+- `SlidePreviewService.ts`: lazy, byte-budgeted, area-bounded PNG preview generation.
+- `printToPdf.ts`: page-local SVG generation from canonical visible slide rectangles.
 - `styles.ts`: sidepanel/sorter CSS.
 - `types.ts`: slideshow domain contracts and host-facing types.
 
@@ -167,4 +169,4 @@ Run the full workspace gate with:
 npm run check
 ```
 
-Checkpoint 1 covers schema/deck foundations. Checkpoint 2 adds focused coverage for sorter behavior, ordering, exclusions, notes, presentation consumption, previews, launch routing, and per-view runtime state. Checkpoint 3 covers frame animation target capture/resolution, bound text and groups, conflict reconciliation, animation metadata persistence, hierarchical runtime reveal/reverse/restoration, and line-slide exclusion. Checkpoint 4 adds the desktop presenter popout, synchronized navigation/build state, Markdown notes, next-animation previews, keyboard-focus isolation, multi-display target selection, and popout/window teardown handling.
+Checkpoint 1 covers schema/deck foundations. Checkpoint 2 adds focused coverage for sorter behavior, ordering, exclusions, notes, presentation consumption, previews, launch routing, and per-view runtime state. Checkpoint 3 covers frame animation target capture/resolution, bound text and groups, conflict reconciliation, animation metadata persistence, hierarchical runtime reveal/reverse/restoration, and line-slide exclusion. Checkpoint 4 adds the desktop presenter popout, synchronized navigation/build state, Markdown notes, next-animation previews, keyboard-focus isolation, multi-display target selection, and popout/window teardown handling. Performance tests cover the shared byte-budget cache, serialized task queue, and page-local PDF exports.

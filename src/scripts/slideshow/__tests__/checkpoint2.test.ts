@@ -728,17 +728,12 @@ describe("slideshow checkpoint 2 deck consumption", () => {
         copiedIds = elements.map((element) => element.id);
         workbench = structuredClone(elements) as ExcalidrawElement[];
       },
-      getBoundingBox: () => ({ topX: 0, topY: 0, width: 100, height: 100 }),
+      getElementsIntersectionArea: (elements: readonly ExcalidrawElement[]) => [...elements],
       getElement: (id: string) => workbench.find((element) => element.id === id),
-      addRect: () => {
-        const anchor = frame("anchor", "Anchor");
-        workbench.push(anchor);
-        return anchor.id;
-      },
       getElements: () => workbench,
-      createViewSVG: ({ elementsOverride }: { elementsOverride: ExcalidrawElement[] }) => {
+      createViewPNG: ({ elementsOverride }: { elementsOverride: ExcalidrawElement[] }) => {
         exported = structuredClone(elementsOverride) as ExcalidrawElement[];
-        return Promise.resolve({ outerHTML: "<svg></svg>" });
+        return Promise.resolve(new Blob(["preview"], { type: "image/png" }));
       },
     } as unknown as ExcalidrawAutomate;
     const api = {
@@ -746,14 +741,29 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     } as unknown as ExcalidrawAPI;
     const service = new SlidePreviewService(ea, api, { ...DEFAULT_SLIDESHOW_CONFIG });
 
+    const slide = {
+      id: path.id,
+      kind: "path",
+      pathId: path.id,
+      title: "Path slide",
+      rect: { x1: 0, y1: 0, x2: 100, y2: 100 },
+      excluded: false,
+      order: 0,
+      pointIndex: 0,
+    } as const;
     await (
       service as unknown as {
-        ensureSceneSvg: (
+        exportPreview: (
           elements: readonly ExcalidrawElement[],
-          hiddenPathId?: string,
+          slide: unknown,
+          hiddenElementIds: readonly string[],
+          originalOpacities: ReadonlyMap<string, number> | undefined,
+          targetWidth: number,
+          generation: number,
+          cacheKey: string,
         ) => Promise<unknown>;
       }
-    ).ensureSceneSvg([path, other], path.id);
+    ).exportPreview([path, other], slide, [], undefined, 480, 0, "test");
 
     expect(exported.find((element) => element.id === path.id)?.opacity).toBe(0);
     expect(exported.find((element) => element.id === path.id)?.id).toBe(path.id);
