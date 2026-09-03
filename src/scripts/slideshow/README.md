@@ -3,7 +3,7 @@
 Converts the active Excalidraw drawing into a slideshow presentation. The built
 script is emitted to `build/slideshow/slideshow.md`.
 
-[Watch the Slideshow 3.0 walkthrough](https://www.youtube.com/watch?v=JwgtCrIVeEU)
+[Watch the Slideshow 3.0 walkthrough](https://www.youtube.com/watch?v=JwgtCrIVeEU) and the [Excalidraw 2.27.0 update video](https://youtu.be/am2HOlbYsxI?si=4UPdmFMJcpM6j9oR&t=272)
 
 ![Slideshow example](https://raw.githubusercontent.com/zsviczian/obsidian-excalidraw-plugin/master/images/scripts-slideshow-2.jpg)
 
