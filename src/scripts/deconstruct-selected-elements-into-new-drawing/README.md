@@ -8,8 +8,6 @@ The modal lets you choose the destination folder, filename, template, whether to
 
 Destination names are validated before creation. Filenames reject path separators and characters that are invalid or unsafe across common vault platforms (`\\ / : * ? " < > |` and control characters). Folder paths use `/` only as the path separator and validate each folder name independently.
 
-The script preserves backing data for file-backed images, hyperlinks, SVG bitmap metadata, image color maps, and rendered LaTeX equations when the selected elements are written into the new drawing.
-
 ## Usage
 
 1. Select one or more elements in an Excalidraw drawing.
