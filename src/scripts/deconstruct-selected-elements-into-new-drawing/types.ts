@@ -34,6 +34,7 @@ export interface DeconstructEa extends EaEmbeddedFileHost {
     };
   };
   getListOfTemplateFiles(): TFile[] | null;
+  getNewUniqueFilepath(filename: string, folderpath: string): string;
   create(options: CreateDrawingOptions): Promise<string>;
   isExcalidrawFile(file?: TFile): boolean;
   addImage(

@@ -22,4 +22,5 @@ The default filename and additional template paths can be configured through the
 ## Original demonstrations
 
 ![](https://www.youtube.com/watch?v=HRtaaD34Zzg)
-![]https://www.youtube.com/watch?v=mvMQcz401yo)
+
+![](https://www.youtube.com/watch?v=mvMQcz401yo)

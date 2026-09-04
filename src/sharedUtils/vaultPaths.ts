@@ -24,6 +24,11 @@ const INVALID_FILE_NAME_CHARACTER = /[\\/:*?"<>|\u0000-\u001F]/u;
 const INVALID_FOLDER_SEGMENT_CHARACTER = /[\\:*?"<>|\u0000-\u001F]/u;
 const WINDOWS_RESERVED_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
 
+/** Returns whether a folder-path value represents the vault root. */
+export function isVaultRootFolderPath(folderPath: string): boolean {
+  return folderPath === "" || folderPath === "/";
+}
+
 /** Returns the first invalid character in a vault file/folder name, if present. */
 function firstInvalidCharacter(value: string, pattern: RegExp): string | null {
   return value.match(pattern)?.[0] ?? null;
@@ -70,7 +75,7 @@ export function validateVaultFileName(fileName: string): VaultNameValidationResu
  * is accepted as the vault root.
  */
 export function validateVaultFolderPath(folderPath: string): VaultNameValidationResult {
-  if (folderPath === "" || folderPath === "/") return { valid: true };
+  if (isVaultRootFolderPath(folderPath)) return { valid: true };
   if (folderPath.startsWith("/") || folderPath.endsWith("/") || folderPath.includes("//")) {
     return { valid: false, reason: "invalid-path-shape", segment: folderPath };
   }
@@ -79,6 +84,32 @@ export function validateVaultFolderPath(folderPath: string): VaultNameValidation
     if (!result.valid) return result;
   }
   return { valid: true };
+}
+
+/**
+ * Returns a unique vault-relative file path without delegating folder resolution
+ * to Obsidian or Excalidraw. The vault root is represented by either `""` or `"/"`.
+ */
+export function getUniqueVaultFilePath(
+  folderPath: string,
+  fileName: string,
+  pathExists: (path: string) => boolean,
+): string {
+  const resolvedFolderPath = isVaultRootFolderPath(folderPath) ? "" : folderPath;
+  const lastDot = fileName.lastIndexOf(".");
+  const hasExtension = lastDot > 0;
+  const stem = hasExtension ? fileName.slice(0, lastDot) : fileName;
+  const extension = hasExtension ? fileName.slice(lastDot) : "";
+  const joinPath = (name: string): string =>
+    resolvedFolderPath ? `${resolvedFolderPath}/${name}` : name;
+
+  let candidate = joinPath(fileName);
+  let suffix = 1;
+  while (pathExists(candidate)) {
+    candidate = joinPath(`${stem} ${suffix}${extension}`);
+    suffix += 1;
+  }
+  return candidate;
 }
 
 /** Presents control characters in a readable form for validation messages. */

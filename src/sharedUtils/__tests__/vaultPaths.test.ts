@@ -7,6 +7,8 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatVaultInvalidCharacter,
+  getUniqueVaultFilePath,
+  isVaultRootFolderPath,
   rankVaultFolderSuggestions,
   validateVaultFileName,
   validateVaultFolderPath,
@@ -59,6 +61,20 @@ describe("vaultPaths", () => {
       valid: false,
       reason: "dot-segment",
     });
+  });
+
+  it("recognizes both supported vault-root folder markers", () => {
+    expect(isVaultRootFolderPath("")).toBe(true);
+    expect(isVaultRootFolderPath("/")).toBe(true);
+    expect(isVaultRootFolderPath("Excalidraw")).toBe(false);
+  });
+
+  it("builds unique vault-root paths without delegating root resolution", () => {
+    const existing = new Set(["deconstructed.md", "deconstructed 1.md"]);
+    expect(getUniqueVaultFilePath("/", "deconstructed.md", (path) => existing.has(path))).toBe(
+      "deconstructed 2.md",
+    );
+    expect(getUniqueVaultFilePath("", "fresh.md", (path) => existing.has(path))).toBe("fresh.md");
   });
 
   it("formats control characters for readable notices", () => {
