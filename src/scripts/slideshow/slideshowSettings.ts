@@ -33,6 +33,8 @@ export interface SlideshowLaunchPreferences {
 export interface SlideshowDisplayPreferences {
   presentationDisplayId: number | null;
   presenterDisplayId: number | null;
+  presentationDisplayIdentity?: string | null;
+  presenterDisplayIdentity?: string | null;
 }
 
 const START_MODE_SETTING = "slideshowStartMode";
@@ -40,8 +42,15 @@ const WINDOW_MODE_SETTING = "slideshowWindowMode";
 const NOTES_MODE_SETTING = "slideshowNotesMode";
 const PRESENTATION_TYPE_SETTING = "slideshowPresentationType";
 const DISPLAY_TARGETS_SETTING = "slideshowDisplayTargetsByDevice";
+const DISPLAY_TARGETS_BY_CONFIGURATION_SETTING =
+  "slideshowDisplayTargetsByDeviceConfiguration";
+const PRESENTER_NOTES_FONT_SIZE_SETTING = "slideshowPresenterNotesFontSize";
+const SORTER_THUMBNAIL_MAX_WIDTH_SETTING = "slideshowSorterThumbnailMaxWidth";
 const LEGACY_LAUNCH_MODE_SETTING = "slideshowLaunchMode";
 const LEGACY_START_FULLSCREEN_SETTING = "slideshowStartFullscreen";
+
+export const DEFAULT_PRESENTER_NOTES_FONT_SIZE = 18;
+export const DEFAULT_SORTER_THUMBNAIL_MAX_WIDTH = 280;
 
 function readSettings(ea: ExcalidrawAutomate): Record<string, unknown> {
   const getSettings = (ea as ExcalidrawAutomate & {
@@ -116,40 +125,133 @@ function asDisplayPreferences(value: unknown): SlideshowDisplayPreferences | nul
     if (id === null) return null;
     return typeof id === "number" && Number.isFinite(id) ? id : undefined;
   };
+  const normalizeIdentity = (identity: unknown): string | null | undefined => {
+    if (identity === null) return null;
+    return typeof identity === "string" && identity.length > 0 ? identity : undefined;
+  };
   const presentationDisplayId = normalizeId(record.presentationDisplayId);
   const presenterDisplayId = normalizeId(record.presenterDisplayId);
   if (presentationDisplayId === undefined || presenterDisplayId === undefined) return null;
-  return { presentationDisplayId, presenterDisplayId };
+  const presentationDisplayIdentity = normalizeIdentity(record.presentationDisplayIdentity);
+  const presenterDisplayIdentity = normalizeIdentity(record.presenterDisplayIdentity);
+  return {
+    presentationDisplayId,
+    presenterDisplayId,
+    ...(presentationDisplayIdentity !== undefined ? { presentationDisplayIdentity } : {}),
+    ...(presenterDisplayIdentity !== undefined ? { presenterDisplayIdentity } : {}),
+  };
 }
 
-/** Reads monitor choices for one local device identity. */
+/** Reads monitor choices for one local device and, when supplied, one monitor configuration. */
 export function loadSlideshowDisplayPreferences(
   ea: ExcalidrawAutomate,
   deviceKey: string,
+  configurationKey?: string,
 ): SlideshowDisplayPreferences | null {
-  const raw = readSettings(ea)[DISPLAY_TARGETS_SETTING];
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
-  return asDisplayPreferences((raw as Record<string, unknown>)[deviceKey]);
+  const settings = readSettings(ea);
+  if (configurationKey) {
+    const configuredRaw = settings[DISPLAY_TARGETS_BY_CONFIGURATION_SETTING];
+    if (configuredRaw && typeof configuredRaw === "object" && !Array.isArray(configuredRaw)) {
+      const byDevice = (configuredRaw as Record<string, unknown>)[deviceKey];
+      if (byDevice && typeof byDevice === "object" && !Array.isArray(byDevice)) {
+        const configured = asDisplayPreferences(
+          (byDevice as Record<string, unknown>)[configurationKey],
+        );
+        if (configured) return configured;
+      }
+    }
+  }
+
+  const legacyRaw = settings[DISPLAY_TARGETS_SETTING];
+  if (!legacyRaw || typeof legacyRaw !== "object" || Array.isArray(legacyRaw)) return null;
+  return asDisplayPreferences((legacyRaw as Record<string, unknown>)[deviceKey]);
 }
 
-/** Persists monitor choices independently for each local device identity. */
+/** Persists monitor choices independently for each local device and monitor configuration. */
 export async function saveSlideshowDisplayPreferences(
   ea: ExcalidrawAutomate,
   deviceKey: string,
   preferences: SlideshowDisplayPreferences,
+  configurationKey?: string,
 ): Promise<void> {
   const settings = ea.getScriptSettings();
-  const existingRaw = settings[DISPLAY_TARGETS_SETTING];
+  if (!configurationKey) {
+    const existingRaw = settings[DISPLAY_TARGETS_SETTING];
+    const existing =
+      existingRaw && typeof existingRaw === "object" && !Array.isArray(existingRaw)
+        ? (existingRaw as Record<string, unknown>)
+        : {};
+    await ea.setScriptSettings({
+      ...settings,
+      [DISPLAY_TARGETS_SETTING]: {
+        ...existing,
+        [deviceKey]: { ...preferences },
+      },
+    });
+    return;
+  }
+
+  const existingRaw = settings[DISPLAY_TARGETS_BY_CONFIGURATION_SETTING];
   const existing =
     existingRaw && typeof existingRaw === "object" && !Array.isArray(existingRaw)
       ? (existingRaw as Record<string, unknown>)
       : {};
+  const existingDeviceRaw = existing[deviceKey];
+  const existingDevice =
+    existingDeviceRaw &&
+    typeof existingDeviceRaw === "object" &&
+    !Array.isArray(existingDeviceRaw)
+      ? (existingDeviceRaw as Record<string, unknown>)
+      : {};
   await ea.setScriptSettings({
     ...settings,
-    [DISPLAY_TARGETS_SETTING]: {
+    [DISPLAY_TARGETS_BY_CONFIGURATION_SETTING]: {
       ...existing,
-      [deviceKey]: { ...preferences },
+      [deviceKey]: {
+        ...existingDevice,
+        [configurationKey]: { ...preferences },
+      },
     },
+  });
+}
+
+/** Reads the persisted presenter-notes font size in pixels. */
+export function loadPresenterNotesFontSize(ea: ExcalidrawAutomate): number {
+  const raw = readSettings(ea)[PRESENTER_NOTES_FONT_SIZE_SETTING];
+  const value =
+    typeof raw === "number" && Number.isFinite(raw) ? raw : DEFAULT_PRESENTER_NOTES_FONT_SIZE;
+  return Math.min(48, Math.max(12, Math.round(value)));
+}
+
+/** Persists the presenter-notes font size without disturbing other script settings. */
+export async function savePresenterNotesFontSize(
+  ea: ExcalidrawAutomate,
+  fontSize: number,
+): Promise<void> {
+  const value = Math.min(48, Math.max(12, Math.round(fontSize)));
+  await ea.setScriptSettings({
+    ...ea.getScriptSettings(),
+    [PRESENTER_NOTES_FONT_SIZE_SETTING]: value,
+  });
+}
+
+/** Reads the persisted maximum slide-sorter thumbnail width in pixels. */
+export function loadSorterThumbnailMaxWidth(ea: ExcalidrawAutomate): number {
+  const raw = readSettings(ea)[SORTER_THUMBNAIL_MAX_WIDTH_SETTING];
+  const value =
+    typeof raw === "number" && Number.isFinite(raw) ? raw : DEFAULT_SORTER_THUMBNAIL_MAX_WIDTH;
+  return Math.min(520, Math.max(140, Math.round(value)));
+}
+
+/** Persists the maximum slide-sorter thumbnail width without disturbing other settings. */
+export async function saveSorterThumbnailMaxWidth(
+  ea: ExcalidrawAutomate,
+  width: number,
+): Promise<void> {
+  const value = Math.min(520, Math.max(140, Math.round(width)));
+  await ea.setScriptSettings({
+    ...ea.getScriptSettings(),
+    [SORTER_THUMBNAIL_MAX_WIDTH_SETTING]: value,
   });
 }
 

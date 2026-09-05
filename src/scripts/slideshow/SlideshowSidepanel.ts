@@ -14,7 +14,10 @@ import {
   getAvailableDisplays,
   getCurrentDisplayId,
   getSlideshowDeviceKey,
+  getSlideshowDisplayConfigurationKey,
+  getSlideshowDisplayIdentity,
   onDisplayConfigurationChanged,
+  resolveSlideshowDisplayTarget,
   type SlideshowDisplay,
 } from "./desktopDisplays";
 import { getVisibleSlideIndex, type FrameDeckSlide, type SlideDeckSlide } from "./SlideDeck";
@@ -32,8 +35,10 @@ import {
 } from "./presentationPath";
 import {
   createLinePresentation,
+  declareFrameSlideshow,
   hasBoundLineEndpoint,
   removeLinePresentation,
+  renameFrameSlide,
   renameLinePresentation,
   reorderFrameSlides,
   reorderLineSlides,
@@ -43,12 +48,15 @@ import {
   setLinePresentationPathHidden,
   setLineSlideExcluded,
 } from "./slideDeckMutations";
+import { hasFrameSlideshowDeclaration } from "./slideshowMetadata";
 import {
   loadSlideshowDisplayPreferences,
   loadSlideshowLaunchPreferences,
+  loadSorterThumbnailMaxWidth,
   openSlideshowSettingsModal,
   saveSlideshowDisplayPreferences,
   saveSlideshowLaunchPreferences,
+  saveSorterThumbnailMaxWidth,
   type SlideshowNotesMode,
   type SlideshowStartMode,
   type SlideshowWindowMode,
@@ -62,6 +70,7 @@ import {
 } from "./slideshowRuntime";
 import {
   isLinearPathElement,
+  isFrameElement,
   type LinePresentationSource,
   type PresentationPathType,
   type PresentationSourceKey,
@@ -144,6 +153,16 @@ export function getConvertibleSelectedLine(ea: ExcalidrawAutomate): ExcalidrawLi
   const selected = ea.getViewSelectedElement();
   if (!isLinearPathElement(selected) || Math.floor(selected.points.length / 2) <= 0) return null;
   return getLinePresentationSourceKey(selected) ? null : selected;
+}
+
+/** Returns a selected frame that can explicitly declare the drawing's first frame slideshow. */
+export function getDeclarableSelectedFrame(ea: ExcalidrawAutomate): ExcalidrawFrameElement | null {
+  const selected = ea.getViewSelectedElement();
+  if (!isFrameElement(selected)) return null;
+  const alreadyDeclared = ea
+    .getViewElements()
+    .some((element) => isFrameElement(element) && hasFrameSlideshowDeclaration(element.customData));
+  return alreadyDeclared ? null : selected;
 }
 
 /** Creates disambiguated presentation labels without changing stored presentation names. */
@@ -293,10 +312,12 @@ export class SlideshowSidepanel {
   private displays: SlideshowDisplay[] = [];
   private presentationDisplayId: number | null = null;
   private presenterDisplayId: number | null = null;
+  private displayConfigurationKey: string | null = null;
   private deviceKey: string;
   private settingsWriteQueue: Promise<void> = Promise.resolve();
   private removeDisplayChangeListener: (() => void) | null = null;
   private displayRefreshTimer = 0;
+  private sorterThumbnailMaxWidth: number;
 
   public constructor(private readonly options: SlideshowSidepanelOptions) {
     this.ownerWindow = options.tab.contentEl.ownerDocument.defaultView ?? window;
@@ -306,12 +327,8 @@ export class SlideshowSidepanel {
     this.windowMode = launchPreferences.windowMode;
     this.notesMode = launchPreferences.notesMode;
     this.preferredPresentationType = launchPreferences.presentationType;
+    this.sorterThumbnailMaxWidth = loadSorterThumbnailMaxWidth(options.ea);
     this.deviceKey = getSlideshowDeviceKey(this.ownerWindow);
-    const displayPreferences = loadSlideshowDisplayPreferences(options.ea, this.deviceKey);
-    if (displayPreferences) {
-      this.presentationDisplayId = displayPreferences.presentationDisplayId;
-      this.presenterDisplayId = displayPreferences.presenterDisplayId;
-    }
   }
 
   /** Returns the drawing currently edited by this sidepanel. */
@@ -621,7 +638,8 @@ export class SlideshowSidepanel {
       .map((line) => `${line.key}:${line.name ?? ""}:${getDeckFingerprint(line.resolved)}`)
       .join("|");
     const convertibleId = getConvertibleSelectedLine(ea)?.id ?? "none";
-    const compositeFingerprint = `${presentationSourceKey ?? "none"}|${getDeckFingerprint(choices.frame)}|${lineFingerprint}|candidate=${convertibleId}|${appState.theme}|${appState.viewBackgroundColor}|${getSceneVisualFingerprint(ea.getViewElements())}`;
+    const declarableFrameId = getDeclarableSelectedFrame(ea)?.id ?? "none";
+    const compositeFingerprint = `${presentationSourceKey ?? "none"}|${getDeckFingerprint(choices.frame)}|${lineFingerprint}|candidate=${convertibleId}|frameCandidate=${declarableFrameId}|${appState.theme}|${appState.viewBackgroundColor}|${getSceneVisualFingerprint(ea.getViewElements())}`;
     if (!force && compositeFingerprint === this.lastFingerprint) return;
 
     const requestedSlideId = this.requestedSlideId;
@@ -667,6 +685,10 @@ export class SlideshowSidepanel {
     const doc = tab.contentEl.ownerDocument;
     const root = doc.createElement("div");
     root.className = "slideshow-sidepanel";
+    root.style.setProperty(
+      "--slideshow-sorter-thumbnail-max-width",
+      `${this.sorterThumbnailMaxWidth}px`,
+    );
     tab.contentEl.appendChild(root);
     this.appendSupportLine(root, doc);
     const header = doc.createElement("div");
@@ -722,8 +744,17 @@ export class SlideshowSidepanel {
       void this.printPresentation(event);
     });
 
+    const declarableFrame = getDeclarableSelectedFrame(ea);
     const convertibleLine = getConvertibleSelectedLine(ea);
-    if (convertibleLine) {
+    if (declarableFrame) {
+      const createFrameButton = doc.createElement("button");
+      createFrameButton.type = "button";
+      createFrameButton.className = "slideshow-sidepanel__icon-button";
+      createFrameButton.setAttribute("aria-label", t("declareFrameSlideshow"));
+      createFrameButton.innerHTML = icons.plus;
+      createFrameButton.addEventListener("click", () => void this.declareSelectedFrameSlideshow());
+      header.appendChild(createFrameButton);
+    } else if (convertibleLine) {
       const createPathButton = doc.createElement("button");
       createPathButton.type = "button";
       createPathButton.className = "slideshow-sidepanel__icon-button";
@@ -917,6 +948,31 @@ export class SlideshowSidepanel {
       sourceOptions.find((option) => option.key === this.presentationSourceKey)?.label ??
       (deck.kind === "frame" ? t("frameDeck") : t("linePresentationDefaultName"));
     summary.textContent = `${activeSourceLabel} · ${t("visibleSlideCount", { visible: deck.visibleSlides.length, total: deck.slides.length })}`;
+
+    const thumbnailSizeControl = doc.createElement("label");
+    thumbnailSizeControl.className = "slideshow-sidepanel__thumbnail-size-control";
+    thumbnailSizeControl.setAttribute("aria-label", t("sorterThumbnailSize"));
+    thumbnailSizeControl.title = t("sorterThumbnailSize");
+    const thumbnailSizeSlider = doc.createElement("input");
+    thumbnailSizeSlider.type = "range";
+    thumbnailSizeSlider.min = "140";
+    thumbnailSizeSlider.max = "520";
+    thumbnailSizeSlider.step = "20";
+    thumbnailSizeSlider.value = String(this.sorterThumbnailMaxWidth);
+    thumbnailSizeSlider.setAttribute("aria-label", t("sorterThumbnailSize"));
+    thumbnailSizeSlider.addEventListener("input", () => {
+      this.sorterThumbnailMaxWidth = Number(thumbnailSizeSlider.value);
+      root.style.setProperty(
+        "--slideshow-sorter-thumbnail-max-width",
+        `${this.sorterThumbnailMaxWidth}px`,
+      );
+    });
+    thumbnailSizeSlider.addEventListener("change", () => {
+      void this.persistSorterThumbnailMaxWidth();
+    });
+    thumbnailSizeControl.appendChild(thumbnailSizeSlider);
+    summaryRow.appendChild(thumbnailSizeControl);
+
     if (deck.kind === "path") {
       const presentationSettingsButton = doc.createElement("button");
       presentationSettingsButton.type = "button";
@@ -964,6 +1020,7 @@ export class SlideshowSidepanel {
         saveNotes: (slide, notes) => this.saveNotes(slide, notes),
         requestAnimationEditor: (slide) => this.requestAnimationEditor(slide),
         mountAnimationEditor: (slide, container) => this.mountAnimationEditor(slide, container),
+        editFrameSlideName: (slide) => this.openFrameSlideNameEditor(slide),
         editLineSlide: (slide, index) => this.editLineSlide(slide, index),
         notesBlurred: () => {
           if (this.pendingRefresh) this.scheduleRefresh();
@@ -976,20 +1033,54 @@ export class SlideshowSidepanel {
 
   private refreshDisplayTargets(): void {
     const hostWindow = this.boundView?.ownerWindow ?? this.ownerWindow;
-    this.displays = getAvailableDisplays(hostWindow);
-    if (this.displays.length === 0) {
+    const displays = getAvailableDisplays(hostWindow);
+    const configurationKey = getSlideshowDisplayConfigurationKey(displays);
+    const configurationChanged = configurationKey !== this.displayConfigurationKey;
+    this.displays = displays;
+    this.displayConfigurationKey = configurationKey;
+    if (displays.length === 0) {
       this.presentationDisplayId = null;
       this.presenterDisplayId = null;
       return;
     }
-    const presentationValid = this.displays.some(
+
+    const defaults = chooseDefaultDisplayTargets(displays, getCurrentDisplayId(hostWindow));
+    const saved = loadSlideshowDisplayPreferences(
+      this.options.ea,
+      this.deviceKey,
+      configurationKey,
+    );
+    const savedPresentationId = saved
+      ? resolveSlideshowDisplayTarget(
+          displays,
+          saved.presentationDisplayId,
+          saved.presentationDisplayIdentity,
+        )
+      : null;
+    const savedPresenterId = saved
+      ? resolveSlideshowDisplayTarget(
+          displays,
+          saved.presenterDisplayId,
+          saved.presenterDisplayIdentity,
+        )
+      : null;
+
+    if (configurationChanged) {
+      this.presentationDisplayId = savedPresentationId ?? defaults.presentationDisplayId;
+      this.presenterDisplayId = savedPresenterId ?? defaults.presenterDisplayId;
+      return;
+    }
+
+    const presentationValid = displays.some(
       (display) => display.id === this.presentationDisplayId,
     );
-    const presenterValid = this.displays.some((display) => display.id === this.presenterDisplayId);
-    if (presentationValid && presenterValid) return;
-    const defaults = chooseDefaultDisplayTargets(this.displays, getCurrentDisplayId(hostWindow));
-    if (!presentationValid) this.presentationDisplayId = defaults.presentationDisplayId;
-    if (!presenterValid) this.presenterDisplayId = defaults.presenterDisplayId;
+    const presenterValid = displays.some((display) => display.id === this.presenterDisplayId);
+    if (!presentationValid) {
+      this.presentationDisplayId = savedPresentationId ?? defaults.presentationDisplayId;
+    }
+    if (!presenterValid) {
+      this.presenterDisplayId = savedPresenterId ?? defaults.presenterDisplayId;
+    }
   }
 
   private getDisplayLabel(display: SlideshowDisplay): string {
@@ -1015,13 +1106,43 @@ export class SlideshowSidepanel {
   }
 
   private persistDisplayPreferences(): Promise<void> {
+    const presentationDisplay = this.displays.find(
+      (display) => display.id === this.presentationDisplayId,
+    );
+    const presenterDisplay = this.displays.find(
+      (display) => display.id === this.presenterDisplayId,
+    );
     const preferences = {
       presentationDisplayId: this.presentationDisplayId,
       presenterDisplayId: this.presenterDisplayId,
+      presentationDisplayIdentity: presentationDisplay
+        ? getSlideshowDisplayIdentity(presentationDisplay)
+        : null,
+      presenterDisplayIdentity: presenterDisplay
+        ? getSlideshowDisplayIdentity(presenterDisplay)
+        : null,
     };
+    const configurationKey =
+      this.displayConfigurationKey ?? getSlideshowDisplayConfigurationKey(this.displays);
     this.settingsWriteQueue = this.settingsWriteQueue
-      .then(() => saveSlideshowDisplayPreferences(this.options.ea, this.deviceKey, preferences))
+      .then(() =>
+        saveSlideshowDisplayPreferences(
+          this.options.ea,
+          this.deviceKey,
+          preferences,
+          configurationKey,
+        ),
+      )
       .catch((error) => console.error("Slideshow display preference save failed", error));
+    return this.settingsWriteQueue;
+  }
+
+  /** Persists the sorter thumbnail cap through the sidepanel's serialized settings queue. */
+  private persistSorterThumbnailMaxWidth(): Promise<void> {
+    const width = this.sorterThumbnailMaxWidth;
+    this.settingsWriteQueue = this.settingsWriteQueue
+      .then(() => saveSorterThumbnailMaxWidth(this.options.ea, width))
+      .catch((error) => console.error("Slideshow thumbnail-size save failed", error));
     return this.settingsWriteQueue;
   }
 
@@ -1047,7 +1168,6 @@ export class SlideshowSidepanel {
     const presentationType = getPresentationSourceType(presentationSourceKey);
 
     await this.persistLaunchPreferences();
-    await this.persistDisplayPreferences();
 
     const resume = getResumeSlideForPresentation(
       getSlideshowProgress(view),
@@ -1084,6 +1204,7 @@ export class SlideshowSidepanel {
     this.animationEditor = null;
     this.animationEditingSlideId = null;
     this.refreshDisplayTargets();
+    await this.persistDisplayPreferences();
     const { startFullscreen, openPresenterView } = resolveDeviceLaunchModes(
       this.options.ea.DEVICE.isMobile,
       this.windowMode,
@@ -1160,6 +1281,69 @@ export class SlideshowSidepanel {
       console.error("Slideshow line presentation creation failed", error);
       new Notice(this.options.t("metadataSaveFailed"));
     }
+  }
+
+  private async declareSelectedFrameSlideshow(): Promise<void> {
+    const view = this.boundView;
+    const frame = getDeclarableSelectedFrame(this.options.ea);
+    if (!view || !frame) return;
+    try {
+      await this.sorter?.flushNotes();
+      await declareFrameSlideshow(this.options.ea, frame.id);
+      await view.forceSave(true);
+      this.presentationSourceByDrawing.set(view.file.path, "frame");
+      this.presentationSourceKey = "frame";
+      this.preferredPresentationType = "frame";
+      await this.persistLaunchPreferences();
+      this.lastFingerprint = "";
+      await this.refresh(true);
+    } catch (error) {
+      console.error("Slideshow frame presentation declaration failed", error);
+      new Notice(this.options.t("metadataSaveFailed"));
+    }
+  }
+
+  private openFrameSlideNameEditor(slide: FrameDeckSlide): void {
+    const view = this.boundView;
+    if (!view) return;
+    const frame = this.options.ea
+      .getViewElements()
+      .find(
+        (element): element is ExcalidrawFrameElement =>
+          element.id === slide.frameId && isFrameElement(element),
+      );
+    if (!frame) return;
+    const { ea, t } = this.options;
+    const modal = new ea.obsidian.Modal(app);
+    modal.titleEl.setText(t("editFrameSlideName"));
+    const input = modal.contentEl.createEl("input", {
+      type: "text",
+      value: frame.name ?? "",
+      attr: { "aria-label": t("frameSlideName") },
+    });
+    input.style.width = "100%";
+    input.style.marginBottom = "1rem";
+    const actions = modal.contentEl.createDiv({ cls: "modal-button-container" });
+    const cancel = actions.createEl("button", { text: t("settingsCancel") });
+    cancel.addEventListener("click", () => modal.close());
+    const save = actions.createEl("button", { text: t("settingsSave"), cls: "mod-cta" });
+    save.addEventListener("click", () => {
+      void (async () => {
+        try {
+          await renameFrameSlide(ea, slide.frameId, input.value);
+          await view.forceSave(true);
+          modal.close();
+          this.lastFingerprint = "";
+          await this.refresh(true);
+        } catch (error) {
+          console.error("Slideshow frame rename failed", error);
+          new Notice(t("metadataSaveFailed"));
+        }
+      })();
+    });
+    modal.open();
+    input.focus();
+    input.select();
   }
 
   private openLinePresentationSettings(): void {
@@ -1385,7 +1569,7 @@ export class SlideshowSidepanel {
       this.sorter = null;
       const sorter = this.render(slide.id, expandedNotesId);
       this.selectAndZoomAnimationFrame(slide);
-      sorter?.scrollToSlide(slide.id, false);
+      sorter?.scrollToSlide(slide.id, false, "start");
     })();
   }
 

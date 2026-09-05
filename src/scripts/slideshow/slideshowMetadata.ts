@@ -127,6 +127,16 @@ export function getRawSlideshowMetadata(customData: unknown): unknown {
   return isRecord(customData) ? customData.slideshow : undefined;
 }
 
+/** Returns whether customData carries a valid frame slideshow or its minimal declaration marker. */
+export function hasFrameSlideshowDeclaration(customData: unknown): boolean {
+  const value = getRawSlideshowMetadata(customData);
+  if (!isRecord(value) || value.schemaVersion !== FRAME_SCHEMA_VERSION || value.kind !== "frame") {
+    return false;
+  }
+  if (value.order !== undefined) return readFrameSlideshowData(customData) !== null;
+  return Object.keys(value).every((key) => key === "schemaVersion" || key === "kind");
+}
+
 /** Validates and copies frame slideshow metadata. */
 export function readFrameSlideshowData(customData: unknown): FrameSlideshowData | null {
   const value = getRawSlideshowMetadata(customData);

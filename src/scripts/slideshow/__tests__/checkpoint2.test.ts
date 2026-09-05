@@ -7,12 +7,21 @@ import {
 } from "../SlidePreviewService";
 import {
   DEFAULT_SLIDESHOW_CONFIG,
+  loadPresenterNotesFontSize,
+  loadSorterThumbnailMaxWidth,
   normalizeSlideshowConfig,
   resetSlideshowConfigToDefaults,
+  savePresenterNotesFontSize,
   saveSlideshowConfig,
+  saveSorterThumbnailMaxWidth,
 } from "../slideshowSettings";
-import { hasSlideshowMetadata, registerSlideshowElementActionProvider } from "../slideshowLauncher";
+import {
+  ensureManualSlideshowDeclaration,
+  hasSlideshowMetadata,
+  registerSlideshowElementActionProvider,
+} from "../slideshowLauncher";
 import { createSlideshowTranslator } from "../lang";
+import { SLIDESHOW_SIDEPANEL_STYLES } from "../styles";
 import {
   getAlternatePresentationSourceKey,
   getAlternatePresentationType,
@@ -23,8 +32,10 @@ import {
 } from "../presentationPath";
 import {
   createLinePresentation,
+  declareFrameSlideshow,
   hasBoundLineEndpoint,
   removeLinePresentation,
+  renameFrameSlide,
   renameLinePresentation,
   reorderFrameSlides,
   reorderLineSlides,
@@ -33,7 +44,12 @@ import {
   setFrameExcluded,
   setLinePresentationPathHidden,
 } from "../slideDeckMutations";
-import { readFrameSlideshowData, readLineSlideshowDataV2 } from "../slideshowMetadata";
+import {
+  getRawSlideshowMetadata,
+  hasFrameSlideshowDeclaration,
+  readFrameSlideshowData,
+  readLineSlideshowDataV2,
+} from "../slideshowMetadata";
 import {
   getSlideshowProgress,
   getSlideshowProgressSource,
@@ -41,12 +57,14 @@ import {
   getSlideshowRuntime,
   resetSlideshowRuntimeForTests,
   setSlideshowProgress,
+  type SlideshowViewContext,
 } from "../slideshowRuntime";
 import { runSlideshow } from "../run";
 import { buildFrameSlideDeck } from "../SlideDeck";
 import {
   getDragAutoScrollVelocity,
   getDropInsertionIndex,
+  getDropInsertionIndexFromRects,
   getDropMoveTarget,
   SlideSorter,
 } from "../SlideSorter";
@@ -55,6 +73,7 @@ import {
   chooseSidepanelPresentationType,
   clearLineSelectionForDeckSwitch,
   getConvertibleSelectedLine,
+  getDeclarableSelectedFrame,
   getPresentationSourceLabels,
   getResumeSlideForPresentation,
   resolveDeviceLaunchModes,
@@ -103,7 +122,10 @@ function line(customData?: Record<string, unknown>, id = "path"): ExcalidrawLine
   } as unknown as ExcalidrawLinearElement;
 }
 
-function createFakeEa(elements: ExcalidrawElement[]): ExcalidrawAutomate & {
+function createFakeEa(
+  elements: ExcalidrawElement[],
+  selectedElementId?: string,
+): ExcalidrawAutomate & {
   commits: number;
   saveRequests: number;
 } {
@@ -113,8 +135,12 @@ function createFakeEa(elements: ExcalidrawElement[]): ExcalidrawAutomate & {
     sidepanelTab: null,
     commits: 0,
     saveRequests: 0,
+    setView: () => null,
     getViewElements: () => elements,
-    getViewSelectedElement: () => null,
+    getViewSelectedElement: () =>
+      selectedElementId
+        ? elements.find((element) => element.id === selectedElementId) ?? null
+        : null,
     cloneElement: <T extends ExcalidrawElement>(element: T) =>
       structuredClone(element) as Mutable<T>,
     clear: () => {
@@ -151,6 +177,80 @@ function createFakeEa(elements: ExcalidrawElement[]): ExcalidrawAutomate & {
 }
 
 describe("slideshow checkpoint 2 mutations", () => {
+  it("auto-declares a selected ordinary line before falling back to scene frames", async () => {
+    const elements: ExcalidrawElement[] = [frame("frame-a", "Frame"), line(undefined, "path")];
+    const ea = createFakeEa(elements, "path");
+    const view = {} as ScriptExcalidrawView;
+
+    await expect(
+      ensureManualSlideshowDeclaration({ ea, view } as unknown as SlideshowViewContext),
+    ).resolves.toBe("line:path");
+
+    expect(
+      readLineSlideshowDataV2(elements.find((element) => element.id === "path")?.customData),
+    ).not.toBeNull();
+    expect(hasFrameSlideshowDeclaration(elements[0]?.customData)).toBe(false);
+    expect(ea.commits).toBe(1);
+  });
+
+  it("auto-declares the selected frame when no line is selected", async () => {
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha"), frame("b", "Bravo")];
+    const ea = createFakeEa(elements, "b");
+    const view = {} as ScriptExcalidrawView;
+
+    await expect(
+      ensureManualSlideshowDeclaration({ ea, view } as unknown as SlideshowViewContext),
+    ).resolves.toBe("frame");
+
+    expect(hasFrameSlideshowDeclaration(elements[0]?.customData)).toBe(false);
+    expect(hasFrameSlideshowDeclaration(elements[1]?.customData)).toBe(true);
+    expect(ea.commits).toBe(1);
+  });
+
+  it("auto-declares an existing frame deck even when no frame is selected", async () => {
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha"), frame("b", "Bravo")];
+    const ea = createFakeEa(elements);
+    const view = {} as ScriptExcalidrawView;
+
+    await expect(
+      ensureManualSlideshowDeclaration({ ea, view } as unknown as SlideshowViewContext),
+    ).resolves.toBe("frame");
+
+    expect(hasFrameSlideshowDeclaration(elements[0]?.customData)).toBe(true);
+    expect(hasFrameSlideshowDeclaration(elements[1]?.customData)).toBe(false);
+    expect(ea.commits).toBe(1);
+  });
+
+  it("declares a frame slideshow on only the selected frame without changing deck order", async () => {
+    const elements: ExcalidrawElement[] = [
+      frame("c", "Charlie"),
+      frame("a", "Alpha"),
+      frame("b", "Bravo"),
+    ];
+    const ea = createFakeEa(elements);
+    await declareFrameSlideshow(ea, "b");
+    const byId = new Map(elements.map((element) => [element.id, element]));
+    expect(getRawSlideshowMetadata(byId.get("b")?.customData)).toEqual({
+      schemaVersion: 2,
+      kind: "frame",
+    });
+    expect(hasFrameSlideshowDeclaration(byId.get("b")?.customData)).toBe(true);
+    expect(readFrameSlideshowData(byId.get("b")?.customData)).toBeNull();
+    expect(byId.get("a")?.customData).toBeUndefined();
+    expect(byId.get("c")?.customData).toBeUndefined();
+    expect(
+      buildFrameSlideDeck(elements as ExcalidrawFrameElement[]).slides.map((slide) => slide.id),
+    ).toEqual(["a", "b", "c"]);
+    expect(ea.commits).toBe(1);
+  });
+
+  it("renames the underlying frame when a frame slide is renamed", async () => {
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha")];
+    const ea = createFakeEa(elements);
+    await renameFrameSlide(ea, "a", "Opening");
+    expect((elements[0] as ExcalidrawFrameElement).name).toBe("Opening");
+  });
+
   it("normalizes and reorders all frames in one scene transaction", async () => {
     const elements: ExcalidrawElement[] = [
       frame("c", "Charlie", { preserved: 1 }),
@@ -670,6 +770,40 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(persisted.printSlideHeight).toBe(1000);
   });
 
+  it("persists and clamps the presenter notes font size without deleting other settings", async () => {
+    let persisted: Record<string, unknown> = { unrelated: "keep" };
+    const ea = {
+      getScriptSettings: () => persisted,
+      setScriptSettings: async (settings: Record<string, unknown>) => {
+        persisted = settings;
+      },
+    } as unknown as ExcalidrawAutomate;
+    expect(loadPresenterNotesFontSize(ea)).toBe(18);
+    await savePresenterNotesFontSize(ea, 22.4);
+    expect(loadPresenterNotesFontSize(ea)).toBe(22);
+    expect(persisted.unrelated).toBe("keep");
+    await savePresenterNotesFontSize(ea, 99);
+    expect(loadPresenterNotesFontSize(ea)).toBe(48);
+  });
+
+  it("persists and clamps the sorter thumbnail maximum width without deleting other settings", async () => {
+    let persisted: Record<string, unknown> = { unrelated: "keep" };
+    const ea = {
+      getScriptSettings: () => persisted,
+      setScriptSettings: async (settings: Record<string, unknown>) => {
+        persisted = settings;
+      },
+    } as unknown as ExcalidrawAutomate;
+    expect(loadSorterThumbnailMaxWidth(ea)).toBe(280);
+    await saveSorterThumbnailMaxWidth(ea, 346);
+    expect(loadSorterThumbnailMaxWidth(ea)).toBe(346);
+    expect(persisted.unrelated).toBe("keep");
+    await saveSorterThumbnailMaxWidth(ea, 999);
+    expect(loadSorterThumbnailMaxWidth(ea)).toBe(520);
+    await saveSorterThumbnailMaxWidth(ea, 80);
+    expect(loadSorterThumbnailMaxWidth(ea)).toBe(140);
+  });
+
   it("calculates preview crops against an HD presentation viewport", () => {
     const slide = {
       id: "a",
@@ -782,6 +916,21 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     );
   });
 
+  it("keeps tiled sorter status badges compact without reserving the old tall header", () => {
+    const t = createSlideshowTranslator("en");
+    expect(t("notesPresent")).toBe("Notes");
+    expect(t("animationCount", { count: 7 })).toBe("7 anims");
+    expect(SLIDESHOW_SIDEPANEL_STYLES).toContain(
+      ".slideshow-sorter:not(.has-expanded-editor) .slideshow-sorter__top { min-height:0",
+    );
+    expect(SLIDESHOW_SIDEPANEL_STYLES).toContain(
+      ".slideshow-sorter:not(.has-expanded-editor) .slideshow-sorter__badge-text { display:none; }",
+    );
+    expect(SLIDESHOW_SIDEPANEL_STYLES).toContain(
+      ".slideshow-sorter:not(.has-expanded-editor) .slideshow-sorter__badge-compact-count { display:inline; }",
+    );
+  });
+
   it("thumbnail fingerprint ignores slideshow metadata-only edits", () => {
     const before = frame("a", "Alpha", {
       slideshow: { schemaVersion: 2, kind: "frame", order: 0 },
@@ -805,9 +954,27 @@ describe("slideshow checkpoint 2 deck consumption", () => {
 });
 
 describe("slideshow checkpoint 2 element actions", () => {
-  it("offers slideshow editing only for elements with valid slideshow metadata", () => {
+  it("offers frame slideshow declaration only before any frame has slideshow metadata", () => {
+    const selected = frame("a", "Alpha");
+    const plainEa = {
+      getViewSelectedElement: () => selected,
+      getViewElements: () => [selected, frame("b", "Bravo")],
+    } as unknown as ExcalidrawAutomate;
+    expect(getDeclarableSelectedFrame(plainEa)?.id).toBe("a");
+
+    const declaredEa = {
+      getViewSelectedElement: () => selected,
+      getViewElements: () => [
+        selected,
+        frame("b", "Bravo", { slideshow: { schemaVersion: 2, kind: "frame" } }),
+      ],
+    } as unknown as ExcalidrawAutomate;
+    expect(getDeclarableSelectedFrame(declaredEa)).toBeNull();
+  });
+
+  it("offers slideshow editing for declared frames and elements with valid slideshow metadata", () => {
     const slideshowFrame = frame("a", "Alpha", {
-      slideshow: { schemaVersion: 2, kind: "frame", order: 0 },
+      slideshow: { schemaVersion: 2, kind: "frame" },
     });
     const slideshowLine = line({
       slideshow: {
@@ -873,7 +1040,7 @@ describe("slideshow checkpoint 2 element actions", () => {
   it("offers slideshow editing on every frame when the scene contains a presentation frame", () => {
     vi.stubGlobal("app", {});
     const slideshowFrame = frame("a", "Alpha", {
-      slideshow: { schemaVersion: 2, kind: "frame", order: 0 },
+      slideshow: { schemaVersion: 2, kind: "frame" },
     });
     const plainFrame = frame("b", "Bravo");
     let provider:
@@ -956,6 +1123,11 @@ describe("slideshow checkpoint 2 element actions", () => {
     expect(focus).toHaveBeenCalledWith({ preventScroll: true });
     expect(scrollIntoView).toHaveBeenCalledTimes(2);
     expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "center" });
+
+    scrollIntoView.mockClear();
+    sorter.scrollToSlide("b", false, "start");
+    expect(scrollIntoView).toHaveBeenCalledTimes(2);
+    expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "start" });
   });
 
   it("pins sorter selection while a frame animation editor is active", async () => {
@@ -990,6 +1162,30 @@ describe("slideshow checkpoint 2 element actions", () => {
     expect(getDropInsertionIndex([100, 200, 300], 50)).toBe(0);
     expect(getDropInsertionIndex([100, 200, 300], 250)).toBe(2);
     expect(getDropInsertionIndex([100, 200, 300], 350)).toBe(3);
+    expect(
+      getDropInsertionIndexFromRects(
+        [
+          { left: 0, right: 100, top: 0, bottom: 80 },
+          { left: 110, right: 210, top: 0, bottom: 80 },
+          { left: 0, right: 100, top: 90, bottom: 170 },
+          { left: 110, right: 210, top: 90, bottom: 170 },
+        ],
+        150,
+        20,
+      ),
+    ).toBe(1);
+    expect(
+      getDropInsertionIndexFromRects(
+        [
+          { left: 0, right: 100, top: 0, bottom: 80 },
+          { left: 110, right: 210, top: 0, bottom: 80 },
+          { left: 0, right: 100, top: 90, bottom: 170 },
+          { left: 110, right: 210, top: 90, bottom: 170 },
+        ],
+        20,
+        120,
+      ),
+    ).toBe(2);
 
     expect(getDropMoveTarget(1, 0, 4)).toBe(0);
     expect(getDropMoveTarget(1, 2, 4)).toBeNull();

@@ -17,6 +17,7 @@ export interface SlideSorterCallbacks {
   saveNotes(slide: SlideDeckSlide, notes: string): Promise<void>;
   requestAnimationEditor(slide: SlideDeckSlide): void;
   mountAnimationEditor?(slide: FrameDeckSlide, container: HTMLElement): void;
+  editFrameSlideName?(slide: FrameDeckSlide): void;
   editLineSlide(slide: SlideDeckSlide, index: number): Promise<void>;
   notesBlurred(): void;
 }
@@ -37,6 +38,41 @@ export interface SlideSorterOptions {
 export function getDropInsertionIndex(rowMidpoints: readonly number[], pointerY: number): number {
   const index = rowMidpoints.findIndex((midpoint) => pointerY < midpoint);
   return index === -1 ? rowMidpoints.length : index;
+}
+
+export interface SorterRowRect {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/** Returns the row-major insertion gap nearest a pointer in either list or grid layouts. */
+export function getDropInsertionIndexFromRects(
+  rowRects: readonly SorterRowRect[],
+  pointerX: number,
+  pointerY: number,
+): number {
+  if (rowRects.length === 0) return 0;
+  const groups: Array<Array<{ rect: SorterRowRect; index: number }>> = [];
+  rowRects.forEach((rect, index) => {
+    const group = groups.find((candidate) => {
+      const first = candidate[0]?.rect;
+      return Boolean(first && Math.abs(first.top - rect.top) <= 8);
+    });
+    if (group) group.push({ rect, index });
+    else groups.push([{ rect, index }]);
+  });
+
+  const targetGroup = groups.find((group) => {
+    const top = Math.min(...group.map((entry) => entry.rect.top));
+    const bottom = Math.max(...group.map((entry) => entry.rect.bottom));
+    return pointerY < (top + bottom) / 2;
+  });
+  if (!targetGroup) return rowRects.length;
+  const ordered = [...targetGroup].sort((a, b) => a.rect.left - b.rect.left);
+  const target = ordered.find((entry) => pointerX < (entry.rect.left + entry.rect.right) / 2);
+  return target?.index ?? (ordered[ordered.length - 1]?.index ?? -1) + 1;
 }
 
 /** Converts a pre-removal insertion gap into the slide's final index. */
@@ -89,6 +125,7 @@ export class SlideSorter {
   private renderGeneration = 0;
   private draggedIndex: number | null = null;
   private dropTargetIndex: number | null = null;
+  private dragPointerX: number | null = null;
   private dragPointerY: number | null = null;
   private autoScrollVelocity = 0;
   private autoScrollFrame = 0;
@@ -138,15 +175,19 @@ export class SlideSorter {
   }
 
   /** Scrolls the requested slide row into the visible sorter viewport. */
-  public scrollToSlide(slideId: string, focus = true): void {
+  public scrollToSlide(
+    slideId: string,
+    focus = true,
+    block: ScrollLogicalPosition = "center",
+  ): void {
     const row = Array.from(
       this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__row"),
     ).find((candidate) => candidate.dataset.slideId === slideId);
     if (!row) return;
     if (focus) row.focus({ preventScroll: true });
-    row.scrollIntoView({ block: "center" });
+    row.scrollIntoView({ block });
     this.ownerWindow.setTimeout(() => {
-      if (row.isConnected) row.scrollIntoView({ block: "center" });
+      if (row.isConnected) row.scrollIntoView({ block });
     }, 50);
   }
 
@@ -193,6 +234,10 @@ export class SlideSorter {
       deck.slides.some((slide) => slide.id === preferredNotesSlideId)
         ? preferredNotesSlideId
         : null;
+    container.classList.toggle(
+      "has-expanded-editor",
+      Boolean(this.expandedNotesSlideId || this.options.animationEditingSlideId),
+    );
 
     deck.slides.forEach((slide, index) => {
       const row = this.createRow(slide, index);
@@ -277,24 +322,47 @@ export class SlideSorter {
 
     const top = doc.createElement("div");
     top.className = "slideshow-sorter__top";
+    const titleRow = doc.createElement("div");
+    titleRow.className = "slideshow-sorter__title-row";
     const title = doc.createElement("div");
     title.className = "slideshow-sorter__title";
     const titleText = t("slideNumberAndTitle", { number: index + 1, title: slide.title });
     title.textContent = titleText;
     title.title = titleText;
-    top.appendChild(title);
+    titleRow.appendChild(title);
+    if (slide.kind === "frame") {
+      const editTitleButton = this.createIconButton(
+        doc,
+        icons.edit,
+        t("editFrameSlideName"),
+        false,
+        () => this.options.callbacks.editFrameSlideName?.(slide),
+      );
+      editTitleButton.className = "slideshow-sorter__title-edit";
+      editTitleButton.draggable = false;
+      editTitleButton.addEventListener("dragstart", (event) => event.preventDefault());
+      titleRow.appendChild(editTitleButton);
+    }
+    top.appendChild(titleRow);
     const badges = doc.createElement("div");
     badges.className = "slideshow-sorter__badges";
     if (slide.notes) {
       const badge = doc.createElement("span");
-      badge.className = "slideshow-sorter__badge";
-      badge.innerHTML = `${icons.notebookPen}<span>${t("notesPresent")}</span>`;
+      const label = t("notesPresent");
+      badge.className = "slideshow-sorter__badge slideshow-sorter__badge--notes";
+      badge.title = label;
+      badge.setAttribute("aria-label", label);
+      badge.innerHTML = `${icons.notebookPen}<span class="slideshow-sorter__badge-text">${label}</span>`;
       badges.appendChild(badge);
     }
     if (slide.kind === "frame" && slide.animationSteps.length > 0) {
       const badge = doc.createElement("span");
-      badge.className = "slideshow-sorter__badge";
-      badge.innerHTML = `${icons.sparkles}<span>${t("animationCount", { count: slide.animationSteps.length })}</span>`;
+      const count = slide.animationSteps.length;
+      const label = t("animationCount", { count });
+      badge.className = "slideshow-sorter__badge slideshow-sorter__badge--animation";
+      badge.title = label;
+      badge.setAttribute("aria-label", label);
+      badge.innerHTML = `${icons.sparkles}<span class="slideshow-sorter__badge-compact-count" aria-hidden="true">${count}</span><span class="slideshow-sorter__badge-text">${label}</span>`;
       badges.appendChild(badge);
     }
     top.appendChild(badges);
@@ -471,6 +539,7 @@ export class SlideSorter {
     this.selectedSlideId = slideId;
     this.expandedNotesSlideId = slideId;
     this.render(slideId, slideId);
+    this.scrollToSlide(slideId, false, "start");
     if (focusNotes) this.notesTextarea?.focus();
   }
 
@@ -523,8 +592,9 @@ export class SlideSorter {
     if (this.draggedIndex === null) return;
     event.preventDefault();
     if (event.dataTransfer) event.dataTransfer.dropEffect = "move";
+    this.dragPointerX = event.clientX;
     this.dragPointerY = event.clientY;
-    this.updateDropTarget(event.clientY);
+    this.updateDropTarget(event.clientX, event.clientY);
     this.updateAutoScroll(event.clientY);
   };
 
@@ -546,15 +616,13 @@ export class SlideSorter {
     if (target !== null) void this.options.callbacks.move(fromIndex, target);
   };
 
-  private updateDropTarget(pointerY: number): void {
+  private updateDropTarget(pointerX: number, pointerY: number): void {
     const rows = Array.from(
       this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__row"),
     );
-    const insertionIndex = getDropInsertionIndex(
-      rows.map((row) => {
-        const rect = row.getBoundingClientRect();
-        return rect.top + rect.height / 2;
-      }),
+    const insertionIndex = getDropInsertionIndexFromRects(
+      rows.map((row) => row.getBoundingClientRect()),
+      pointerX,
       pointerY,
     );
     if (insertionIndex === this.dropTargetIndex) return;
@@ -593,7 +661,9 @@ export class SlideSorter {
       this.autoScrollVelocity = 0;
       return;
     }
-    if (this.dragPointerY !== null) this.updateDropTarget(this.dragPointerY);
+    if (this.dragPointerX !== null && this.dragPointerY !== null) {
+      this.updateDropTarget(this.dragPointerX, this.dragPointerY);
+    }
     this.autoScrollFrame = this.ownerWindow.requestAnimationFrame(this.runAutoScroll);
   };
 
@@ -612,6 +682,7 @@ export class SlideSorter {
       ) ?? [];
     rows.forEach((row) => row.classList.remove("is-dragging"));
     this.draggedIndex = null;
+    this.dragPointerX = null;
     this.dragPointerY = null;
   }
 

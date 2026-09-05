@@ -8,6 +8,8 @@ import {
   getAvailableDisplays,
   getCurrentDisplayId,
   getSlideshowDeviceKey,
+  getSlideshowDisplayConfigurationKey,
+  resolveSlideshowDisplayTarget,
 } from "./desktopDisplays";
 import { getSlideshowIcons } from "./icons";
 import {
@@ -19,7 +21,8 @@ import {
 import { SlideshowController } from "./SlideshowController";
 import { SlideshowSidepanel } from "./SlideshowSidepanel";
 import { printSlideshowToPdf } from "./printToPdf";
-import { readFrameSlideshowData } from "./slideshowMetadata";
+import { createLinePresentation, declareFrameSlideshow } from "./slideDeckMutations";
+import { hasFrameSlideshowDeclaration } from "./slideshowMetadata";
 import {
   loadSlideshowDisplayPreferences,
   loadSlideshowLaunchPreferences,
@@ -57,6 +60,38 @@ export interface ManualSlideshowInvocationIntent {
   startFullscreen: boolean;
 }
 
+/**
+ * Converts the current manual-launch target into persisted slideshow metadata when needed.
+ * A selected line/arrow wins over frames. Otherwise any frame deck is implicitly declared,
+ * using the selected frame when available and the first scene frame as a fallback.
+ */
+export async function ensureManualSlideshowDeclaration(
+  context: SlideshowViewContext,
+): Promise<PresentationSourceKey | undefined> {
+  const { ea, view } = context;
+  ea.setView(view);
+
+  const selected = ea.getViewSelectedElement();
+  if (isLinearPathElement(selected)) {
+    const existingSourceKey = getLinePresentationSourceKey(selected);
+    if (existingSourceKey) return existingSourceKey;
+    if (Math.floor(selected.points.length / 2) > 0) {
+      await createLinePresentation(ea, selected.id);
+      return `line:${selected.id}`;
+    }
+  }
+
+  const frames = ea.getViewElements().filter(isFrameElement);
+  if (frames.length === 0) return undefined;
+
+  const alreadyDeclared = frames.some((frame) => hasFrameSlideshowDeclaration(frame.customData));
+  if (!alreadyDeclared) {
+    const declarationFrame = isFrameElement(selected) ? selected : frames[0];
+    if (declarationFrame) await declareFrameSlideshow(ea, declarationFrame.id);
+  }
+  return "frame";
+}
+
 /** Resolves the script-button modifier contract without depending on DOM event timing. */
 export function resolveManualInvocationIntent(
   modifiers: Pick<
@@ -76,7 +111,7 @@ function resolveLaunchModifiers(view: ScriptExcalidrawView): { startFullscreen: 
 }
 
 function getElementPresentationSourceKey(element: ExcalidrawElement): PresentationSourceKey | null {
-  if (isFrameElement(element) && readFrameSlideshowData(element.customData)) return "frame";
+  if (isFrameElement(element) && hasFrameSlideshowDeclaration(element.customData)) return "frame";
   if (isLinearPathElement(element)) return getLinePresentationSourceKey(element);
   return null;
 }
@@ -98,7 +133,8 @@ export function registerSlideshowElementActionProvider(
       latestContext.ea
         .getViewElements()
         .some(
-          (candidate) => isFrameElement(candidate) && readFrameSlideshowData(candidate.customData),
+          (candidate) =>
+            isFrameElement(candidate) && hasFrameSlideshowDeclaration(candidate.customData),
         )
         ? "frame"
         : null);
@@ -308,13 +344,14 @@ export async function openSlideshowSidepanel(
 
 /** Routes a script-button, command-palette, or hotkey invocation for the current view. */
 export async function runManualSlideshowInvocation(context: SlideshowViewContext): Promise<void> {
+  const active = getSlideshowRuntime().presentations.get(context.view);
+  const preferredSourceKey = active ? undefined : await ensureManualSlideshowDeclaration(context);
   const intent = resolveManualInvocationIntent(context.view.modifierKeyDown);
   if (intent.openSidepanel) {
-    await openSlideshowSidepanel(context);
+    await openSlideshowSidepanel(context, preferredSourceKey);
     return;
   }
 
-  const active = getSlideshowRuntime().presentations.get(context.view);
   if (active) {
     active.advance();
     return;
@@ -330,25 +367,32 @@ export async function runManualSlideshowInvocation(context: SlideshowViewContext
     resume: intent.resume,
     startFullscreen: intent.startFullscreen,
     openPresenterView,
+    ...(preferredSourceKey === undefined ? {} : { presentationSourceKey: preferredSourceKey }),
   };
 
   if (openPresenterView) {
     const deviceKey = getSlideshowDeviceKey(ownerWindow);
-    const savedDisplays = loadSlideshowDisplayPreferences(context.ea, deviceKey);
+    const configurationKey = getSlideshowDisplayConfigurationKey(displays);
+    const savedDisplays = loadSlideshowDisplayPreferences(
+      context.ea,
+      deviceKey,
+      configurationKey,
+    );
     const defaults = chooseDefaultDisplayTargets(displays, getCurrentDisplayId(ownerWindow));
-    const validDisplayIds = new Set(displays.map((display) => display.id));
-    const presentationDisplayId =
-      savedDisplays?.presentationDisplayId !== null &&
-      savedDisplays?.presentationDisplayId !== undefined &&
-      validDisplayIds.has(savedDisplays.presentationDisplayId)
-        ? savedDisplays.presentationDisplayId
-        : defaults.presentationDisplayId;
-    const presenterDisplayId =
-      savedDisplays?.presenterDisplayId !== null &&
-      savedDisplays?.presenterDisplayId !== undefined &&
-      validDisplayIds.has(savedDisplays.presenterDisplayId)
-        ? savedDisplays.presenterDisplayId
-        : defaults.presenterDisplayId;
+    const presentationDisplayId = savedDisplays
+      ? (resolveSlideshowDisplayTarget(
+          displays,
+          savedDisplays.presentationDisplayId,
+          savedDisplays.presentationDisplayIdentity,
+        ) ?? defaults.presentationDisplayId)
+      : defaults.presentationDisplayId;
+    const presenterDisplayId = savedDisplays
+      ? (resolveSlideshowDisplayTarget(
+          displays,
+          savedDisplays.presenterDisplayId,
+          savedDisplays.presenterDisplayIdentity,
+        ) ?? defaults.presenterDisplayId)
+      : defaults.presenterDisplayId;
     if (presentationDisplayId !== null) launch.presentationDisplayId = presentationDisplayId;
     if (presenterDisplayId !== null) launch.presenterDisplayId = presenterDisplayId;
   }

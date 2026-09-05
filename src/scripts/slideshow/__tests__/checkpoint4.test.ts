@@ -4,7 +4,10 @@ import {
   captureWindowPlacement,
   chooseClosestNativeWindow,
   chooseDefaultDisplayTargets,
+  getSlideshowDisplayConfigurationKey,
+  getSlideshowDisplayIdentity,
   onDisplayConfigurationChanged,
+  resolveSlideshowDisplayTarget,
   resolveSameNativeWindow,
   restoreWindowPlacement,
   restoreWindowPlacementStable,
@@ -165,6 +168,59 @@ describe("slideshow checkpoint 4 presenter state", () => {
     expect(getHiddenBuildElementIds(slide, 0, elements)).toEqual(["target-a", "target-b"]);
     expect(getHiddenBuildElementIds(slide, 1, elements)).toEqual(["target-b"]);
     expect(getHiddenBuildElementIds(slide, 2, elements)).toEqual([]);
+  });
+
+  it("keeps monitor configuration keys stable across Electron runtime id and enumeration changes", () => {
+    const a: SlideshowDisplay = {
+      id: 1,
+      index: 0,
+      label: "Built-in Retina Display",
+      primary: true,
+      bounds: { x: 0, y: 0, width: 1680, height: 1050 },
+      workArea: { x: 0, y: 25, width: 1680, height: 1025 },
+    };
+    const b: SlideshowDisplay = {
+      id: 2,
+      index: 1,
+      label: "Sidecar Display (AirPlay)",
+      primary: false,
+      bounds: { x: 1680, y: 0, width: 1194, height: 834 },
+      workArea: { x: 1680, y: 0, width: 1194, height: 834 },
+    };
+    const reconnectedA = {
+      ...a,
+      id: 31,
+      index: 1,
+      workArea: { ...a.workArea, height: a.workArea.height - 20 },
+    };
+    const reconnectedB = { ...b, id: 44, index: 0 };
+
+    expect(getSlideshowDisplayConfigurationKey([a, b])).toBe(
+      getSlideshowDisplayConfigurationKey([reconnectedB, reconnectedA]),
+    );
+    expect(getSlideshowDisplayConfigurationKey([a])).not.toBe(
+      getSlideshowDisplayConfigurationKey([a, b]),
+    );
+  });
+
+  it("resolves a saved monitor by stable identity when its runtime id changes", () => {
+    const saved: SlideshowDisplay = {
+      id: 2,
+      index: 1,
+      label: "Sidecar Display (AirPlay)",
+      primary: false,
+      bounds: { x: 1680, y: 0, width: 1194, height: 834 },
+      workArea: { x: 1680, y: 0, width: 1194, height: 834 },
+    };
+    const reconnected = { ...saved, id: 99 };
+
+    expect(
+      resolveSlideshowDisplayTarget(
+        [reconnected],
+        saved.id,
+        getSlideshowDisplayIdentity(saved),
+      ),
+    ).toBe(99);
   });
 
   it("defaults presenter notes to a different display when one is available", () => {
@@ -413,6 +469,72 @@ describe("slideshow checkpoint 4 presenter state", () => {
       startMode: "beginning",
       windowMode: "window",
       notesMode: "presenter",
+    });
+  });
+
+  it("stores display choices independently for each monitor configuration on one device", async () => {
+    let settings: Record<string, unknown> = { unrelated: "keep" };
+    const ea = {
+      getScriptSettings: () => settings,
+      setScriptSettings: async (next: Record<string, unknown>) => {
+        settings = next;
+      },
+    } as unknown as ExcalidrawAutomate;
+
+    await saveSlideshowDisplayPreferences(
+      ea,
+      "macbook",
+      {
+        presentationDisplayId: 1,
+        presenterDisplayId: 1,
+        presentationDisplayIdentity: "retina",
+        presenterDisplayIdentity: "retina",
+      },
+      "retina-only",
+    );
+    await saveSlideshowDisplayPreferences(
+      ea,
+      "macbook",
+      {
+        presentationDisplayId: 1,
+        presenterDisplayId: 2,
+        presentationDisplayIdentity: "retina",
+        presenterDisplayIdentity: "sidecar",
+      },
+      "retina-sidecar",
+    );
+
+    expect(loadSlideshowDisplayPreferences(ea, "macbook", "retina-only")).toEqual({
+      presentationDisplayId: 1,
+      presenterDisplayId: 1,
+      presentationDisplayIdentity: "retina",
+      presenterDisplayIdentity: "retina",
+    });
+    expect(loadSlideshowDisplayPreferences(ea, "macbook", "retina-sidecar")).toEqual({
+      presentationDisplayId: 1,
+      presenterDisplayId: 2,
+      presentationDisplayIdentity: "retina",
+      presenterDisplayIdentity: "sidecar",
+    });
+    expect(settings.unrelated).toBe("keep");
+  });
+
+  it("falls back to legacy per-device display choices until a configuration-specific choice exists", async () => {
+    let settings: Record<string, unknown> = {};
+    const ea = {
+      getScriptSettings: () => settings,
+      setScriptSettings: async (next: Record<string, unknown>) => {
+        settings = next;
+      },
+    } as unknown as ExcalidrawAutomate;
+
+    await saveSlideshowDisplayPreferences(ea, "macbook", {
+      presentationDisplayId: 1,
+      presenterDisplayId: 2,
+    });
+    expect(loadSlideshowDisplayPreferences(ea, "macbook", "new-topology")).toEqual({
+      presentationDisplayId: 1,
+      presenterDisplayId: 2,
     });
   });
 

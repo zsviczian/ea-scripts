@@ -14,6 +14,7 @@ import { sleepInWindow } from "../../sharedUtils/windowTiming";
 import { SlidePreviewService } from "./SlidePreviewService";
 import type { SlideDeckSlide } from "./SlideDeck";
 import type { SlideshowTranslator } from "./lang";
+import { loadPresenterNotesFontSize, savePresenterNotesFontSize } from "./slideshowSettings";
 import { SLIDESHOW_PRESENTER_STYLES } from "./styles";
 import type { PresentationSetup, PresentationState, SlideshowConfig, SlideshowIcons } from "./types";
 
@@ -98,6 +99,7 @@ export class PresenterViewController {
   private progressEl: HTMLElement | null = null;
   private layoutButton: HTMLButtonElement | null = null;
   private notesFocusedLayout = false;
+  private notesFontSize: number;
   private nextSectionTitleEl: HTMLElement | null = null;
   private markdownComponent: Component | null = null;
   private lastNotesSlideId: string | null = null;
@@ -109,6 +111,7 @@ export class PresenterViewController {
 
   public constructor(private readonly options: PresenterViewControllerOptions) {
     this.previewService = new SlidePreviewService(options.ea, options.api, options.config);
+    this.notesFontSize = loadPresenterNotesFontSize(options.ea);
   }
 
   /** Opens the popout, waits for real window migration, and renders its initial state. */
@@ -249,6 +252,7 @@ export class PresenterViewController {
     content.appendChild(style);
     const root = doc.createElement("div");
     root.className = "slideshow-presenter";
+    root.style.setProperty("--slideshow-presenter-notes-font-size", `${this.notesFontSize}px`);
     content.appendChild(root);
     this.root = root;
 
@@ -274,6 +278,30 @@ export class PresenterViewController {
     this.layoutButton.addEventListener("click", () => this.toggleNotesFocusedLayout());
     headerActions.appendChild(this.layoutButton);
     this.updateLayoutButton();
+
+    const fontSizeControl = doc.createElement("label");
+    fontSizeControl.className = "slideshow-presenter__font-size-control";
+    fontSizeControl.setAttribute("aria-label", this.options.t("presenterNotesFontSize"));
+    const fontSizeLabel = doc.createElement("span");
+    fontSizeLabel.textContent = this.options.t("presenterNotesFontSize");
+    fontSizeControl.appendChild(fontSizeLabel);
+    const fontSizeSlider = doc.createElement("input");
+    fontSizeSlider.type = "range";
+    fontSizeSlider.min = "12";
+    fontSizeSlider.max = "48";
+    fontSizeSlider.step = "1";
+    fontSizeSlider.value = String(this.notesFontSize);
+    fontSizeSlider.addEventListener("input", () => {
+      this.notesFontSize = Number(fontSizeSlider.value);
+      root.style.setProperty("--slideshow-presenter-notes-font-size", `${this.notesFontSize}px`);
+    });
+    fontSizeSlider.addEventListener("change", () => {
+      void savePresenterNotesFontSize(this.options.ea, this.notesFontSize).catch((error) => {
+        console.error("Slideshow presenter notes font-size save failed", error);
+      });
+    });
+    fontSizeControl.appendChild(fontSizeSlider);
+    headerActions.appendChild(fontSizeControl);
     const close = doc.createElement("button");
     close.type = "button";
     close.className = "slideshow-presenter__close";

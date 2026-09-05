@@ -71,6 +71,40 @@ async function writeFrameMetadataSet(
   await commitWorkbench(ea);
 }
 
+/** Declares a frame slideshow without imposing explicit slide order until the first edit. */
+export async function declareFrameSlideshow(
+  ea: ExcalidrawAutomate,
+  selectedFrameId: string,
+): Promise<void> {
+  const frame = getFrameElements(ea).find((candidate) => candidate.id === selectedFrameId);
+  if (!frame) throw new Error("The selected frame no longer exists.");
+  ea.clear();
+  ea.copyViewElementsToEAforEditing([frame]);
+  const updated = ea.addAppendUpdateCustomData(selectedFrameId, {
+    slideshow: { schemaVersion: 2, kind: "frame" },
+  });
+  if (!updated) throw new Error("The selected frame could not be edited.");
+  await commitWorkbench(ea);
+}
+
+/** Renames a frame slide by updating the underlying Excalidraw frame title. */
+export async function renameFrameSlide(
+  ea: ExcalidrawAutomate,
+  frameId: string,
+  name: string,
+): Promise<void> {
+  const source = ea.getViewElements().find((element) => element.id === frameId);
+  if (!isFrameElement(source)) throw new Error("The selected frame no longer exists.");
+  ea.clear();
+  ea.copyViewElementsToEAforEditing([source]);
+  const frame = ea.getElement<ExcalidrawFrameElement>(frameId) as
+    | Mutable<ExcalidrawFrameElement>
+    | null;
+  if (!frame) throw new Error("The selected frame could not be edited.");
+  frame.name = name.trim().length === 0 ? null : name;
+  await commitWorkbench(ea);
+}
+
 /** Reorders frame slides and writes normalized 0..n-1 order metadata in one scene transaction. */
 export async function reorderFrameSlides(
   ea: ExcalidrawAutomate,

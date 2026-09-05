@@ -275,6 +275,41 @@ export function getSlideshowDeviceKey(win: Window): string {
   }
 }
 
+/** Returns a stable descriptor for one monitor that does not depend on Electron's runtime id. */
+export function getSlideshowDisplayIdentity(display: SlideshowDisplay): string {
+  const label = display.label.trim().toLowerCase();
+  return JSON.stringify([
+    label,
+    display.bounds.width,
+    display.bounds.height,
+    display.primary,
+  ]);
+}
+
+/** Returns a stable key for the currently connected set of monitors on one local device. */
+export function getSlideshowDisplayConfigurationKey(
+  displays: readonly SlideshowDisplay[],
+): string {
+  if (displays.length === 0) return "none";
+  return JSON.stringify(displays.map(getSlideshowDisplayIdentity).sort());
+}
+
+/** Resolves a saved display target after reconnects where Electron may assign a new runtime id. */
+export function resolveSlideshowDisplayTarget(
+  displays: readonly SlideshowDisplay[],
+  preferredId: number | null,
+  preferredIdentity?: string | null,
+): number | null {
+  if (preferredId !== null && displays.some((display) => display.id === preferredId)) {
+    return preferredId;
+  }
+  if (!preferredIdentity) return null;
+  return (
+    displays.find((display) => getSlideshowDisplayIdentity(display) === preferredIdentity)?.id ??
+    null
+  );
+}
+
 /** Returns Electron displays when Obsidian exposes its desktop remote bridge. */
 export function getAvailableDisplays(win: Window): SlideshowDisplay[] {
   try {
