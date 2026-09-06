@@ -1,27 +1,55 @@
 # ea-scripts
 
-TypeScript workspace for building and maintaining multiple ExcalidrawAutomate scripts in one repository. This repository was created from `ea-script-template`.
+TypeScript workspace for building and maintaining multiple ExcalidrawAutomate scripts in one repository. This repository is a fork of `ea-script-template` containing the maintained ExcalidrawAutomate scripts published by this author.
 
-## Template or Fork?
+## Fork and Keep in Sync
 
-Use this repository as a template when:
+Keep this fork updated with changes from the `ea-script-template` master
+repository so it receives API, tooling, and documentation updates.
 
-- you want one workspace containing many scripts
-- you want shared lint/build/tooling and shared utilities
-- you are building script PRs for obsidian-excalidraw-plugin
+Keep the shared agent and authoring files aligned with the master repository:
 
-Fork this repository when:
+- `AGENTS.md` is the main guide for agents working in the repository.
+- `CLAUDE.md` points to `AGENTS.md` for tools that discover it.
+- Put rules specific to this fork in `FORK_RULES.md` rather than modifying
+  `AGENTS.md`, `AUTHORING_GUIDE.md`, or `CLAUDE.md`.
 
-- you want to publish your own long-lived script workspace publicly
-- you need to customize lint/build/release policy while retaining this baseline
+This repository is not the publishing target for scripts. Do not open pull
+requests to `ea-script-template` or `ea-scripts` to publish a script. Publish
+scripts separately in the `obsidian-excalidraw-plugin` repository as described
+in [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
-Create one repo per script only when strict isolation is required.
+### Using this repository as a GitHub template
+
+You can also use the GitHub **Use this template** action to create your own
+repository. A template-created repository is not automatically connected to
+this repository, but it can still receive future updates by adding the
+template as an `upstream` remote:
+
+```bash
+git remote add upstream https://github.com/zsviczian/ea-script-template.git
+git fetch upstream
+git merge upstream/main
+```
+
+Use the template repository's default branch if it is not `main`. If the
+template-created repository has unrelated Git history, the first merge may
+need:
+
+```bash
+git merge upstream/main --allow-unrelated-histories
+```
+
+Resolve any conflicts once, then continue syncing with `git fetch upstream`
+and `git merge upstream/main`. Whether you fork this repository or create a
+repository from its template, keep fork-specific rules in `FORK_RULES.md` and
+keep shared guidance aligned with the template.
 
 ## Quick start
 
 ```bash
-git clone https://github.com/zsviczian/ea-script-template.git my-ea-scripts
-cd my-ea-scripts
+git clone https://github.com/zsviczian/ea-scripts.git
+cd ea-scripts
 npm install
 npm run build
 ```
@@ -83,6 +111,7 @@ ea-scripts/
 │   ├── package.mjs
 │   └── sync-refs.mjs
 ├── AGENTS.md
+├── FORK_RULES.md
 ├── CLAUDE.md
 └── .ai/
 	└── excalidraw-automate/
@@ -149,23 +178,26 @@ locale with `ea.obsidian.moment.locale()`.
 
 ## Publishing model
 
-This template supports multiple scripts in one workspace, but publication is still script-by-script.
+This fork supports multiple scripts in one workspace, but publication is still script-by-script.
 
-For each script PR to obsidian-excalidraw-plugin:
+For each script PR to `obsidian-excalidraw-plugin`:
 
 - copy `build/{slug}/{slug}.md` into `ea-scripts/{Script Name}.md`
 - copy or export preview image using `scripts-{slug}.{ext}` naming
 - update `ea-scripts/index-new.md` manually
 - update `ea-scripts/directory-info.json` including `mtime` for updates
 
-See [CONTRIBUTING.md](./CONTRIBUTING.md) for full details.
+Do not open this PR against `ea-scripts` or `ea-script-template`; the script
+publication PR belongs in the separate plugin repository. See
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) for full details.
 
 ## Agent auto-discovery
 
 This repository includes agent guidance surfaces:
 
-- [AGENTS.md](./AGENTS.md) for cross-agent behavior and workflow constraints
-- [CLAUDE.md](./CLAUDE.md) for implementation architecture notes
+- [AGENTS.md](./AGENTS.md) for the canonical agent behavior, architecture, and workflow guidance
+- [FORK_RULES.md](./FORK_RULES.md) for rules specific to this fork
+- [CLAUDE.md](./CLAUDE.md) as a compatibility pointer to `AGENTS.md`
 - [.ai/excalidraw-automate/SKILL.md](./.ai/excalidraw-automate/SKILL.md) plus local references and script examples synchronized from plugin outputs
 
 ## Development dependencies
