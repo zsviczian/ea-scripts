@@ -3,7 +3,8 @@
  * @overview Frame-animation target resolution, transient effects, timers, and guaranteed restoration.
  */
 
-import type { FrameDeckSlide } from "./SlideDeck";
+import type { SlideDeckSlide } from "./SlideDeck";
+import type { SlideRect } from "../../sharedUtils/presentationGeometry";
 import type { AnimationStep, AnimationTarget } from "./types";
 
 interface AnimationElementShape {
@@ -32,10 +33,15 @@ interface ResolvedRuntimeStep {
 }
 
 interface ActiveAnimationSlide {
-  frameId: string;
+  scope: AnimationSlideScope;
   steps: ResolvedRuntimeStep[];
   originals: Map<string, ExcalidrawElement>;
   completedSteps: number;
+}
+
+export interface AnimationSlideScope {
+  rect: SlideRect;
+  ownerElementId?: string;
 }
 
 export interface AnimationRuntimeOptions {
@@ -143,6 +149,40 @@ export function elementOverlapsFrame(
   return element.id !== frame.id && rectsOverlap(getElementRect(element), getElementRect(frame));
 }
 
+function rectFromSlideRect(rect: SlideRect): ElementRect {
+  return {
+    left: Math.min(rect.x1, rect.x2),
+    top: Math.min(rect.y1, rect.y2),
+    right: Math.max(rect.x1, rect.x2),
+    bottom: Math.max(rect.y1, rect.y2),
+  };
+}
+
+/** Returns the geometric animation scope for either a frame slide or a line slide. */
+export function getAnimationSlideScope(slide: SlideDeckSlide): AnimationSlideScope {
+  return {
+    rect: slide.rect,
+    ownerElementId: slide.kind === "frame" ? slide.frameId : slide.pathId,
+  };
+}
+
+function resolveAnimationScope(
+  scope: string | AnimationSlideScope,
+  elements: readonly ExcalidrawElement[],
+): AnimationSlideScope | null {
+  if (typeof scope !== "string") return scope;
+  const frame = getElementById(elements, scope);
+  if (!frame) return null;
+  return {
+    rect: { x1: frame.x, y1: frame.y, x2: frame.x + frame.width, y2: frame.y + frame.height },
+    ownerElementId: frame.id,
+  };
+}
+
+function elementOverlapsScope(element: ExcalidrawElement, scope: AnimationSlideScope): boolean {
+  return element.id !== scope.ownerElementId && rectsOverlap(getElementRect(element), rectFromSlideRect(scope.rect));
+}
+
 function getElementById(
   elements: readonly ExcalidrawElement[],
   id: string,
@@ -184,37 +224,37 @@ function expandBoundVisualUnit(
   return [...result];
 }
 
-function visualUnitOverlapsFrame(
+function visualUnitOverlapsScope(
   element: ExcalidrawElement,
-  frame: ExcalidrawElement,
+  scope: AnimationSlideScope,
   elements: readonly ExcalidrawElement[],
 ): boolean {
   return expandBoundVisualUnit([element.id], elements).some((id) => {
     const candidate = getElementById(elements, id);
-    return candidate ? elementOverlapsFrame(candidate, frame) : false;
+    return candidate ? elementOverlapsScope(candidate, scope) : false;
   });
 }
 
 /** Resolves metadata targets to the current visual elements inside one frame. */
 export function resolveAnimationTargetElementIds(
-  frameId: string,
+  slideScope: string | AnimationSlideScope,
   targets: readonly AnimationTarget[],
   elements: readonly ExcalidrawElement[],
 ): string[] {
-  const frame = getElementById(elements, frameId);
-  if (!frame) return [];
+  const scope = resolveAnimationScope(slideScope, elements);
+  if (!scope) return [];
   const baseIds = new Set<string>();
   for (const target of targets) {
     if (target.type === "element") {
       const element = getElementById(elements, target.id);
-      if (element && visualUnitOverlapsFrame(element, frame, elements)) {
+      if (element && visualUnitOverlapsScope(element, scope, elements)) {
         baseIds.add(canonicalElementTargetId(element, elements));
       }
       continue;
     }
     for (const element of elements) {
       const shape = asAnimationShape(element);
-      if (shape.groupIds?.includes(target.id) && elementOverlapsFrame(element, frame)) {
+      if (shape.groupIds?.includes(target.id) && elementOverlapsScope(element, scope)) {
         baseIds.add(element.id);
       }
     }
@@ -250,13 +290,13 @@ export function recycleMissingAnimationTargets(
 
 /** Converts the current Excalidraw selection into stable frame-local animation targets. */
 export function captureAnimationTargets(
-  frameId: string,
+  slideScope: string | AnimationSlideScope,
   elements: readonly ExcalidrawElement[],
   selectedElementIds: Readonly<Record<string, true>>,
   selectedGroupIds: Readonly<Record<string, boolean>>,
 ): CapturedAnimationTargets {
-  const frame = getElementById(elements, frameId);
-  if (!frame) return { targets: [], ignoredSelectionCount: Object.keys(selectedElementIds).length };
+  const scope = resolveAnimationScope(slideScope, elements);
+  if (!scope) return { targets: [], ignoredSelectionCount: Object.keys(selectedElementIds).length };
   const targets: AnimationTarget[] = [];
   const seen = new Set<string>();
   let ignoredSelectionCount = 0;
@@ -266,9 +306,9 @@ export function captureAnimationTargets(
 
   for (const groupId of selectedGroups) {
     const members = elements.filter((element) => asAnimationShape(element).groupIds?.includes(groupId));
-    const inFrame = members.filter((element) => elementOverlapsFrame(element, frame));
+    const inFrame = members.filter((element) => elementOverlapsScope(element, scope));
     const selectedOutside = members.some(
-      (element) => selectedElementIds[element.id] && !elementOverlapsFrame(element, frame),
+      (element) => selectedElementIds[element.id] && !elementOverlapsScope(element, scope),
     );
     if (inFrame.length > 0) {
       const key = `group:${groupId}`;
@@ -281,10 +321,10 @@ export function captureAnimationTargets(
   }
 
   for (const element of elements) {
-    if (!selectedElementIds[element.id] || element.id === frameId) continue;
+    if (!selectedElementIds[element.id] || element.id === scope.ownerElementId) continue;
     const shape = asAnimationShape(element);
     if (selectedGroups.some((groupId) => shape.groupIds?.includes(groupId))) continue;
-    if (!visualUnitOverlapsFrame(element, frame, elements)) {
+    if (!visualUnitOverlapsScope(element, scope, elements)) {
       ignoredSelectionCount += 1;
       continue;
     }
@@ -300,13 +340,13 @@ export function captureAnimationTargets(
 }
 
 function targetsOverlap(
-  frameId: string,
+  slideScope: string | AnimationSlideScope,
   left: AnimationTarget,
   right: AnimationTarget,
   elements: readonly ExcalidrawElement[],
 ): boolean {
-  const leftIds = new Set(resolveAnimationTargetElementIds(frameId, [left], elements));
-  return resolveAnimationTargetElementIds(frameId, [right], elements).some((id) => leftIds.has(id));
+  const leftIds = new Set(resolveAnimationTargetElementIds(slideScope, [left], elements));
+  return resolveAnimationTargetElementIds(slideScope, [right], elements).some((id) => leftIds.has(id));
 }
 
 /**
@@ -314,7 +354,7 @@ function targetsOverlap(
  * Empty steps are removed. The edited step itself is excluded from conflict removal.
  */
 export function removeAnimationTargetConflicts(
-  frameId: string,
+  slideScope: string | AnimationSlideScope,
   steps: readonly AnimationStep[],
   incomingTargets: readonly AnimationTarget[],
   elements: readonly ExcalidrawElement[],
@@ -323,7 +363,7 @@ export function removeAnimationTargetConflicts(
   return steps.flatMap((step) => {
     if (step.id === editedStepId) return [structuredClone(step)];
     const targets = step.targets.filter(
-      (target) => !incomingTargets.some((incoming) => targetsOverlap(frameId, target, incoming, elements)),
+      (target) => !incomingTargets.some((incoming) => targetsOverlap(slideScope, target, incoming, elements)),
     );
     return targets.length === 0 ? [] : [{ ...structuredClone(step), targets }];
   });
@@ -334,13 +374,13 @@ function getOpacity(element: ExcalidrawElement): number {
 }
 
 function resolveRuntimeSteps(
-  frameId: string,
+  slideScope: string | AnimationSlideScope,
   steps: readonly AnimationStep[],
   elements: readonly ExcalidrawElement[],
 ): ResolvedRuntimeStep[] {
   const resolved = steps.map((step) => ({
     step: structuredClone(step),
-    elementIds: resolveAnimationTargetElementIds(frameId, step.targets, elements),
+    elementIds: resolveAnimationTargetElementIds(slideScope, step.targets, elements),
   }));
   const claimedByLaterStep = new Set<string>();
   for (let index = resolved.length - 1; index >= 0; index -= 1) {
@@ -390,20 +430,21 @@ export class AnimationRuntime {
 
   /** Restores the prior slide, resolves the destination's dynamic targets, and applies its build state. */
   public async enterSlide(
-    slide: FrameDeckSlide,
+    slide: SlideDeckSlide,
     fullyBuilt: boolean,
     startTimedSteps = true,
   ): Promise<void> {
     await this.leaveSlide();
     const elements = this.api.getSceneElements() as readonly ExcalidrawElement[];
-    const steps = resolveRuntimeSteps(slide.frameId, slide.animationSteps, elements);
+    const scope = getAnimationSlideScope(slide);
+    const steps = resolveRuntimeSteps(scope, slide.animationSteps, elements);
     const allIds = new Set(steps.flatMap((step) => step.elementIds));
     const originals = new Map<string, ExcalidrawElement>();
     for (const element of elements) {
       if (allIds.has(element.id)) originals.set(element.id, element);
     }
     this.active = {
-      frameId: slide.frameId,
+      scope,
       steps,
       originals,
       completedSteps: fullyBuilt ? steps.length : 0,
@@ -511,16 +552,18 @@ export class AnimationRuntime {
   }
 
   /** Runs one animation from the sidepanel and restores the drawing when the preview completes. */
-  public async previewStep(frameId: string, step: AnimationStep): Promise<void> {
+  public async previewStep(slideScope: string | AnimationSlideScope, step: AnimationStep): Promise<void> {
     await this.leaveSlide();
     const elements = this.api.getSceneElements() as readonly ExcalidrawElement[];
-    const elementIds = resolveAnimationTargetElementIds(frameId, step.targets, elements);
+    const scope = resolveAnimationScope(slideScope, elements);
+    if (!scope) return;
+    const elementIds = resolveAnimationTargetElementIds(scope, step.targets, elements);
     const originals = new Map<string, ExcalidrawElement>();
     for (const element of elements) {
       if (elementIds.includes(element.id)) originals.set(element.id, element);
     }
     this.active = {
-      frameId,
+      scope,
       steps: elementIds.length > 0 ? [{ step: structuredClone(step), elementIds }] : [],
       originals,
       completedSteps: 0,

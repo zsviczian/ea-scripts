@@ -529,6 +529,61 @@ describe("checkpoint 3 animation metadata and runtime", () => {
     expect((elements.find((candidate) => candidate.id === "shape") as { opacity: number }).opacity).toBe(60);
   });
 
+  it("runs the same build animation logic for elements inside a line slide rectangle", async () => {
+    let elements: ExcalidrawElement[] = [
+      line(),
+      element("inside", "rectangle", null, { x: 102, y: 202, width: 4, height: 4, opacity: 70 }),
+      element("outside", "rectangle", null, { x: 150, y: 250, width: 4, height: 4, opacity: 65 }),
+    ];
+    const api = {
+      getSceneElements: () => elements,
+      updateScene: (scene: { elements?: readonly ExcalidrawElement[] }) => {
+        if (scene.elements) elements = [...scene.elements];
+      },
+    } as unknown as ExcalidrawAPI;
+    const ownerWindow = {
+      setTimeout: globalThis.setTimeout.bind(globalThis),
+      clearTimeout: globalThis.clearTimeout.bind(globalThis),
+      requestAnimationFrame: (callback: FrameRequestCallback) =>
+        globalThis.setTimeout(() => callback(Date.now()), 0) as unknown as number,
+      performance: { now: () => Date.now() },
+    } as unknown as Window;
+    const runtime = new AnimationRuntime({
+      ea: {} as ExcalidrawAutomate,
+      api,
+      hostView: { ownerWindow } as ScriptExcalidrawView,
+    });
+
+    await runtime.enterSlide(
+      {
+        id: "line-slide",
+        kind: "path",
+        pathId: "path",
+        pairIndex: 0,
+        title: "Line slide",
+        rect: { x1: 100, y1: 200, x2: 110, y2: 210 },
+        excluded: false,
+        animationSteps: [
+          {
+            id: "build",
+            targets: [{ type: "element", id: "inside" }],
+            effect: "appear",
+            trigger: "advance",
+          },
+        ],
+      },
+      false,
+      false,
+    );
+
+    expect((elements.find((candidate) => candidate.id === "inside") as { opacity: number }).opacity).toBe(0);
+    expect((elements.find((candidate) => candidate.id === "outside") as { opacity: number }).opacity).toBe(65);
+    expect((elements.find((candidate) => candidate.id === "path") as { opacity: number }).opacity).toBe(80);
+    expect(await runtime.advance()).toBe(true);
+    expect((elements.find((candidate) => candidate.id === "inside") as { opacity: number }).opacity).toBe(70);
+    await runtime.leaveSlide();
+  });
+
   it("temporarily exposes the fully built state for PDF work and restores the current build", async () => {
     let elements: ExcalidrawElement[] = [
       frame(),

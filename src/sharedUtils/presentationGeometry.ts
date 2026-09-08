@@ -28,6 +28,31 @@ export interface SceneBounds {
   topY: number;
 }
 
+/** Expands a slide rectangle around its center to the requested aspect ratio without shrinking it. */
+export function expandSlideRectToAspectRatio(
+  slide: SlideRect,
+  dimensions: ViewportDimensions,
+): SlideRect {
+  const left = Math.min(slide.x1, slide.x2);
+  const right = Math.max(slide.x1, slide.x2);
+  const top = Math.min(slide.y1, slide.y2);
+  const bottom = Math.max(slide.y1, slide.y2);
+  const width = Math.max(right - left, Number.EPSILON);
+  const height = Math.max(bottom - top, Number.EPSILON);
+  const targetRatio = dimensions.width / dimensions.height;
+  const currentRatio = width / height;
+  const expandedWidth = currentRatio < targetRatio ? height * targetRatio : width;
+  const expandedHeight = currentRatio > targetRatio ? width / targetRatio : height;
+  const centerX = (left + right) / 2;
+  const centerY = (top + bottom) / 2;
+  return {
+    x1: centerX - expandedWidth / 2,
+    y1: centerY - expandedHeight / 2,
+    x2: centerX + expandedWidth / 2,
+    y2: centerY + expandedHeight / 2,
+  };
+}
+
 /** Returns the persisted frame name or the legacy generated fallback. */
 export function getPresentationFrameName(name: string | null, index: number): string {
   return name ?? `Frame ${(index + 1).toString().padStart(2, "0")}`;

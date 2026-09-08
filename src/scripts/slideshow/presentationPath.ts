@@ -6,7 +6,7 @@
 import { getPresentationFrameName } from "../../sharedUtils/presentationGeometry";
 import { buildFrameSlideDeck, buildLineSlideDeck } from "./SlideDeck";
 import type { SlideshowTranslator } from "./lang";
-import { readLineSlideshowData } from "./slideshowMetadata";
+import { getAbsoluteLinePoints, readLineSlideshowData } from "./slideshowMetadata";
 import {
   isFrameElement,
   isLinearPathElement,
@@ -49,6 +49,7 @@ function toLinePresentationSource(
     pathElement.customData,
     pathElement.id,
     Math.floor(pathElement.points.length / 2),
+    getAbsoluteLinePoints(pathElement.x, pathElement.y, pathElement.points),
   );
   if (!metadata) return null;
   return {
@@ -79,7 +80,12 @@ function resolveLineSources(
 /** Returns whether a presentation path is persistently hidden by slideshow metadata. */
 export function isPresentationPathHidden(path: ExcalidrawLinearElement): boolean {
   return (
-    readLineSlideshowData(path.customData, path.id, Math.floor(path.points.length / 2))?.data.hidden ??
+    readLineSlideshowData(
+      path.customData,
+      path.id,
+      Math.floor(path.points.length / 2),
+      getAbsoluteLinePoints(path.x, path.y, path.points),
+    )?.data.hidden ??
     false
   );
 }
@@ -123,6 +129,7 @@ export function getLinePresentationSourceKey(
     element.customData,
     element.id,
     Math.floor(element.points.length / 2),
+    getAbsoluteLinePoints(element.x, element.y, element.points),
   );
   return metadata ? `line:${element.id}` : null;
 }
@@ -260,6 +267,7 @@ export function resolvePresentationSetup(
     pathElement.customData,
     pathElement.id,
     Math.floor(pathElement.points.length / 2),
+    getAbsoluteLinePoints(pathElement.x, pathElement.y, pathElement.points),
   );
   if (!metadata) return null;
   const originalPathProperties: OriginalPathProperties = metadata.data.hidden

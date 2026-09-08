@@ -21,7 +21,7 @@ import {
   registerSlideshowElementActionProvider,
 } from "../slideshowLauncher";
 import { createSlideshowTranslator } from "../lang";
-import { SLIDESHOW_SIDEPANEL_STYLES } from "../styles";
+import { SLIDESHOW_PRESENTER_STYLES, SLIDESHOW_SIDEPANEL_STYLES } from "../styles";
 import {
   getAlternatePresentationSourceKey,
   getAlternatePresentationType,
@@ -31,15 +31,21 @@ import {
   resolveSlideDeckChoices,
 } from "../presentationPath";
 import {
+  convertFramePresentationToLine,
+  convertLinePresentationToFrames,
   createLinePresentation,
   declareFrameSlideshow,
   hasBoundLineEndpoint,
   removeLinePresentation,
+  renameFramePresentation,
   renameFrameSlide,
   renameLinePresentation,
+  renameLineSlide,
   reorderFrameSlides,
   reorderLineSlides,
+  resizeFrameToPresentationAspect,
   saveFrameNotes,
+  saveLineAnimationSteps,
   saveLineNotes,
   setFrameExcluded,
   setLinePresentationPathHidden,
@@ -130,6 +136,8 @@ function createFakeEa(
   saveRequests: number;
 } {
   let workbench = new Map<string, Mutable<ExcalidrawElement>>();
+  let generatedFrame = 0;
+  let generatedLine = 0;
   const api = {
     targetView: null,
     sidepanelTab: null,
@@ -160,10 +168,68 @@ function createFakeEa(
       element.customData = { ...current, ...patch };
       return element;
     },
+    addFrame: (x: number, y: number, width: number, height: number, name?: string) => {
+      const id = `generated-frame-${++generatedFrame}`;
+      workbench.set(
+        id,
+        {
+          id,
+          type: "frame",
+          name: name ?? null,
+          x,
+          y,
+          width,
+          height,
+          customData: {},
+        } as unknown as Mutable<ExcalidrawElement>,
+      );
+      return id;
+    },
+    addLine: (points: readonly [number, number][]) => {
+      const id = `generated-line-${++generatedLine}`;
+      const origin = points[0] ?? [0, 0];
+      const relativePoints = points.map(([x, y]) => [x - origin[0], y - origin[1]] as [number, number]);
+      const xs = relativePoints.map(([x]) => x);
+      const ys = relativePoints.map(([, y]) => y);
+      workbench.set(
+        id,
+        {
+          id,
+          type: "line",
+          x: origin[0],
+          y: origin[1],
+          width: Math.max(...xs) - Math.min(...xs),
+          height: Math.max(...ys) - Math.min(...ys),
+          points: relativePoints,
+          strokeColor: "#123",
+          backgroundColor: "transparent",
+          locked: false,
+          startBinding: null,
+          endBinding: null,
+          customData: {},
+        } as unknown as Mutable<ExcalidrawElement>,
+      );
+      return id;
+    },
+    getElementsInArea: (
+      candidates: readonly ExcalidrawElement[],
+      area: { x: number; y: number; width: number; height: number },
+    ) =>
+      candidates.filter((element) => {
+        const width = "width" in element && typeof element.width === "number" ? element.width : 0;
+        const height = "height" in element && typeof element.height === "number" ? element.height : 0;
+        return (
+          element.x >= area.x &&
+          element.y >= area.y &&
+          element.x + width <= area.x + area.width &&
+          element.y + height <= area.y + area.height
+        );
+      }),
     addElementsToView: async (_repositionToCursor?: boolean, save = true) => {
       for (const [id, edited] of workbench) {
         const index = elements.findIndex((element) => element.id === id);
         if (index >= 0) elements[index] = structuredClone(edited);
+        else elements.push(structuredClone(edited));
       }
       api.commits += 1;
       if (save) api.saveRequests += 1;
@@ -339,7 +405,9 @@ describe("slideshow checkpoint 2 mutations", () => {
       [-20, -20],
       [-10, -10],
     ]);
-    expect(readLineSlideshowDataV2(edited.customData)?.slides).toEqual([
+    expect(
+      readLineSlideshowDataV2(edited.customData)?.slides.map(({ id, notes }) => ({ id, notes })),
+    ).toEqual([
       { id: "three", notes: "Third" },
       { id: "one", notes: "First" },
       { id: "two", notes: "Second" },
@@ -356,6 +424,297 @@ describe("slideshow checkpoint 2 mutations", () => {
     await saveLineNotes(ea, "path", "slideshow-path-2", "");
     expect(readLineSlideshowDataV2(elements[0]?.customData)?.slides[1]?.notes).toBeUndefined();
     expect(ea.saveRequests).toBe(2);
+  });
+
+  it("moves line slide titles and animations with their point pair", async () => {
+    const elements: ExcalidrawElement[] = [line()];
+    const ea = createFakeEa(elements);
+    const animation = [
+      {
+        id: "build",
+        targets: [{ type: "element" as const, id: "shape" }],
+        effect: "appear" as const,
+        trigger: "advance" as const,
+      },
+    ];
+    await renameLineSlide(ea, "path", "slideshow-path-2", "Middle");
+    await saveLineAnimationSteps(ea, "path", "slideshow-path-2", animation);
+    await reorderLineSlides(ea, "path", 1, 0);
+
+    const metadata = readLineSlideshowDataV2(elements[0]?.customData);
+    expect(metadata?.slides[0]?.id).toBe("slideshow-path-2");
+    expect(metadata?.slides[0]?.title).toBe("Middle");
+    expect(metadata?.slides[0]?.animation?.steps).toEqual(animation);
+  });
+
+  it("names frame presentations and expands frames around their center to the presentation ratio", async () => {
+    const elements: ExcalidrawElement[] = [frame("a", "Alpha"), frame("b", "Bravo")];
+    const ea = createFakeEa(elements);
+    await renameFramePresentation(ea, "Product demo");
+    expect(buildFrameSlideDeck(elements as ExcalidrawFrameElement[]).name).toBe("Product demo");
+
+    await resizeFrameToPresentationAspect(ea, "a", {
+      ...DEFAULT_SLIDESHOW_CONFIG,
+      printSlideWidth: 16,
+      printSlideHeight: 9,
+    });
+    const resized = elements[0] as ExcalidrawFrameElement;
+    expect(resized.width / resized.height).toBeCloseTo(16 / 9);
+    expect(resized.width).toBe(100);
+    expect(resized.x + resized.width / 2).toBeCloseTo(50);
+    expect(resized.y + resized.height / 2).toBeCloseTo(25);
+  });
+
+  it("converts a line presentation to marker frames and transfers deck metadata", async () => {
+    const path = line({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "path",
+        name: "Line deck",
+        hidden: false,
+        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+        slides: [
+          {
+            id: "one",
+            title: "Opening",
+            notes: "Speaker note",
+            animation: {
+              steps: [
+                {
+                  id: "build",
+                  targets: [{ type: "element", id: "shape" }],
+                  effect: "appear",
+                  trigger: "advance",
+                },
+              ],
+            },
+          },
+          { id: "two", excluded: true },
+          { id: "three" },
+        ],
+      },
+    });
+    const elements: ExcalidrawElement[] = [path];
+    const ea = createFakeEa(elements);
+    await convertLinePresentationToFrames(
+      ea,
+      "path",
+      { ...DEFAULT_SLIDESHOW_CONFIG, printSlideWidth: 16, printSlideHeight: 9 },
+      true,
+    );
+
+    const frames = elements.filter((element): element is ExcalidrawFrameElement => element.type === "frame");
+    const deck = buildFrameSlideDeck(frames);
+    expect(deck.name).toBe("Line deck (frames)");
+    expect(deck.slides.map((slide) => slide.title)).toEqual(["Opening", "Slide 2", "Slide 3"]);
+    expect(deck.slides[0]?.notes).toBe("Speaker note");
+    expect(deck.slides[0]?.animationSteps).toHaveLength(1);
+    expect(deck.slides[1]?.excluded).toBe(true);
+    expect(frames.every((candidate) => candidate.width / candidate.height === 16 / 9)).toBe(true);
+    expect(frames.every((candidate) => candidate.frameRole === "marker")).toBe(true);
+    expect(elements.some((element) => element.id === "path")).toBe(true);
+  });
+
+  it("converts a frame presentation to a line presentation and transfers names and builds", async () => {
+    const animation = {
+      steps: [
+        {
+          id: "build",
+          targets: [{ type: "element" as const, id: "shape" }],
+          effect: "fade" as const,
+          trigger: "advance" as const,
+        },
+      ],
+    };
+    const framedShape = {
+      id: "shape",
+      type: "rectangle",
+      frameId: "a",
+    } as unknown as ExcalidrawElement;
+    const framedText = {
+      id: "text",
+      type: "text",
+      frameId: "b",
+    } as unknown as ExcalidrawElement;
+    const unrelated = {
+      id: "outside",
+      type: "rectangle",
+      frameId: "other-frame",
+    } as unknown as ExcalidrawElement;
+    const elements: ExcalidrawElement[] = [
+      frame("a", "Opening", {
+        slideshow: {
+          schemaVersion: 2,
+          kind: "frame",
+          order: 0,
+          deckName: "Frame deck",
+          notes: "Note",
+          animation,
+        },
+      }),
+      frame("b", "Close", {
+        slideshow: {
+          schemaVersion: 2,
+          kind: "frame",
+          order: 1,
+          deckName: "Frame deck",
+          excluded: true,
+        },
+      }),
+      framedShape,
+      framedText,
+      unrelated,
+    ];
+    (elements[1] as Mutable<ExcalidrawFrameElement>).x = 200;
+    const ea = createFakeEa(elements);
+    const lineId = await convertFramePresentationToLine(ea);
+    const generated = elements.find((element) => element.id === lineId) as ExcalidrawLinearElement;
+    const metadata = readLineSlideshowDataV2(generated.customData);
+
+    expect(metadata?.name).toBe("Frame deck (line)");
+    expect(metadata?.slides.map((slide) => slide.title)).toEqual(["Opening", "Close"]);
+    expect(metadata?.slides[0]?.notes).toBe("Note");
+    expect(metadata?.slides[0]?.animation?.steps).toEqual(animation.steps);
+    expect(metadata?.slides[1]?.excluded).toBe(true);
+    expect(generated.type).toBe("line");
+    expect(elements.filter((element) => element.type === "frame")).toHaveLength(2);
+    expect(elements.find((element) => element.id === "shape")?.frameId).toBeNull();
+    expect(elements.find((element) => element.id === "text")?.frameId).toBeNull();
+    expect(elements.find((element) => element.id === "outside")?.frameId).toBe("other-frame");
+  });
+
+  it("can create a line from only visible frame slides and delete the source frames", async () => {
+    const framedShape = {
+      id: "shape",
+      type: "rectangle",
+      x: 10,
+      y: 10,
+      width: 20,
+      height: 20,
+      frameId: "a",
+      isDeleted: false,
+    } as unknown as ExcalidrawElement;
+    const elements: ExcalidrawElement[] = [
+      frame("a", "Opening", {
+        slideshow: {
+          schemaVersion: 2,
+          kind: "frame",
+          order: 0,
+          deckName: "Frame deck",
+        },
+      }),
+      frame("b", "Hidden", {
+        slideshow: {
+          schemaVersion: 2,
+          kind: "frame",
+          order: 1,
+          deckName: "Frame deck",
+          excluded: true,
+        },
+      }),
+      framedShape,
+    ];
+    (elements[1] as Mutable<ExcalidrawFrameElement>).x = 200;
+    const ea = createFakeEa(elements);
+
+    const lineId = await convertFramePresentationToLine(ea, {
+      deleteFrames: true,
+      visibleSlidesOnly: true,
+    });
+    const generated = elements.find((element) => element.id === lineId) as ExcalidrawLinearElement;
+    const metadata = readLineSlideshowDataV2(generated.customData);
+
+    expect(metadata?.name).toBe("Frame deck");
+    expect(metadata?.slides).toHaveLength(1);
+    expect(metadata?.slides[0]?.title).toBe("Opening");
+    expect(metadata?.slides[0]?.excluded).toBeUndefined();
+    expect(elements.find((element) => element.id === "shape")?.frameId).toBeNull();
+    expect(elements.filter((element) => element.type === "frame").every((element) => element.isDeleted)).toBe(true);
+  });
+
+  it("can create normal frames from a line, assign contained elements, and delete the line", async () => {
+    const path = line({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "path",
+        name: "Line deck",
+        hidden: false,
+        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+        slides: [{ id: "one" }, { id: "two" }, { id: "three" }],
+      },
+    });
+    const inside = {
+      id: "inside",
+      type: "rectangle",
+      x: 102,
+      y: 202,
+      width: 4,
+      height: 4,
+      frameId: null,
+      isDeleted: false,
+    } as unknown as ExcalidrawElement;
+    const outside = {
+      id: "outside",
+      type: "rectangle",
+      x: 500,
+      y: 500,
+      width: 4,
+      height: 4,
+      frameId: null,
+      isDeleted: false,
+    } as unknown as ExcalidrawElement;
+    const elements: ExcalidrawElement[] = [path, inside, outside];
+    const ea = createFakeEa(elements);
+
+    await convertLinePresentationToFrames(ea, "path", DEFAULT_SLIDESHOW_CONFIG, {
+      correctAspectRatio: false,
+      deleteLine: true,
+      frameKind: "normal",
+    });
+
+    const frames = elements.filter((element): element is ExcalidrawFrameElement => element.type === "frame");
+    expect(buildFrameSlideDeck(frames).name).toBe("Line deck");
+    expect(frames.every((candidate) => candidate.frameRole === undefined)).toBe(true);
+    expect(elements.find((element) => element.id === "path")?.isDeleted).toBe(true);
+    expect(elements.find((element) => element.id === "inside")?.frameId).toBe(frames[0]?.id);
+    expect(elements.find((element) => element.id === "outside")?.frameId).toBeNull();
+  });
+
+  it("keeps marker-frame conversions reference-free and disambiguates a retained line name", async () => {
+    const path = line({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "path",
+        name: "Line deck",
+        hidden: false,
+        originalProps: { strokeColor: "#123", backgroundColor: "transparent", locked: false },
+        slides: [{ id: "one" }, { id: "two" }, { id: "three" }],
+      },
+    });
+    const inside = {
+      id: "inside",
+      type: "rectangle",
+      x: 102,
+      y: 202,
+      width: 4,
+      height: 4,
+      frameId: null,
+      isDeleted: false,
+    } as unknown as ExcalidrawElement;
+    const elements: ExcalidrawElement[] = [path, inside];
+    const ea = createFakeEa(elements);
+
+    await convertLinePresentationToFrames(ea, "path", DEFAULT_SLIDESHOW_CONFIG, {
+      correctAspectRatio: false,
+      deleteLine: false,
+      frameKind: "marker",
+    });
+
+    const frames = elements.filter((element): element is ExcalidrawFrameElement => element.type === "frame");
+    expect(buildFrameSlideDeck(frames).name).toBe("Line deck (frames)");
+    expect(frames.every((candidate) => candidate.frameRole === "marker")).toBe(true);
+    expect(elements.find((element) => element.id === "path")?.isDeleted).not.toBe(true);
+    expect(elements.find((element) => element.id === "inside")?.frameId).toBeNull();
   });
 
   it("restores a persistently hidden line path and clears its hidden flag", async () => {
@@ -786,6 +1145,26 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(loadPresenterNotesFontSize(ea)).toBe(48);
   });
 
+  it("persists presenter note font sizes independently per device, setup, and display", async () => {
+    let persisted: Record<string, unknown> = { unrelated: "keep" };
+    const ea = {
+      getScriptSettings: () => persisted,
+      setScriptSettings: async (settings: Record<string, unknown>) => {
+        persisted = settings;
+      },
+    } as unknown as ExcalidrawAutomate;
+
+    await savePresenterNotesFontSize(ea, 21, "device-a", "dual-monitor", "display-left");
+    await savePresenterNotesFontSize(ea, 31, "device-a", "dual-monitor", "display-right");
+    await savePresenterNotesFontSize(ea, 27, "device-b", "dual-monitor", "display-left");
+
+    expect(loadPresenterNotesFontSize(ea, "device-a", "dual-monitor", "display-left")).toBe(21);
+    expect(loadPresenterNotesFontSize(ea, "device-a", "dual-monitor", "display-right")).toBe(31);
+    expect(loadPresenterNotesFontSize(ea, "device-b", "dual-monitor", "display-left")).toBe(27);
+    expect(loadPresenterNotesFontSize(ea, "device-a", "single-monitor", "display-left")).toBe(18);
+    expect(persisted.unrelated).toBe("keep");
+  });
+
   it("persists and clamps the sorter thumbnail maximum width without deleting other settings", async () => {
     let persisted: Record<string, unknown> = { unrelated: "keep" };
     const ea = {
@@ -929,6 +1308,12 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(SLIDESHOW_SIDEPANEL_STYLES).toContain(
       ".slideshow-sorter:not(.has-expanded-editor) .slideshow-sorter__badge-compact-count { display:inline; }",
     );
+    expect(SLIDESHOW_PRESENTER_STYLES).toContain(
+      ".slideshow-presenter__font-size-control { display:flex",
+    );
+    expect(SLIDESHOW_PRESENTER_STYLES).toContain(
+      ".slideshow-presenter__notes { flex:1 1 auto; min-height:120px; font-size:var(--slideshow-presenter-notes-font-size, 18px)",
+    );
   });
 
   it("thumbnail fingerprint ignores slideshow metadata-only edits", () => {
@@ -993,7 +1378,12 @@ describe("slideshow checkpoint 2 element actions", () => {
     const holder: {
       provider?: (element: ExcalidrawElement) => readonly SelectedElementMenuAction[];
     } = {};
-    const activations: Array<[ScriptExcalidrawView, string | undefined, string | undefined]> = [];
+    const activations: Array<[
+      ScriptExcalidrawView,
+      string | undefined,
+      string | undefined,
+      boolean | undefined,
+    ]> = [];
     const view = {} as ScriptExcalidrawView;
     const ea = {
       registerElementActionProvider: (
@@ -1005,8 +1395,8 @@ describe("slideshow checkpoint 2 element actions", () => {
       setView: () => view,
     } as unknown as ExcalidrawAutomate;
     getSlideshowRuntime().sidepanel = {
-      activate: async (activatedView, presentationType, slideId) => {
-        activations.push([activatedView, presentationType, slideId]);
+      activate: async (activatedView, presentationType, slideId, reassertActiveTab) => {
+        activations.push([activatedView, presentationType, slideId, reassertActiveTab]);
       },
     };
     const unregister = registerSlideshowElementActionProvider({
@@ -1026,13 +1416,18 @@ describe("slideshow checkpoint 2 element actions", () => {
       expect.objectContaining({
         id: "edit-slideshow",
         title: "Edit slideshow",
-        icon: "presentation",
+        icon: "pencil",
+      }),
+      expect.objectContaining({
+        id: "fit-frame-to-slideshow-aspect",
+        title: "Fit frame to presentation aspect ratio",
+        icon: "ratio",
       }),
     ]);
     actions?.[0]?.action();
     await Promise.resolve();
     await Promise.resolve();
-    expect(activations).toEqual([[view, "frame", "a"]]);
+    expect(activations).toEqual([[view, "frame", "a", true]]);
     resetSlideshowRuntimeForTests();
     vi.unstubAllGlobals();
   });
@@ -1064,8 +1459,9 @@ describe("slideshow checkpoint 2 element actions", () => {
       t: createSlideshowTranslator("en"),
     });
 
-    expect(provider?.(plainFrame)).toEqual([
-      expect.objectContaining({ id: "edit-slideshow", title: "Edit slideshow" }),
+    expect(provider?.(plainFrame)?.map((action) => action.id)).toEqual([
+      "edit-slideshow",
+      "fit-frame-to-slideshow-aspect",
     ]);
     resetSlideshowRuntimeForTests();
     vi.unstubAllGlobals();

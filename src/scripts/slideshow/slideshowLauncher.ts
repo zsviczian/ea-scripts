@@ -21,7 +21,12 @@ import {
 import { SlideshowController } from "./SlideshowController";
 import { SlideshowSidepanel } from "./SlideshowSidepanel";
 import { printSlideshowToPdf } from "./printToPdf";
-import { createLinePresentation, declareFrameSlideshow } from "./slideDeckMutations";
+import { sleepInWindow } from "../../sharedUtils/windowTiming";
+import {
+  createLinePresentation,
+  declareFrameSlideshow,
+  resizeFrameToPresentationAspect,
+} from "./slideDeckMutations";
 import { hasFrameSlideshowDeclaration } from "./slideshowMetadata";
 import {
   loadSlideshowDisplayPreferences,
@@ -139,21 +144,41 @@ export function registerSlideshowElementActionProvider(
         ? "frame"
         : null);
     if (!presentationSourceKey) return [];
-    return [
+    const actions = [
       {
         id: "edit-slideshow",
         title: latestContext.t("editSlideshow"),
-        icon: "presentation",
+        icon: "pencil",
         action: () => {
           latestContext.ea.setView(latestContext.view);
           void openSlideshowSidepanel(
             latestContext,
             presentationSourceKey,
             presentationSourceKey === "frame" ? element.id : undefined,
+            true,
           );
         },
       },
     ];
+    if (presentationSourceKey === "frame" && isFrameElement(element)) {
+      actions.push({
+        id: "fit-frame-to-slideshow-aspect",
+        title: latestContext.t("fitFrameToPresentationAspect"),
+        icon: "ratio",
+        action: () => {
+          latestContext.ea.setView(latestContext.view);
+          void resizeFrameToPresentationAspect(
+            latestContext.ea,
+            element.id,
+            latestContext.config,
+          ).catch((error) => {
+            console.error("Slideshow frame aspect-ratio resize failed", error);
+            new Notice(latestContext.t("resizeFrameFailed"));
+          });
+        },
+      });
+    }
+    return actions;
   });
 }
 
@@ -277,12 +302,18 @@ export async function openSlideshowSidepanel(
   context: SlideshowViewContext,
   preferredSource?: PresentationSourceKey | PresentationPathType,
   preferredSlideId?: string,
+  reassertActiveTab = false,
 ): Promise<void> {
   const runtime = getSlideshowRuntime();
   await runtime.presentations.get(context.view)?.exit();
 
   if (runtime.sidepanel) {
-    await runtime.sidepanel.activate(context.view, preferredSource, preferredSlideId);
+    await runtime.sidepanel.activate(
+      context.view,
+      preferredSource,
+      preferredSlideId,
+      reassertActiveTab,
+    );
     return;
   }
 
@@ -331,15 +362,27 @@ export async function openSlideshowSidepanel(
       view: ScriptExcalidrawView,
       source?: PresentationSourceKey | PresentationPathType,
       slideId?: string,
+      shouldReassertActiveTab = false,
     ) => {
       await sidepanel.activate(view, source, slideId);
       tab.open();
+      sidepanel.revealRequestedSlide();
+      if (!shouldReassertActiveTab) return;
+
+      await sleepInWindow(view.ownerWindow, 250);
+      if (runtime.sidepanel?.activate !== handle.activate || tab.isActiveTab()) return;
+      tab.focus();
       sidepanel.revealRequestedSlide();
     },
   };
   runtime.sidepanel = handle;
   sidepanel.initialize();
-  await handle.activate(context.view, preferredSource, preferredSlideId);
+  await handle.activate(
+    context.view,
+    preferredSource,
+    preferredSlideId,
+    reassertActiveTab,
+  );
 }
 
 /** Routes a script-button, command-palette, or hotkey invocation for the current view. */

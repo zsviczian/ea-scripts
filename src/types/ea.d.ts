@@ -251,6 +251,7 @@ declare global {
     selectElementsInView(elements: readonly ExcalidrawElement[]): void;
     setViewModeEnabled(enabled: boolean): void;
     viewToggleFullScreen(forceViewMode?: boolean): void;
+    addFrame(topX: number, topY: number, width: number, height: number, name?: string): string;
     addRect(topX: number, topY: number, width: number, height: number): string;
     addEllipse(topX: number, topY: number, width: number, height: number): string;
     addText(topX: number, topY: number, text: string, formatting?: TextFormatting): string;

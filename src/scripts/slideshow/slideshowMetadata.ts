@@ -122,6 +122,27 @@ function readAnimation(value: unknown): FrameSlideshowData["animation"] | undefi
   return { steps: steps as AnimationStep[] };
 }
 
+function readLineSlidePair(value: unknown): [[number, number], [number, number]] | undefined | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length !== 2) return null;
+  const points = value.map((point) => {
+    if (
+      !Array.isArray(point) ||
+      point.length !== 2 ||
+      typeof point[0] !== "number" ||
+      !Number.isFinite(point[0]) ||
+      typeof point[1] !== "number" ||
+      !Number.isFinite(point[1])
+    ) {
+      return null;
+    }
+    return [point[0], point[1]] as [number, number];
+  });
+  return points.some((point) => point === null)
+    ? null
+    : (points as [[number, number], [number, number]]);
+}
+
 /** Returns the raw slideshow namespace without trusting its shape. */
 export function getRawSlideshowMetadata(customData: unknown): unknown {
   return isRecord(customData) ? customData.slideshow : undefined;
@@ -152,6 +173,9 @@ export function readFrameSlideshowData(customData: unknown): FrameSlideshowData 
   if (value.notes !== undefined && typeof value.notes !== "string") {
     return null;
   }
+  if (value.deckName !== undefined && typeof value.deckName !== "string") {
+    return null;
+  }
   const animation = readAnimation(value.animation);
   if (animation === null) {
     return null;
@@ -161,6 +185,8 @@ export function readFrameSlideshowData(customData: unknown): FrameSlideshowData 
     kind: "frame",
     order: value.order,
   };
+  const deckName = normalizeNotes(value.deckName);
+  if (deckName !== undefined) result.deckName = deckName;
   if (value.excluded !== undefined) result.excluded = value.excluded;
   const notes = normalizeNotes(value.notes);
   if (notes !== undefined) result.notes = notes;
@@ -191,10 +217,21 @@ function readLineSlideRecord(value: unknown): LineSlideMetadataRecord | null {
   if (value.excluded !== undefined && typeof value.excluded !== "boolean") {
     return null;
   }
+  if (value.title !== undefined && typeof value.title !== "string") {
+    return null;
+  }
+  const pair = readLineSlidePair(value.pair);
+  if (pair === null) return null;
+  const animation = readAnimation(value.animation);
+  if (animation === null) return null;
   const result: LineSlideMetadataRecord = { id: value.id };
+  const title = normalizeNotes(value.title);
+  if (title !== undefined) result.title = title;
   const notes = normalizeNotes(value.notes);
   if (notes !== undefined) result.notes = notes;
   if (value.excluded !== undefined) result.excluded = value.excluded;
+  if (pair !== undefined) result.pair = pair;
+  if (animation !== undefined) result.animation = animation;
   return result;
 }
 
@@ -240,30 +277,113 @@ function makeGeneratedLineSlideId(pathId: string, index: number, usedIds: Set<st
   return candidate;
 }
 
+
+/** Converts Excalidraw linear-element points to stable scene coordinates for slide identity matching. */
+export function getAbsoluteLinePoints(
+  x: number,
+  y: number,
+  points: readonly (readonly [number, number])[],
+): [number, number][] {
+  return points.map((point) => [x + point[0], y + point[1]]);
+}
+
 /**
  * Reconciles path slide records with the current point-pair count without writing.
  * Existing records keep their IDs, notes, and inclusion state by index; missing/duplicate IDs are regenerated.
  */
+function samePoint(left: readonly [number, number], right: readonly [number, number]): boolean {
+  return Math.abs(left[0] - right[0]) < 0.001 && Math.abs(left[1] - right[1]) < 0.001;
+}
+
+function samePair(
+  left: readonly [readonly [number, number], readonly [number, number]],
+  right: readonly [readonly [number, number], readonly [number, number]],
+): boolean {
+  return samePoint(left[0], right[0]) && samePoint(left[1], right[1]);
+}
+
+function getCurrentLinePairs(
+  points: readonly (readonly [number, number])[] | undefined,
+  pairCount: number,
+): Array<[[number, number], [number, number]] | undefined> {
+  return Array.from({ length: pairCount }, (_, index) => {
+    const first = points?.[index * 2];
+    const second = points?.[index * 2 + 1];
+    return first && second
+      ? [
+          [first[0], first[1]],
+          [second[0], second[1]],
+        ]
+      : undefined;
+  });
+}
+
+function copyLineSlideRecord(
+  existing: LineSlideMetadataRecord | undefined,
+  id: string,
+  pair: [[number, number], [number, number]] | undefined,
+): LineSlideMetadataRecord {
+  const record: LineSlideMetadataRecord = { id };
+  const title = normalizeNotes(existing?.title);
+  if (title !== undefined) record.title = title;
+  const notes = normalizeNotes(existing?.notes);
+  if (notes !== undefined) record.notes = notes;
+  if (existing?.excluded === true) record.excluded = true;
+  if (existing?.animation !== undefined) {
+    record.animation = { steps: existing.animation.steps.map((step) => structuredClone(step)) };
+  }
+  if (pair) record.pair = pair;
+  else if (existing?.pair) record.pair = structuredClone(existing.pair);
+  return record;
+}
+
 export function reconcileLineSlideRecords(
   records: readonly LineSlideMetadataRecord[],
   pairCount: number,
   pathId: string,
+  points?: readonly (readonly [number, number])[],
 ): LineSlideMetadataRecord[] {
   const count = Math.max(0, Math.floor(pairCount));
   const result: LineSlideMetadataRecord[] = [];
   const usedIds = new Set<string>();
+  const usedRecordIndices = new Set<number>();
+  const currentPairs = getCurrentLinePairs(points, count);
+  const matchedRecordByPairIndex = new Map<number, number>();
+
+  if (points) {
+    currentPairs.forEach((pair, pairIndex) => {
+      if (!pair) return;
+      const recordIndex = records.findIndex(
+        (record, index) =>
+          !usedRecordIndices.has(index) && Boolean(record.pair && samePair(record.pair, pair)),
+      );
+      if (recordIndex >= 0) {
+        matchedRecordByPairIndex.set(pairIndex, recordIndex);
+        usedRecordIndices.add(recordIndex);
+      }
+    });
+  }
+
   for (let index = 0; index < count; index += 1) {
-    const existing = records[index];
+    let recordIndex = matchedRecordByPairIndex.get(index);
+    if (recordIndex === undefined) {
+      const indexed = records[index];
+      const canFallbackByIndex =
+        Boolean(indexed) &&
+        !usedRecordIndices.has(index) &&
+        (!points || records.length === count || indexed?.pair === undefined);
+      if (canFallbackByIndex) {
+        recordIndex = index;
+        usedRecordIndices.add(index);
+      }
+    }
+    const existing = recordIndex === undefined ? undefined : records[recordIndex];
     const id =
       existing && isNonEmptyString(existing.id) && !usedIds.has(existing.id)
         ? existing.id
         : makeGeneratedLineSlideId(pathId, index, usedIds);
     usedIds.add(id);
-    const record: LineSlideMetadataRecord = { id };
-    const notes = normalizeNotes(existing?.notes);
-    if (notes !== undefined) record.notes = notes;
-    if (existing?.excluded === true) record.excluded = true;
-    result.push(record);
+    result.push(copyLineSlideRecord(existing, id, currentPairs[index]));
   }
   return result;
 }
@@ -275,8 +395,9 @@ export function reorderLineSlideRecords(
   pathId: string,
   fromPairIndex: number,
   toPairIndex: number,
+  points?: readonly (readonly [number, number])[],
 ): LineSlideMetadataRecord[] {
-  const reconciled = reconcileLineSlideRecords(records, pairCount, pathId);
+  const reconciled = reconcileLineSlideRecords(records, pairCount, pathId, points);
   if (
     !Number.isInteger(fromPairIndex) ||
     !Number.isInteger(toPairIndex) ||
@@ -300,12 +421,13 @@ export function readLineSlideshowData(
   customData: unknown,
   pathId: string,
   pairCount: number,
+  points?: readonly (readonly [number, number])[],
 ): ReadLineSlideshowData | null {
   const v2 = readLineSlideshowDataV2(customData);
   if (v2) {
     return {
       source: "v2",
-      data: { ...v2, slides: reconcileLineSlideRecords(v2.slides, pairCount, pathId) },
+      data: { ...v2, slides: reconcileLineSlideRecords(v2.slides, pairCount, pathId, points) },
     };
   }
   const legacy = readLegacyLineSlideshowData(customData);
@@ -319,7 +441,7 @@ export function readLineSlideshowData(
       kind: "path",
       hidden: legacy.hidden,
       originalProps: legacy.originalProps,
-      slides: reconcileLineSlideRecords([], pairCount, pathId),
+      slides: reconcileLineSlideRecords([], pairCount, pathId, points),
     },
   };
 }
@@ -330,8 +452,9 @@ export function upgradeLineSlideshowData(
   pathId: string,
   pairCount: number,
   fallbackOriginalProps: OriginalPathProperties,
+  points?: readonly (readonly [number, number])[],
 ): LineSlideshowData {
-  const existing = readLineSlideshowData(customData, pathId, pairCount);
+  const existing = readLineSlideshowData(customData, pathId, pairCount, points);
   if (existing) {
     return existing.data;
   }
@@ -340,7 +463,7 @@ export function upgradeLineSlideshowData(
     kind: "path",
     hidden: false,
     originalProps: fallbackOriginalProps,
-    slides: reconcileLineSlideRecords([], pairCount, pathId),
+    slides: reconcileLineSlideRecords([], pairCount, pathId, points),
   };
 }
 
@@ -353,6 +476,7 @@ export function withNormalizedFrameOrder(customData: unknown, order: number): Fr
     order,
   };
   if (existing?.excluded !== undefined) result.excluded = existing.excluded;
+  if (existing?.deckName !== undefined) result.deckName = existing.deckName;
   if (existing?.notes !== undefined) result.notes = existing.notes;
   if (existing?.animation !== undefined) result.animation = existing.animation;
   return result;

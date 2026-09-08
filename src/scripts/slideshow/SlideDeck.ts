@@ -5,6 +5,7 @@
 
 import { getPresentationFrameName, type SlideRect } from "../../sharedUtils/presentationGeometry";
 import {
+  getAbsoluteLinePoints,
   readFrameSlideshowData,
   readLineSlideshowData,
   withNormalizedFrameOrder,
@@ -35,13 +36,13 @@ interface SlideDeckBaseSlide {
   rect: SlideRect;
   notes?: string;
   excluded: boolean;
+  animationSteps: readonly AnimationStep[];
 }
 
 export interface FrameDeckSlide extends SlideDeckBaseSlide {
   kind: "frame";
   frameId: string;
   order: number;
-  animationSteps: readonly AnimationStep[];
 }
 
 export interface LineDeckSlide extends SlideDeckBaseSlide {
@@ -54,6 +55,7 @@ export type SlideDeckSlide = FrameDeckSlide | LineDeckSlide;
 
 export interface SlideDeck {
   kind: "frame" | "path";
+  name: string | null;
   slides: SlideDeckSlide[];
   visibleSlides: SlideDeckSlide[];
   hasExplicitFrameOrder: boolean;
@@ -117,6 +119,7 @@ function toIndexedFrames(frames: readonly FrameDeckSource[]): IndexedFrame[] {
 /** Builds the canonical frame deck without mutating scene metadata. */
 export function buildFrameSlideDeck(frames: readonly FrameDeckSource[]): SlideDeck {
   const { ordered, explicit } = orderFrames(toIndexedFrames(frames));
+  const name = ordered.find((frame) => frame.metadata?.deckName)?.metadata?.deckName ?? null;
   const slides: FrameDeckSlide[] = ordered.map((frame, index) => {
     const { source, metadata } = frame;
     const slide: FrameDeckSlide = {
@@ -134,6 +137,7 @@ export function buildFrameSlideDeck(frames: readonly FrameDeckSource[]): SlideDe
   });
   return {
     kind: "frame",
+    name,
     slides,
     visibleSlides: slides.filter((slide) => !slide.excluded),
     hasExplicitFrameOrder: explicit,
@@ -157,7 +161,12 @@ export function getNormalizedFrameOrderUpdates(
 /** Builds the canonical line deck, reconciling slide IDs/notes in memory only. */
 export function buildLineSlideDeck(path: LineDeckSource): SlideDeck {
   const pairCount = Math.floor(path.points.length / 2);
-  const metadata = readLineSlideshowData(path.customData, path.id, pairCount);
+  const metadata = readLineSlideshowData(
+    path.customData,
+    path.id,
+    pairCount,
+    getAbsoluteLinePoints(path.x, path.y, path.points),
+  );
   const records = metadata?.data.slides ?? [];
   const slides: LineDeckSlide[] = [];
   for (let pairIndex = 0; pairIndex < pairCount; pairIndex += 1) {
@@ -170,7 +179,7 @@ export function buildLineSlideDeck(path: LineDeckSource): SlideDeck {
       kind: "path",
       pathId: path.id,
       pairIndex,
-      title: `Slide ${pairIndex + 1}`,
+      title: record?.title ?? `Slide ${pairIndex + 1}`,
       rect: {
         x1: path.x + pointA[0],
         y1: path.y + pointA[1],
@@ -178,12 +187,14 @@ export function buildLineSlideDeck(path: LineDeckSource): SlideDeck {
         y2: path.y + pointB[1],
       },
       excluded: record?.excluded ?? false,
+      animationSteps: record?.animation?.steps ?? [],
     };
     if (record?.notes !== undefined) slide.notes = record.notes;
     slides.push(slide);
   }
   return {
     kind: "path",
+    name: metadata?.data.name?.trim() || null,
     slides,
     visibleSlides: slides.filter((slide) => !slide.excluded),
     hasExplicitFrameOrder: false,

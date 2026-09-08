@@ -6,6 +6,11 @@
 import type { Component, WorkspaceLeaf } from "obsidian";
 
 import {
+  getAvailableDisplays,
+  getCurrentDisplayId,
+  getSlideshowDeviceKey,
+  getSlideshowDisplayConfigurationKey,
+  getSlideshowDisplayIdentity,
   moveWindowToDisplay,
   resolveSameNativeWindow,
   waitForWindowOnDisplay,
@@ -108,10 +113,32 @@ export class PresenterViewController {
   private closed = false;
   private destroying = false;
   private readonly previewService: SlidePreviewService;
+  private readonly notesPreference: { deviceKey: string; configurationKey: string; displayIdentity: string } | null;
 
   public constructor(private readonly options: PresenterViewControllerOptions) {
     this.previewService = new SlidePreviewService(options.ea, options.api, options.config);
-    this.notesFontSize = loadPresenterNotesFontSize(options.ea);
+    const displays = getAvailableDisplays(options.hostView.ownerWindow);
+    const targetDisplayId = options.targetDisplayId ?? getCurrentDisplayId(options.hostView.ownerWindow);
+    const targetDisplay = displays.find((display) => display.id === targetDisplayId);
+    this.notesPreference = targetDisplay
+      ? {
+          deviceKey: getSlideshowDeviceKey(options.hostView.ownerWindow),
+          configurationKey: getSlideshowDisplayConfigurationKey(displays),
+          displayIdentity: JSON.stringify([
+            getSlideshowDisplayIdentity(targetDisplay),
+            targetDisplay.bounds.x,
+            targetDisplay.bounds.y,
+          ]),
+        }
+      : null;
+    this.notesFontSize = this.notesPreference
+      ? loadPresenterNotesFontSize(
+          options.ea,
+          this.notesPreference.deviceKey,
+          this.notesPreference.configurationKey,
+          this.notesPreference.displayIdentity,
+        )
+      : loadPresenterNotesFontSize(options.ea);
   }
 
   /** Opens the popout, waits for real window migration, and renders its initial state. */
@@ -296,7 +323,14 @@ export class PresenterViewController {
       root.style.setProperty("--slideshow-presenter-notes-font-size", `${this.notesFontSize}px`);
     });
     fontSizeSlider.addEventListener("change", () => {
-      void savePresenterNotesFontSize(this.options.ea, this.notesFontSize).catch((error) => {
+      const preference = this.notesPreference;
+      void savePresenterNotesFontSize(
+        this.options.ea,
+        this.notesFontSize,
+        preference?.deviceKey,
+        preference?.configurationKey,
+        preference?.displayIdentity,
+      ).catch((error) => {
         console.error("Slideshow presenter notes font-size save failed", error);
       });
     });
@@ -430,26 +464,22 @@ export class PresenterViewController {
       ? await this.previewService.createPreview(
           currentSlide,
           doc,
-          currentSlide.kind === "frame"
-              ? {
-                  completedAnimationSteps: state.completedAnimationSteps,
-                  ...(originalOpacities ? { originalOpacities } : {}),
-                  targetWidth: 1280,
-                }
-              : { targetWidth: 1280 },
+          {
+            completedAnimationSteps: state.completedAnimationSteps,
+            ...(originalOpacities ? { originalOpacities } : {}),
+            targetWidth: 1280,
+          },
         )
       : null;
     const nextPreview = nextSlide
       ? await this.previewService.createPreview(
           nextSlide,
           doc,
-          nextSlide.kind === "frame"
-              ? {
-                  completedAnimationSteps: state.nextCompletedAnimationSteps ?? 0,
-                  ...(originalOpacities ? { originalOpacities } : {}),
-                  targetWidth: 1280,
-                }
-              : { targetWidth: 1280 },
+          {
+            completedAnimationSteps: state.nextCompletedAnimationSteps ?? 0,
+            ...(originalOpacities ? { originalOpacities } : {}),
+            targetWidth: 1280,
+          },
         )
       : null;
     if (generation !== this.updateGeneration || this.closed) return;

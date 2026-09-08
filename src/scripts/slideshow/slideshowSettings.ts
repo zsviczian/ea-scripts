@@ -45,6 +45,8 @@ const DISPLAY_TARGETS_SETTING = "slideshowDisplayTargetsByDevice";
 const DISPLAY_TARGETS_BY_CONFIGURATION_SETTING =
   "slideshowDisplayTargetsByDeviceConfiguration";
 const PRESENTER_NOTES_FONT_SIZE_SETTING = "slideshowPresenterNotesFontSize";
+const PRESENTER_NOTES_FONT_SIZE_BY_DISPLAY_SETTING =
+  "slideshowPresenterNotesFontSizeByDeviceConfigurationDisplay";
 const SORTER_THUMBNAIL_MAX_WIDTH_SETTING = "slideshowSorterThumbnailMaxWidth";
 const LEGACY_LAUNCH_MODE_SETTING = "slideshowLaunchMode";
 const LEGACY_START_FULLSCREEN_SETTING = "slideshowStartFullscreen";
@@ -215,23 +217,68 @@ export async function saveSlideshowDisplayPreferences(
   });
 }
 
-/** Reads the persisted presenter-notes font size in pixels. */
-export function loadPresenterNotesFontSize(ea: ExcalidrawAutomate): number {
-  const raw = readSettings(ea)[PRESENTER_NOTES_FONT_SIZE_SETTING];
+/** Reads the persisted presenter-notes font size in pixels, preferring this display setup. */
+export function loadPresenterNotesFontSize(
+  ea: ExcalidrawAutomate,
+  deviceKey?: string,
+  configurationKey?: string,
+  displayIdentity?: string,
+): number {
+  const settings = readSettings(ea);
+  let raw: unknown;
+  if (deviceKey && configurationKey && displayIdentity) {
+    const byDevice = settings[PRESENTER_NOTES_FONT_SIZE_BY_DISPLAY_SETTING];
+    if (byDevice && typeof byDevice === "object" && !Array.isArray(byDevice)) {
+      const device = (byDevice as Record<string, unknown>)[deviceKey];
+      if (device && typeof device === "object" && !Array.isArray(device)) {
+        const configuration = (device as Record<string, unknown>)[configurationKey];
+        if (configuration && typeof configuration === "object" && !Array.isArray(configuration)) {
+          raw = (configuration as Record<string, unknown>)[displayIdentity];
+        }
+      }
+    }
+  }
+  if (raw === undefined) raw = settings[PRESENTER_NOTES_FONT_SIZE_SETTING];
   const value =
     typeof raw === "number" && Number.isFinite(raw) ? raw : DEFAULT_PRESENTER_NOTES_FONT_SIZE;
   return Math.min(48, Math.max(12, Math.round(value)));
 }
 
-/** Persists the presenter-notes font size without disturbing other script settings. */
+/** Persists the presenter-notes font size for one computer/display configuration. */
 export async function savePresenterNotesFontSize(
   ea: ExcalidrawAutomate,
   fontSize: number,
+  deviceKey?: string,
+  configurationKey?: string,
+  displayIdentity?: string,
 ): Promise<void> {
   const value = Math.min(48, Math.max(12, Math.round(fontSize)));
+  const settings = ea.getScriptSettings();
+  if (!deviceKey || !configurationKey || !displayIdentity) {
+    await ea.setScriptSettings({ ...settings, [PRESENTER_NOTES_FONT_SIZE_SETTING]: value });
+    return;
+  }
+  const raw = settings[PRESENTER_NOTES_FONT_SIZE_BY_DISPLAY_SETTING];
+  const byDevice = raw && typeof raw === "object" && !Array.isArray(raw)
+    ? (raw as Record<string, unknown>)
+    : {};
+  const rawDevice = byDevice[deviceKey];
+  const device = rawDevice && typeof rawDevice === "object" && !Array.isArray(rawDevice)
+    ? (rawDevice as Record<string, unknown>)
+    : {};
+  const rawConfiguration = device[configurationKey];
+  const configuration = rawConfiguration && typeof rawConfiguration === "object" && !Array.isArray(rawConfiguration)
+    ? (rawConfiguration as Record<string, unknown>)
+    : {};
   await ea.setScriptSettings({
-    ...ea.getScriptSettings(),
-    [PRESENTER_NOTES_FONT_SIZE_SETTING]: value,
+    ...settings,
+    [PRESENTER_NOTES_FONT_SIZE_BY_DISPLAY_SETTING]: {
+      ...byDevice,
+      [deviceKey]: {
+        ...device,
+        [configurationKey]: { ...configuration, [displayIdentity]: value },
+      },
+    },
   });
 }
 
@@ -430,6 +477,7 @@ export function openSlideshowSettingsModal(
     );
 
     const actions = contentEl.createDiv({ cls: "modal-button-container" });
+    actions.style.justifyContent = "flex-end";
     const resetButton = actions.createEl("button", { text: t("settingsResetDefaults") });
     resetButton.addEventListener("click", () => {
       resetSlideshowConfigToDefaults(draft);

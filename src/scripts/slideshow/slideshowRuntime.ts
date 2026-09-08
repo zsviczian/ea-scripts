@@ -31,6 +31,7 @@ export interface SlideshowSidepanelHandle {
     view: ScriptExcalidrawView,
     preferredSource?: PresentationSourceKey | PresentationPathType,
     preferredSlideId?: string,
+    reassertActiveTab?: boolean,
   ): Promise<void>;
 }
 

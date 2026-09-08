@@ -15,13 +15,17 @@ import {
   waitForWindowOnDisplay,
   type NativeWindowPlacementSnapshot,
 } from "./desktopDisplays";
-import type { FrameDeckSlide, LineDeckSlide } from "./SlideDeck";
+import type { LineDeckSlide } from "./SlideDeck";
 import { PresentationControls } from "./PresentationControls";
 import { PresenterViewController } from "./PresenterViewController";
 import { buildPresentationState } from "./presentationState";
 import type { SlideshowTranslator } from "./lang";
 import { printSlideshowToPdf } from "./printToPdf";
-import { upgradeLineSlideshowData, writeSlideshowMetadata } from "./slideshowMetadata";
+import {
+  getAbsoluteLinePoints,
+  upgradeLineSlideshowData,
+  writeSlideshowMetadata,
+} from "./slideshowMetadata";
 import {
   type Direction,
   type EditableLinearElement,
@@ -111,15 +115,12 @@ export class SlideshowController {
     this.onSlideChange = options.onSlideChange;
     this.onExit = options.onExit;
     this.openSidepanel = options.openSidepanel;
-    this.animationRuntime =
-      options.setup.pathType === "frame"
-        ? new AnimationRuntime({
-            ea: options.ea,
-            api: options.api,
-            hostView: options.hostView,
-            onStateChange: () => this.emitPresentationState(),
-          })
-        : null;
+    this.animationRuntime = new AnimationRuntime({
+      ea: options.ea,
+      api: options.api,
+      hostView: options.hostView,
+      onStateChange: () => this.emitPresentationState(),
+    });
   }
 
   /** Starts the presentation and installs all temporary UI and handlers. */
@@ -225,13 +226,9 @@ export class SlideshowController {
   /** Returns the authoritative state shared by floating controls and presenter view. */
   public getPresentationState(): PresentationState {
     let animationState = this.animationRuntime?.getState() ?? { completedSteps: 0, stepCount: 0 };
-    if (
-      this.setup.pathType === "frame" &&
-      animationState.stepCount === 0 &&
-      this.setup.deck.visibleSlides[this.slide]?.kind === "frame"
-    ) {
-      const current = this.setup.deck.visibleSlides[this.slide] as FrameDeckSlide;
-      animationState = { completedSteps: 0, stepCount: current.animationSteps.length };
+    if (animationState.stepCount === 0) {
+      const current = this.setup.deck.visibleSlides[this.slide];
+      if (current) animationState = { completedSteps: 0, stepCount: current.animationSteps.length };
     }
     return buildPresentationState(this.setup.deck, this.slide, animationState);
   }
@@ -404,6 +401,7 @@ export class SlideshowController {
         element.id,
         Math.floor(element.points.length / 2),
         originalProps,
+        getAbsoluteLinePoints(element.x, element.y, element.points),
       );
       metadata.hidden = shouldRemainHidden;
       writeSlideshowMetadata(this.ea, element.id, metadata);
@@ -435,8 +433,8 @@ export class SlideshowController {
 
   private async enterSlide(index: number, fullyBuilt: boolean): Promise<void> {
     const deckSlide = this.setup.deck.visibleSlides[index];
-    if (deckSlide?.kind === "frame" && this.animationRuntime) {
-      await this.animationRuntime.enterSlide(deckSlide as FrameDeckSlide, fullyBuilt, false);
+    if (deckSlide && this.animationRuntime) {
+      await this.animationRuntime.enterSlide(deckSlide, fullyBuilt, false);
     } else {
       await this.animationRuntime?.leaveSlide();
     }

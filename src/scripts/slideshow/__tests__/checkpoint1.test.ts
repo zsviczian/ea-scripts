@@ -1,5 +1,7 @@
 import { describe, it } from "vitest";
 
+import { expandSlideRectToAspectRatio } from "../../../sharedUtils/presentationGeometry";
+
 /* eslint-disable max-lines-per-function -- Migrated checkpoint cases remain intact for traceability. */
 
 import {
@@ -206,12 +208,26 @@ function testLineRecordReorder(): void {
 }
 
 function testLineDeck(): void {
+  const animation = {
+    steps: [
+      {
+        id: "build-1",
+        targets: [{ type: "element" as const, id: "shape" }],
+        effect: "appear" as const,
+        trigger: "advance" as const,
+      },
+    ],
+  };
   const path: LineSlideshowData = {
     schemaVersion: 2,
     kind: "path",
+    name: "Line deck",
     hidden: false,
     originalProps: { strokeColor: "red", backgroundColor: "blue", locked: false },
-    slides: [{ id: "slide-a", notes: "Speaker note" }, { id: "slide-b" }],
+    slides: [
+      { id: "slide-a", title: "Opening", notes: "Speaker note", animation },
+      { id: "slide-b" },
+    ],
   };
   const deck = buildLineSlideDeck({
     id: "path",
@@ -225,13 +241,86 @@ function testLineDeck(): void {
     ],
     customData: { slideshow: path },
   });
+  assertEqual(deck.name, "Line deck", "line deck carries its presentation title");
   assertEqual(deck.slides[0]?.id, "slide-a", "line deck uses persisted stable IDs");
+  assertEqual(deck.slides[0]?.title, "Opening", "line deck carries persisted slide titles");
   assertEqual(deck.slides[0]?.notes, "Speaker note", "line deck carries presenter notes");
+  assertDeepEqual(
+    deck.slides[0]?.animationSteps,
+    animation.steps,
+    "line deck carries the same animation steps as frame slides",
+  );
   assertDeepEqual(
     deck.slides[1]?.rect,
     { x1: 130, y1: 240, x2: 150, y2: 260 },
     "line deck converts relative points to scene rectangles",
   );
+}
+
+function testFrameDeckName(): void {
+  const deck = buildFrameSlideDeck([
+    frame("a", "Alpha", { schemaVersion: 2, kind: "frame", order: 0, deckName: "Demo" }),
+    frame("b", "Bravo", { schemaVersion: 2, kind: "frame", order: 1, deckName: "Demo" }),
+  ]);
+  assertEqual(deck.name, "Demo", "frame deck carries its persisted presentation title");
+}
+
+function testLineMetadataFollowsPointPairs(): void {
+  const records = [
+    { id: "one", title: "Opening", pair: [[100, 100], [200, 200]] as [[number, number], [number, number]] },
+    { id: "two", title: "Middle", pair: [[300, 300], [400, 400]] as [[number, number], [number, number]] },
+    { id: "three", title: "Close", pair: [[500, 500], [600, 600]] as [[number, number], [number, number]] },
+  ];
+  const inserted = reconcileLineSlideRecords(
+    records,
+    4,
+    "path",
+    [
+      [100, 100], [200, 200],
+      [250, 250], [275, 275],
+      [300, 300], [400, 400],
+      [500, 500], [600, 600],
+    ],
+  );
+  assertDeepEqual(
+    inserted.map((record) => [record.id, record.title]),
+    [["one", "Opening"], ["slideshow-path-2", undefined], ["two", "Middle"], ["three", "Close"]],
+    "inserting a point pair keeps titles attached to unchanged slide geometry",
+  );
+
+  const deleted = reconcileLineSlideRecords(
+    records,
+    2,
+    "path",
+    [[100, 100], [200, 200], [500, 500], [600, 600]],
+  );
+  assertDeepEqual(
+    deleted.map((record) => [record.id, record.title]),
+    [["one", "Opening"], ["three", "Close"]],
+    "deleting a point pair does not shift a neighboring slide title",
+  );
+}
+
+function testAspectRatioExpansion(): void {
+  const portrait = expandSlideRectToAspectRatio(
+    { x1: 100, y1: 50, x2: 200, y2: 250 },
+    { width: 16, height: 9 },
+  );
+  const portraitWidth = Math.abs(portrait.x2 - portrait.x1);
+  const portraitHeight = Math.abs(portrait.y2 - portrait.y1);
+  assert(Math.abs(portraitWidth / portraitHeight - 16 / 9) < 0.000001, "portrait frame expands to 16:9");
+  assertEqual(portraitHeight, 200, "portrait frame preserves its larger height");
+  assert(Math.abs((portrait.x1 + portrait.x2) / 2 - 150) < 0.000001, "portrait expansion remains centered");
+
+  const landscape = expandSlideRectToAspectRatio(
+    { x1: 0, y1: 0, x2: 200, y2: 50 },
+    { width: 16, height: 9 },
+  );
+  const landscapeWidth = Math.abs(landscape.x2 - landscape.x1);
+  const landscapeHeight = Math.abs(landscape.y2 - landscape.y1);
+  assert(Math.abs(landscapeWidth / landscapeHeight - 16 / 9) < 0.000001, "wide frame expands to 16:9");
+  assertEqual(landscapeWidth, 200, "wide frame preserves its larger width");
+  assert(Math.abs((landscape.y1 + landscape.y2) / 2 - 25) < 0.000001, "wide expansion remains centered");
 }
 
 function testPointPairReorderNormalization(): void {
@@ -357,6 +446,9 @@ describe("slideshow checkpoint 1", () => {
   it("reconciles line metadata", testLineRecordReconciliation);
   it("reorders line metadata", testLineRecordReorder);
   it("constructs a line deck", testLineDeck);
+  it("reads a frame presentation title", testFrameDeckName);
+  it("keeps line metadata attached when point pairs are inserted or deleted", testLineMetadataFollowsPointPairs);
+  it("expands slide rectangles to the presentation aspect ratio", testAspectRatioExpansion);
   it("normalizes reordered line point pairs", testPointPairReorderNormalization);
   it("retains legacy presentation-path compatibility", testLegacyPresentationPathCompatibility);
   it("upgrades and safely writes line metadata", testUpgradeAndSafeWrite);

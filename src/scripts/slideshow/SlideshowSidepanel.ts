@@ -7,6 +7,7 @@
 
 import type { EventRef, WorkspaceLeaf } from "obsidian";
 
+import { openConfirmationModal } from "../../sharedUtils/confirmationModal";
 import { getNavigationRect } from "../../sharedUtils/presentationGeometry";
 import { AnimationEditor } from "./AnimationEditor";
 import {
@@ -20,7 +21,7 @@ import {
   resolveSlideshowDisplayTarget,
   type SlideshowDisplay,
 } from "./desktopDisplays";
-import { getVisibleSlideIndex, type FrameDeckSlide, type SlideDeckSlide } from "./SlideDeck";
+import { getVisibleSlideIndex, type SlideDeckSlide } from "./SlideDeck";
 import { SlidePreviewService, getSceneVisualFingerprint } from "./SlidePreviewService";
 import { SlideSorter } from "./SlideSorter";
 import type { SlideshowTranslator } from "./lang";
@@ -34,12 +35,17 @@ import {
   type SlideDeckChoices,
 } from "./presentationPath";
 import {
+  convertFramePresentationToLine,
+  convertLinePresentationToFrames,
+  type ConvertedFrameKind,
   createLinePresentation,
   declareFrameSlideshow,
   hasBoundLineEndpoint,
   removeLinePresentation,
+  renameFramePresentation,
   renameFrameSlide,
   renameLinePresentation,
+  renameLineSlide,
   reorderFrameSlides,
   reorderLineSlides,
   saveFrameNotes,
@@ -105,6 +111,7 @@ function getDeckFingerprint(resolved: ResolvedSlideDeck | null): string {
   if (!resolved) return "none";
   return JSON.stringify({
     kind: resolved.deck.kind,
+    name: resolved.deck.name,
     pathId: resolved.pathElement?.id ?? null,
     slides: resolved.deck.slides.map((slide) => ({
       id: slide.id,
@@ -112,7 +119,7 @@ function getDeckFingerprint(resolved: ResolvedSlideDeck | null): string {
       rect: slide.rect,
       notes: slide.notes ?? null,
       excluded: slide.excluded,
-      animationCount: slide.kind === "frame" ? slide.animationSteps.length : 0,
+      animationCount: slide.animationSteps.length,
     })),
   });
 }
@@ -172,7 +179,7 @@ export function getPresentationSourceLabels(
   defaultLineLabel: string,
 ): Array<{ key: PresentationSourceKey; label: string }> {
   const result: Array<{ key: PresentationSourceKey; label: string }> = [];
-  if (choices.frame) result.push({ key: "frame", label: frameLabel });
+  if (choices.frame) result.push({ key: "frame", label: choices.frame.deck.name?.trim() || frameLabel });
   const bases = choices.lines.map((line) => line.name?.trim() || defaultLineLabel);
   const totals = new Map<string, number>();
   for (const base of bases) totals.set(base, (totals.get(base) ?? 0) + 1);
@@ -275,6 +282,74 @@ export function resolveDeviceLaunchModes(
     startFullscreen: isMobile || windowMode === "fullscreen",
     openPresenterView: !isMobile && notesMode === "presenter" && hasSecondaryDisplay,
   };
+}
+
+interface FrameToLineConversionChoice {
+  deleteFrames: boolean;
+  visibleSlidesOnly: boolean;
+}
+
+interface LineToFrameConversionChoice {
+  deleteLine: boolean;
+  frameKind: ConvertedFrameKind;
+  correctAspectRatio: boolean;
+}
+
+function styleModalActions(actions: HTMLElement): void {
+  actions.style.display = "flex";
+  actions.style.justifyContent = "flex-end";
+  actions.style.gap = "0.5rem";
+  actions.style.flexWrap = "wrap";
+}
+
+function bindEnterToSave(input: HTMLInputElement, saveButton: HTMLButtonElement): void {
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing) return;
+    event.preventDefault();
+    saveButton.click();
+  });
+}
+
+function addCheckboxOption(container: HTMLElement, label: string): HTMLInputElement {
+  const doc = container.ownerDocument;
+  const row = doc.createElement("label");
+  row.style.display = "flex";
+  row.style.alignItems = "center";
+  row.style.gap = "0.5rem";
+  row.style.marginBottom = "0.5rem";
+  const input = doc.createElement("input");
+  input.type = "checkbox";
+  const text = doc.createElement("span");
+  text.textContent = label;
+  row.append(input, text);
+  container.appendChild(row);
+  return input;
+}
+
+function addSelectOption(
+  container: HTMLElement,
+  label: string,
+  options: readonly [string, string][],
+): HTMLSelectElement {
+  const doc = container.ownerDocument;
+  const row = doc.createElement("label");
+  row.style.display = "flex";
+  row.style.alignItems = "center";
+  row.style.justifyContent = "space-between";
+  row.style.gap = "1rem";
+  row.style.marginBottom = "0.5rem";
+  const text = doc.createElement("span");
+  text.textContent = label;
+  const select = doc.createElement("select");
+  for (const [value, optionText] of options) {
+    const option = doc.createElement("option");
+    option.value = value;
+    option.textContent = optionText;
+    select.appendChild(option);
+  }
+  row.append(text, select);
+  container.appendChild(row);
+  return select;
 }
 
 /** Manages one non-persistent slideshow sidepanel across Excalidraw view focus changes. */
@@ -973,18 +1048,19 @@ export class SlideshowSidepanel {
     thumbnailSizeControl.appendChild(thumbnailSizeSlider);
     summaryRow.appendChild(thumbnailSizeControl);
 
-    if (deck.kind === "path") {
-      const presentationSettingsButton = doc.createElement("button");
-      presentationSettingsButton.type = "button";
-      presentationSettingsButton.className =
-        "slideshow-sidepanel__icon-button slideshow-sidepanel__presentation-settings";
-      presentationSettingsButton.setAttribute("aria-label", t("linePresentationSettings"));
-      presentationSettingsButton.innerHTML = icons.moreHorizontal;
-      presentationSettingsButton.addEventListener("click", () =>
-        this.openLinePresentationSettings(),
-      );
-      summaryRow.appendChild(presentationSettingsButton);
-    }
+    const presentationSettingsButton = doc.createElement("button");
+    presentationSettingsButton.type = "button";
+    presentationSettingsButton.className =
+      "slideshow-sidepanel__icon-button slideshow-sidepanel__presentation-settings";
+    presentationSettingsButton.setAttribute(
+      "aria-label",
+      t(deck.kind === "frame" ? "framePresentationSettings" : "linePresentationSettings"),
+    );
+    presentationSettingsButton.innerHTML = icons.moreHorizontal;
+    presentationSettingsButton.addEventListener("click", () =>
+      deck.kind === "frame" ? this.openFramePresentationSettings() : this.openLinePresentationSettings(),
+    );
+    summaryRow.appendChild(presentationSettingsButton);
 
     const reorderEnabled =
       !this.resolved.pathElement || !hasBoundLineEndpoint(this.resolved.pathElement);
@@ -992,12 +1068,6 @@ export class SlideshowSidepanel {
       const warning = doc.createElement("div");
       warning.className = "slideshow-warning";
       warning.textContent = t("lineReorderBound");
-      root.appendChild(warning);
-    }
-    if (deck.kind === "path") {
-      const warning = doc.createElement("div");
-      warning.className = "slideshow-warning";
-      warning.textContent = t("lineAnimationUnsupported");
       root.appendChild(warning);
     }
     const sorterContainer = doc.createElement("div");
@@ -1020,7 +1090,7 @@ export class SlideshowSidepanel {
         saveNotes: (slide, notes) => this.saveNotes(slide, notes),
         requestAnimationEditor: (slide) => this.requestAnimationEditor(slide),
         mountAnimationEditor: (slide, container) => this.mountAnimationEditor(slide, container),
-        editFrameSlideName: (slide) => this.openFrameSlideNameEditor(slide),
+        editSlideName: (slide) => this.openSlideNameEditor(slide),
         editLineSlide: (slide, index) => this.editLineSlide(slide, index),
         notesBlurred: () => {
           if (this.pendingRefresh) this.scheduleRefresh();
@@ -1303,44 +1373,189 @@ export class SlideshowSidepanel {
     }
   }
 
-  private openFrameSlideNameEditor(slide: FrameDeckSlide): void {
+  private openSlideNameEditor(slide: SlideDeckSlide): void {
     const view = this.boundView;
     if (!view) return;
-    const frame = this.options.ea
-      .getViewElements()
-      .find(
-        (element): element is ExcalidrawFrameElement =>
-          element.id === slide.frameId && isFrameElement(element),
-      );
-    if (!frame) return;
     const { ea, t } = this.options;
     const modal = new ea.obsidian.Modal(app);
-    modal.titleEl.setText(t("editFrameSlideName"));
+    modal.titleEl.setText(t("editSlideName"));
     const input = modal.contentEl.createEl("input", {
       type: "text",
-      value: frame.name ?? "",
-      attr: { "aria-label": t("frameSlideName") },
+      value: slide.title,
+      attr: { "aria-label": t("slideName") },
     });
     input.style.width = "100%";
     input.style.marginBottom = "1rem";
     const actions = modal.contentEl.createDiv({ cls: "modal-button-container" });
+    styleModalActions(actions);
     const cancel = actions.createEl("button", { text: t("settingsCancel") });
     cancel.addEventListener("click", () => modal.close());
     const save = actions.createEl("button", { text: t("settingsSave"), cls: "mod-cta" });
     save.addEventListener("click", () => {
       void (async () => {
         try {
-          await renameFrameSlide(ea, slide.frameId, input.value);
+          if (slide.kind === "frame") await renameFrameSlide(ea, slide.frameId, input.value);
+          else await renameLineSlide(ea, slide.pathId, slide.id, input.value);
           await view.forceSave(true);
           modal.close();
           this.lastFingerprint = "";
           await this.refresh(true);
         } catch (error) {
-          console.error("Slideshow frame rename failed", error);
+          console.error("Slideshow slide rename failed", error);
           new Notice(t("metadataSaveFailed"));
         }
       })();
     });
+    bindEnterToSave(input, save);
+    modal.open();
+    input.focus();
+    input.select();
+  }
+
+  private chooseFrameToLineOptions(): Promise<FrameToLineConversionChoice | null> {
+    const { ea, t } = this.options;
+    return new Promise((resolve) => {
+      const modal = new ea.obsidian.Modal(app);
+      let settled = false;
+      const finish = (choice: FrameToLineConversionChoice | null): void => {
+        if (settled) return;
+        settled = true;
+        resolve(choice);
+        modal.close();
+      };
+      modal.titleEl.setText(t("convertFrameToLine"));
+      modal.contentEl.createEl("p", { text: t("convertFrameToLinePrompt") });
+      const deleteFrames = addCheckboxOption(modal.contentEl, t("conversionDeleteFrames"));
+      const visibleSlidesOnly = addCheckboxOption(
+        modal.contentEl,
+        t("conversionVisibleSlidesOnly"),
+      );
+      const actions = modal.contentEl.createDiv({ cls: "modal-button-container" });
+      styleModalActions(actions);
+      const cancel = actions.createEl("button", { text: t("settingsCancel") });
+      cancel.addEventListener("click", () => finish(null));
+      const create = actions.createEl("button", {
+        text: t("conversionCreate"),
+        cls: "mod-cta",
+      });
+      create.addEventListener("click", () =>
+        finish({
+          deleteFrames: deleteFrames.checked,
+          visibleSlidesOnly: visibleSlidesOnly.checked,
+        }),
+      );
+      modal.onClose = () => {
+        if (!settled) {
+          settled = true;
+          resolve(null);
+        }
+      };
+      modal.open();
+    });
+  }
+
+  private chooseLineToFrameOptions(): Promise<LineToFrameConversionChoice | null> {
+    const { ea, t } = this.options;
+    return new Promise((resolve) => {
+      const modal = new ea.obsidian.Modal(app);
+      let settled = false;
+      const finish = (choice: LineToFrameConversionChoice | null): void => {
+        if (settled) return;
+        settled = true;
+        resolve(choice);
+        modal.close();
+      };
+      modal.titleEl.setText(t("convertLineToFrame"));
+      modal.contentEl.createEl("p", { text: t("convertLineToFramePrompt") });
+      const deleteLine = addCheckboxOption(modal.contentEl, t("conversionDeleteLine"));
+      const frameKind = addSelectOption(modal.contentEl, t("convertLineToFrameKind"), [
+        ["marker", t("convertLineToFrameMarker")],
+        ["normal", t("convertLineToFrameNormal")],
+      ]);
+      const geometry = addSelectOption(modal.contentEl, t("convertLineToFrameGeometryTitle"), [
+        ["aspect", t("convertLineToFrameAspect")],
+        ["exact", t("convertLineToFrameExact")],
+      ]);
+      const actions = modal.contentEl.createDiv({ cls: "modal-button-container" });
+      styleModalActions(actions);
+      const cancel = actions.createEl("button", { text: t("settingsCancel") });
+      cancel.addEventListener("click", () => finish(null));
+      const create = actions.createEl("button", {
+        text: t("conversionCreate"),
+        cls: "mod-cta",
+      });
+      create.addEventListener("click", () =>
+        finish({
+          deleteLine: deleteLine.checked,
+          frameKind: frameKind.value === "normal" ? "normal" : "marker",
+          correctAspectRatio: geometry.value === "aspect",
+        }),
+      );
+      modal.onClose = () => {
+        if (!settled) {
+          settled = true;
+          resolve(null);
+        }
+      };
+      modal.open();
+    });
+  }
+
+  private openFramePresentationSettings(): void {
+    const view = this.boundView;
+    const deck = this.choices.frame?.deck;
+    if (!view || !deck) return;
+    const { ea, t } = this.options;
+    const modal = new ea.obsidian.Modal(app);
+    modal.titleEl.setText(t("framePresentationSettings"));
+    const input = modal.contentEl.createEl("input", {
+      type: "text",
+      value: deck.name ?? "",
+      attr: { "aria-label": t("framePresentationName") },
+    });
+    input.style.width = "100%";
+    input.style.marginBottom = "1rem";
+    const actions = modal.contentEl.createDiv({ cls: "modal-button-container" });
+    styleModalActions(actions);
+    const save = actions.createEl("button", { text: t("settingsSave"), cls: "mod-cta" });
+    save.addEventListener("click", () => {
+      void (async () => {
+        try {
+          await renameFramePresentation(ea, input.value);
+          await view.forceSave(true);
+          modal.close();
+          this.lastFingerprint = "";
+          await this.refresh(true);
+        } catch (error) {
+          console.error("Slideshow frame presentation rename failed", error);
+          new Notice(t("metadataSaveFailed"));
+        }
+      })();
+    });
+    const convert = actions.createEl("button", { text: t("convertFrameToLine") });
+    convert.addEventListener("click", () => {
+      void (async () => {
+        const conversionOptions = await this.chooseFrameToLineOptions();
+        if (!conversionOptions) return;
+        try {
+          await this.sorter?.flushNotes();
+          const pathId = await convertFramePresentationToLine(ea, conversionOptions);
+          await view.forceSave(true);
+          modal.close();
+          const sourceKey = `line:${pathId}` as PresentationSourceKey;
+          this.presentationSourceKey = sourceKey;
+          this.presentationSourceByDrawing.set(view.file.path, sourceKey);
+          this.preferredPresentationType = "line";
+          await this.persistLaunchPreferences();
+          this.lastFingerprint = "";
+          await this.refresh(true);
+        } catch (error) {
+          console.error("Slideshow frame-to-line conversion failed", error);
+          new Notice(t("conversionFailed"));
+        }
+      })();
+    });
+    bindEnterToSave(input, save);
     modal.open();
     input.focus();
     input.select();
@@ -1361,12 +1576,10 @@ export class SlideshowSidepanel {
     input.style.width = "100%";
     input.style.marginBottom = "1rem";
     const actions = modal.contentEl.createDiv({
-      cls: "slideshow-line-presentation-settings__actions",
+      cls: "modal-button-container slideshow-line-presentation-settings__actions",
     });
-    actions.style.display = "flex";
-    actions.style.gap = "0.5rem";
-    actions.style.flexWrap = "wrap";
-    const save = actions.createEl("button", { text: t("settingsSave") });
+    styleModalActions(actions);
+    const save = actions.createEl("button", { text: t("settingsSave"), cls: "mod-cta" });
     save.addEventListener("click", () => {
       void (async () => {
         try {
@@ -1384,9 +1597,14 @@ export class SlideshowSidepanel {
     const remove = actions.createEl("button", { text: t("removeLinePresentation") });
     remove.style.color = "var(--text-error)";
     remove.addEventListener("click", () => {
-      const confirmed = this.ownerWindow.confirm(t("removeLinePresentationConfirm"));
-      if (!confirmed) return;
       void (async () => {
+        const confirmed = await openConfirmationModal(ea, app, {
+          title: t("removeLinePresentation"),
+          message: t("removeLinePresentationConfirm"),
+          confirmText: t("removeLinePresentation"),
+          cancelText: t("settingsCancel"),
+        });
+        if (!confirmed) return;
         try {
           await removeLinePresentation(ea, source.pathId);
           await view.forceSave(true);
@@ -1401,6 +1619,36 @@ export class SlideshowSidepanel {
         }
       })();
     });
+    if (!this.choices.frame) {
+      const convert = actions.createEl("button", { text: t("convertLineToFrame") });
+      convert.addEventListener("click", () => {
+        void (async () => {
+          const conversionOptions = await this.chooseLineToFrameOptions();
+          if (!conversionOptions) return;
+          try {
+            await this.sorter?.flushNotes();
+            await convertLinePresentationToFrames(
+              ea,
+              source.pathId,
+              this.options.config,
+              conversionOptions,
+            );
+            await view.forceSave(true);
+            modal.close();
+            this.presentationSourceKey = "frame";
+            this.presentationSourceByDrawing.set(view.file.path, "frame");
+            this.preferredPresentationType = "frame";
+            await this.persistLaunchPreferences();
+            this.lastFingerprint = "";
+            await this.refresh(true);
+          } catch (error) {
+            console.error("Slideshow line-to-frame conversion failed", error);
+            new Notice(t("conversionFailed"));
+          }
+        })();
+      });
+    }
+    bindEnterToSave(input, save);
     modal.open();
     input.focus();
     input.select();
@@ -1551,10 +1799,6 @@ export class SlideshowSidepanel {
   }
 
   private requestAnimationEditor(slide: SlideDeckSlide): void {
-    if (slide.kind !== "frame") {
-      new Notice(this.options.t("lineAnimationUnsupported"));
-      return;
-    }
     void (async () => {
       await this.sorter?.flushNotes();
       if (this.animationEditingSlideId === slide.id) {
@@ -1568,12 +1812,12 @@ export class SlideshowSidepanel {
       this.sorter?.destroy();
       this.sorter = null;
       const sorter = this.render(slide.id, expandedNotesId);
-      this.selectAndZoomAnimationFrame(slide);
+      this.selectAndZoomAnimationSlide(slide);
       sorter?.scrollToSlide(slide.id, false, "start");
     })();
   }
 
-  private mountAnimationEditor(slide: FrameDeckSlide, container: HTMLElement): void {
+  private mountAnimationEditor(slide: SlideDeckSlide, container: HTMLElement): void {
     const api = this.options.ea.getExcalidrawAPI();
     const view = this.boundView;
     if (!api || !view || slide.id !== this.animationEditingSlideId) return;
@@ -1596,12 +1840,16 @@ export class SlideshowSidepanel {
     this.animationEditor.handleSceneChange(this.options.ea.getViewElements(), api.getAppState());
   }
 
-  private selectAndZoomAnimationFrame(slide: FrameDeckSlide): void {
+  private selectAndZoomAnimationSlide(slide: SlideDeckSlide): void {
     const view = this.boundView;
     if (!view) return;
-    const frame = this.options.ea.getViewElements().find((element) => element.id === slide.frameId);
-    if (!frame) return;
-    this.options.ea.selectElementsInView([frame]);
+    if (slide.kind === "frame") {
+      const frame = this.options.ea.getViewElements().find((element) => element.id === slide.frameId);
+      if (frame) this.options.ea.selectElementsInView([frame]);
+    } else {
+      const path = this.options.ea.getViewElements().find((element) => element.id === slide.pathId);
+      if (path) this.options.ea.selectElementsInView([path]);
+    }
     this.zoomToSlide(slide);
     app.workspace.setActiveLeaf(view.leaf, { focus: true });
   }

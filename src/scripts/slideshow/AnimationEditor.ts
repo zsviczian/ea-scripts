@@ -10,13 +10,14 @@ import type { AppState } from "@zsviczian/excalidraw/types";
 import {
   AnimationRuntime,
   captureAnimationTargets,
+  getAnimationSlideScope,
   recycleMissingAnimationTargets,
   removeAnimationTargetConflicts,
   resolveAnimationTargetElementIds,
 } from "./AnimationRuntime";
-import type { FrameDeckSlide } from "./SlideDeck";
+import type { SlideDeckSlide } from "./SlideDeck";
 import type { SlideshowTranslator } from "./lang";
-import { saveFrameAnimationSteps } from "./slideDeckMutations";
+import { saveFrameAnimationSteps, saveLineAnimationSteps } from "./slideDeckMutations";
 import type {
   AnimationDirection,
   AnimationEffect,
@@ -31,7 +32,7 @@ export interface AnimationEditorOptions {
   api: ExcalidrawAPI;
   hostView: ScriptExcalidrawView;
   container: HTMLElement;
-  slide: FrameDeckSlide;
+  slide: SlideDeckSlide;
   icons: SlideshowIcons;
   t: SlideshowTranslator;
   onSaved(): void;
@@ -107,7 +108,7 @@ export class AnimationEditor {
     if (this.ignoredSelectionCount > 0) {
       const warning = doc.createElement("div");
       warning.className = "slideshow-warning";
-      warning.textContent = t("animationOutsideFrameIgnored", { count: this.ignoredSelectionCount });
+      warning.textContent = t("animationOutsideSlideIgnored", { count: this.ignoredSelectionCount });
       container.appendChild(warning);
     }
 
@@ -254,7 +255,7 @@ export class AnimationEditor {
   ): void {
     if (this.destroyed || Date.now() < this.ignoreSelectionUntil) return;
     const captured = captureAnimationTargets(
-      this.options.slide.frameId,
+      getAnimationSlideScope(this.options.slide),
       elements,
       appState.selectedElementIds,
       appState.selectedGroupIds,
@@ -305,7 +306,7 @@ export class AnimationEditor {
 
     this.saving = true;
     try {
-      await saveFrameAnimationSteps(this.options.ea, this.options.slide.frameId, steps);
+      await this.saveAnimationSteps(steps);
       this.steps = steps;
       if (this.selectedStepId) {
         const selectedStep = steps.find((step) => step.id === this.selectedStepId);
@@ -363,7 +364,7 @@ export class AnimationEditor {
     );
     actions.appendChild(
       this.iconButton(doc, icons.play, t("previewAnimationStep"), false, () => {
-        void this.previewRuntime.previewStep(this.options.slide.frameId, step);
+        void this.previewRuntime.previewStep(getAnimationSlideScope(this.options.slide), step);
       }),
     );
     actions.appendChild(
@@ -407,7 +408,7 @@ export class AnimationEditor {
     this.direction = step.direction ?? "left";
     this.ignoredSelectionCount = 0;
     const ids = resolveAnimationTargetElementIds(
-      this.options.slide.frameId,
+      getAnimationSlideScope(this.options.slide),
       step.targets,
       this.options.ea.getViewElements(),
     );
@@ -427,7 +428,7 @@ export class AnimationEditor {
       const elements = this.options.ea.getViewElements();
       const selectedId = this.selectedStepId;
       let steps = removeAnimationTargetConflicts(
-        this.options.slide.frameId,
+        getAnimationSlideScope(this.options.slide),
         this.steps,
         this.targets,
         elements,
@@ -441,7 +442,7 @@ export class AnimationEditor {
       } else {
         steps.push(step);
       }
-      await saveFrameAnimationSteps(this.options.ea, this.options.slide.frameId, steps);
+      await this.saveAnimationSteps(steps);
       this.steps = steps;
       this.selectedStepId = step.id;
       this.targets = step.targets.map((target) => structuredClone(target));
@@ -477,7 +478,7 @@ export class AnimationEditor {
   private async persistSteps(steps: AnimationStep[]): Promise<void> {
     this.saving = true;
     try {
-      await saveFrameAnimationSteps(this.options.ea, this.options.slide.frameId, steps);
+      await this.saveAnimationSteps(steps);
       this.steps = steps;
       this.options.onSaved();
     } catch (error) {
@@ -492,9 +493,16 @@ export class AnimationEditor {
   private async previewCurrentStep(): Promise<void> {
     if (this.targets.length === 0) return;
     await this.previewRuntime.previewStep(
-      this.options.slide.frameId,
+      getAnimationSlideScope(this.options.slide),
       this.buildFormStep(this.selectedStepId ?? "preview"),
     );
+  }
+
+  private saveAnimationSteps(steps: readonly AnimationStep[]): Promise<void> {
+    const { slide, ea } = this.options;
+    return slide.kind === "frame"
+      ? saveFrameAnimationSteps(ea, slide.frameId, steps)
+      : saveLineAnimationSteps(ea, slide.pathId, slide.id, steps);
   }
 
   private buildFormStep(id: string): AnimationStep {

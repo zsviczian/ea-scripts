@@ -80,6 +80,7 @@ export interface FrameSlideshowData {
   schemaVersion: 2;
   kind: "frame";
   order: number;
+  deckName?: string;
   excluded?: boolean;
   notes?: string;
   animation?: {
@@ -89,8 +90,13 @@ export interface FrameSlideshowData {
 
 export interface LineSlideMetadataRecord {
   id: string;
+  title?: string;
   notes?: string;
   excluded?: boolean;
+  pair?: [[number, number], [number, number]];
+  animation?: {
+    steps: AnimationStep[];
+  };
 }
 
 export interface LineSlideshowData {

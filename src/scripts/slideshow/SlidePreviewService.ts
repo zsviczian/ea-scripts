@@ -6,8 +6,8 @@
 import { AsyncTaskQueue } from "../../sharedUtils/AsyncTaskQueue";
 import { ByteBudgetLruCache } from "../../sharedUtils/ByteBudgetLruCache";
 import { getNavigationRect } from "../../sharedUtils/presentationGeometry";
-import { resolveAnimationTargetElementIds } from "./AnimationRuntime";
-import type { FrameDeckSlide, SlideDeckSlide } from "./SlideDeck";
+import { getAnimationSlideScope, resolveAnimationTargetElementIds } from "./AnimationRuntime";
+import type { SlideDeckSlide } from "./SlideDeck";
 import type { SlideshowConfig } from "./types";
 
 const FALLBACK_BACKGROUND = "#ffffff";
@@ -88,7 +88,7 @@ function readBackgroundColor(appState: ReturnType<ExcalidrawAPI["getAppState"]>)
 }
 
 export function getHiddenBuildElementIds(
-  slide: FrameDeckSlide,
+  slide: SlideDeckSlide,
   completedAnimationSteps: number | undefined,
   elements: readonly ExcalidrawElement[],
 ): string[] {
@@ -99,7 +99,7 @@ export function getHiddenBuildElementIds(
   );
   const ids = new Set<string>();
   for (const step of slide.animationSteps.slice(completed)) {
-    for (const id of resolveAnimationTargetElementIds(slide.frameId, step.targets, elements)) {
+    for (const id of resolveAnimationTargetElementIds(getAnimationSlideScope(slide), step.targets, elements)) {
       ids.add(id);
     }
   }
@@ -251,10 +251,11 @@ export class SlidePreviewService {
   ): Promise<HTMLImageElement | null> {
     const elements = this.ea.getViewElements();
     if (elements.length === 0) return null;
-    const hiddenElementIds =
-      slide.kind === "frame"
-        ? getHiddenBuildElementIds(slide, state.completedAnimationSteps, elements)
-        : [];
+    const hiddenElementIds = getHiddenBuildElementIds(
+      slide,
+      state.completedAnimationSteps,
+      elements,
+    );
     const appState = this.api.getAppState();
     const targetWidth = Math.max(Math.trunc(state.targetWidth ?? DEFAULT_PREVIEW_WIDTH), 1);
     const opacityKey = state.originalOpacities

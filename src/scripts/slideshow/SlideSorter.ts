@@ -5,7 +5,7 @@
 
 /* eslint-disable max-lines-per-function -- Row construction is intentionally kept together for accessible control ordering. */
 
-import type { FrameDeckSlide, SlideDeck, SlideDeckSlide } from "./SlideDeck";
+import type { SlideDeck, SlideDeckSlide } from "./SlideDeck";
 import type { SlidePreviewService } from "./SlidePreviewService";
 import type { SlideshowTranslator } from "./lang";
 import type { SlideshowIcons } from "./types";
@@ -16,8 +16,8 @@ export interface SlideSorterCallbacks {
   zoomToSlide(slide: SlideDeckSlide): void;
   saveNotes(slide: SlideDeckSlide, notes: string): Promise<void>;
   requestAnimationEditor(slide: SlideDeckSlide): void;
-  mountAnimationEditor?(slide: FrameDeckSlide, container: HTMLElement): void;
-  editFrameSlideName?(slide: FrameDeckSlide): void;
+  mountAnimationEditor?(slide: SlideDeckSlide, container: HTMLElement): void;
+  editSlideName?(slide: SlideDeckSlide): void;
   editLineSlide(slide: SlideDeckSlide, index: number): Promise<void>;
   notesBlurred(): void;
 }
@@ -330,19 +330,17 @@ export class SlideSorter {
     title.textContent = titleText;
     title.title = titleText;
     titleRow.appendChild(title);
-    if (slide.kind === "frame") {
-      const editTitleButton = this.createIconButton(
-        doc,
-        icons.edit,
-        t("editFrameSlideName"),
-        false,
-        () => this.options.callbacks.editFrameSlideName?.(slide),
-      );
-      editTitleButton.className = "slideshow-sorter__title-edit";
-      editTitleButton.draggable = false;
-      editTitleButton.addEventListener("dragstart", (event) => event.preventDefault());
-      titleRow.appendChild(editTitleButton);
-    }
+    const editTitleButton = this.createIconButton(
+      doc,
+      icons.edit,
+      t("editSlideName"),
+      false,
+      () => this.options.callbacks.editSlideName?.(slide),
+    );
+    editTitleButton.className = "slideshow-sorter__title-edit";
+    editTitleButton.draggable = false;
+    editTitleButton.addEventListener("dragstart", (event) => event.preventDefault());
+    titleRow.appendChild(editTitleButton);
     top.appendChild(titleRow);
     const badges = doc.createElement("div");
     badges.className = "slideshow-sorter__badges";
@@ -355,7 +353,7 @@ export class SlideSorter {
       badge.innerHTML = `${icons.notebookPen}<span class="slideshow-sorter__badge-text">${label}</span>`;
       badges.appendChild(badge);
     }
-    if (slide.kind === "frame" && slide.animationSteps.length > 0) {
+    if (slide.animationSteps.length > 0) {
       const badge = doc.createElement("span");
       const count = slide.animationSteps.length;
       const label = t("animationCount", { count });
@@ -431,19 +429,18 @@ export class SlideSorter {
         () => void this.options.callbacks.toggleInclusion(slide, !slide.excluded),
       ),
     );
-    if (slide.kind === "frame") {
-      const animationExpanded = this.options.animationEditingSlideId === slide.id;
-      const animationButton = this.createIconButton(
-        doc,
-        icons.sparkles,
-        t("editAnimations"),
-        false,
-        () => this.options.callbacks.requestAnimationEditor(slide),
-      );
-      animationButton.classList.toggle("is-active", animationExpanded);
-      animationButton.setAttribute("aria-expanded", String(animationExpanded));
-      actions.appendChild(animationButton);
-    } else {
+    const animationExpanded = this.options.animationEditingSlideId === slide.id;
+    const animationButton = this.createIconButton(
+      doc,
+      icons.sparkles,
+      t("editAnimations"),
+      false,
+      () => this.options.callbacks.requestAnimationEditor(slide),
+    );
+    animationButton.classList.toggle("is-active", animationExpanded);
+    animationButton.setAttribute("aria-expanded", String(animationExpanded));
+    actions.appendChild(animationButton);
+    if (slide.kind === "path") {
       actions.appendChild(
         this.createIconButton(doc, icons.edit, t("editLineSlide"), false, () => {
           void this.options.callbacks.editLineSlide(slide, index);
@@ -464,7 +461,7 @@ export class SlideSorter {
     content.appendChild(actions);
 
     if (notesExpanded) this.renderNotesEditor(slide, row);
-    if (slide.kind === "frame" && this.options.animationEditingSlideId === slide.id) {
+    if (this.options.animationEditingSlideId === slide.id) {
       const animationHost = doc.createElement("div");
       animationHost.className = "slideshow-sorter__animation";
       row.appendChild(animationHost);
