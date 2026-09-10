@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getPreviewNavigationRect,
   getSceneVisualFingerprint,
+  getSlideVisualFingerprint,
   SlidePreviewService,
 } from "../SlidePreviewService";
 import {
@@ -1335,6 +1336,128 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(getSceneVisualFingerprint([before])).not.toBe(
       getSceneVisualFingerprint([visuallyRelevantCustomData]),
     );
+  });
+
+  it("thumbnail fingerprint ignores frame names and a hidden line presentation path", () => {
+    const before = frame("a", "Alpha");
+    const renamed = frame("a", "Renamed");
+    expect(getSceneVisualFingerprint([before])).toBe(getSceneVisualFingerprint([renamed]));
+
+    const path = line();
+    const slide = {
+      id: "slide-a",
+      kind: "path",
+      pathId: path.id,
+      title: "Slide A",
+      rect: { x1: 0, y1: 0, x2: 100, y2: 100 },
+      excluded: false,
+      pairIndex: 0,
+      animationSteps: [],
+    } as const;
+    const reorderedPath = {
+      ...path,
+      x: 500,
+      points: [...path.points].reverse(),
+    } as unknown as ExcalidrawElement;
+    expect(getSlideVisualFingerprint([path, before], slide)).toBe(
+      getSlideVisualFingerprint([reorderedPath, before], slide),
+    );
+  });
+
+  it("reuses slide previews after metadata edits and changes outside the slide crop", async () => {
+    const frameA = {
+      ...frame("a", "Alpha"),
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 100,
+    } as ExcalidrawFrameElement;
+    const frameB = {
+      ...frame("b", "Bravo"),
+      x: 5_000,
+      y: 0,
+      width: 100,
+      height: 100,
+    } as ExcalidrawFrameElement;
+    const contentA = {
+      id: "content-a",
+      type: "rectangle",
+      x: 10,
+      y: 10,
+      width: 20,
+      height: 20,
+      strokeColor: "#111",
+    } as unknown as ExcalidrawElement;
+    const contentB = {
+      id: "content-b",
+      type: "rectangle",
+      x: 5_010,
+      y: 10,
+      width: 20,
+      height: 20,
+      strokeColor: "#222",
+    } as unknown as ExcalidrawElement;
+    let elements: ExcalidrawElement[] = [frameA, contentA, frameB, contentB];
+    let workbench: ExcalidrawElement[] = [];
+    const createViewPNG = vi.fn(async () => new Blob(["preview"], { type: "image/png" }));
+    const ea = {
+      getViewElements: () => elements,
+      getElementsIntersectionArea: (
+        candidates: readonly ExcalidrawElement[],
+        area: { x: number; y: number; width: number; height: number },
+      ) =>
+        candidates.filter((element) => {
+          const left = element.x;
+          const right = left + element.width;
+          return right >= area.x && left <= area.x + area.width;
+        }),
+      clear: () => {
+        workbench = [];
+      },
+      copyViewElementsToEAforEditing: (candidates: readonly ExcalidrawElement[]) => {
+        workbench = structuredClone(candidates) as ExcalidrawElement[];
+      },
+      getElement: (id: string) => workbench.find((element) => element.id === id),
+      getElements: () => workbench,
+      createViewPNG,
+    } as unknown as ExcalidrawAutomate;
+    const api = {
+      getAppState: () => ({ theme: "light", viewBackgroundColor: "#fff" }),
+    } as unknown as ExcalidrawAPI;
+    const service = new SlidePreviewService(ea, api, { ...DEFAULT_SLIDESHOW_CONFIG });
+    const [slideA, slideB] = buildFrameSlideDeck([frameA, frameB]).slides;
+    if (!slideA || !slideB) throw new Error("Expected two frame slides.");
+    const ownerDocument = {
+      createElement: () => ({ style: {}, setAttribute: vi.fn() }),
+    } as unknown as Document;
+
+    await service.createPreview(slideA, ownerDocument, { targetWidth: 480 });
+    await service.createPreview(slideB, ownerDocument, { targetWidth: 480 });
+    expect(createViewPNG).toHaveBeenCalledTimes(2);
+
+    elements = elements.map((element) =>
+      element.id === frameA.id
+        ? ({
+            ...element,
+            name: "Renamed",
+            version: 99,
+            customData: { slideshow: { excluded: true, notes: "Notes" } },
+          } as unknown as ExcalidrawElement)
+        : element,
+    );
+    await service.createPreview(slideA, ownerDocument, { targetWidth: 480 });
+    expect(createViewPNG).toHaveBeenCalledTimes(2);
+
+    elements = elements.map((element) =>
+      element.id === contentA.id
+        ? ({ ...element, strokeColor: "#f00" } as ExcalidrawElement)
+        : element,
+    );
+    await service.createPreview(slideB, ownerDocument, { targetWidth: 480 });
+    expect(createViewPNG).toHaveBeenCalledTimes(2);
+    await service.createPreview(slideA, ownerDocument, { targetWidth: 480 });
+    expect(createViewPNG).toHaveBeenCalledTimes(3);
+    service.clear();
   });
 });
 

@@ -73,12 +73,25 @@ function cloneWithoutMetadata(element: ExcalidrawElement): Record<string, unknow
   delete copy.version;
   delete copy.versionNonce;
   delete copy.updated;
+  // Frame names are rendered by Excalidraw's frame UI, but preview exports explicitly
+  // disable them. Renaming a slide therefore cannot change the preview bitmap.
+  if (copy.type === "frame") delete copy.name;
   return copy;
 }
 
 /** Creates a stable visual fingerprint that ignores slideshow-only metadata changes. */
 export function getSceneVisualFingerprint(elements: readonly ExcalidrawElement[]): string {
   return JSON.stringify(elements.map(cloneWithoutMetadata));
+}
+
+/** Fingerprints only content that can be visible in one preview export. */
+export function getSlideVisualFingerprint(
+  elements: readonly ExcalidrawElement[],
+  slide: SlideDeckSlide,
+): string {
+  return getSceneVisualFingerprint(
+    slide.kind === "path" ? elements.filter((element) => element.id !== slide.pathId) : elements,
+  );
 }
 
 function readBackgroundColor(appState: ReturnType<ExcalidrawAPI["getAppState"]>): string {
@@ -114,8 +127,6 @@ export class SlidePreviewService {
     (preview) => URL.revokeObjectURL(preview.objectUrl),
   );
   private generation = 0;
-  private lastElements: readonly ExcalidrawElement[] | null = null;
-  private lastFingerprint = "";
 
   public constructor(
     private readonly ea: ExcalidrawAutomate,
@@ -138,15 +149,6 @@ export class SlidePreviewService {
     this.generation += 1;
     this.queue.clear();
     this.cached.clear();
-    this.lastElements = null;
-    this.lastFingerprint = "";
-  }
-
-  private getFingerprint(elements: readonly ExcalidrawElement[]): string {
-    if (elements === this.lastElements) return this.lastFingerprint;
-    this.lastElements = elements;
-    this.lastFingerprint = getSceneVisualFingerprint(elements);
-    return this.lastFingerprint;
   }
 
   private createPreviewElement(
@@ -167,7 +169,7 @@ export class SlidePreviewService {
   }
 
   private async exportPreview(
-    elements: readonly ExcalidrawElement[],
+    localElements: readonly ExcalidrawElement[],
     slide: SlideDeckSlide,
     hiddenElementIds: readonly string[],
     originalOpacities: ReadonlyMap<string, number> | undefined,
@@ -188,10 +190,6 @@ export class SlidePreviewService {
       width: Math.abs(rect.right - rect.left),
       height: Math.abs(rect.bottom - rect.top),
     };
-    const localElements = this.ea.getElementsIntersectionArea(elements, exportArea, {
-      includeBoundElements: true,
-    });
-
     return await withEaExportLock(this.ea, async () => {
       if (generation !== this.generation) return undefined;
       this.ea.clear();
@@ -270,6 +268,15 @@ export class SlidePreviewService {
       this.config.printSlideWidth,
       this.config.printSlideHeight,
     );
+    const exportArea = {
+      x: Math.min(rect.left, rect.right),
+      y: Math.min(rect.top, rect.bottom),
+      width: Math.abs(rect.right - rect.left),
+      height: Math.abs(rect.bottom - rect.top),
+    };
+    const localElements = this.ea.getElementsIntersectionArea(elements, exportArea, {
+      includeBoundElements: true,
+    });
     const cacheKey = [
       appState.theme,
       readBackgroundColor(appState),
@@ -278,7 +285,7 @@ export class SlidePreviewService {
       `opacity:${opacityKey}`,
       `area:${rect.left},${rect.top},${rect.right},${rect.bottom}`,
       `width:${targetWidth}`,
-      this.getFingerprint(elements),
+      getSlideVisualFingerprint(localElements, slide),
     ].join("|");
     const existing = this.cached.get(cacheKey);
     if (existing) return this.createPreviewElement(existing, ownerDocument);
@@ -288,7 +295,7 @@ export class SlidePreviewService {
       cacheKey,
       () =>
         this.exportPreview(
-          elements,
+          localElements,
           slide,
           hiddenElementIds,
           state.originalOpacities,
