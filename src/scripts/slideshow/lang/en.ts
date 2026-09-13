@@ -56,6 +56,10 @@ export const en = {
     "Slides can reveal elements or groups in a sequence using appear, fade, slide-in, zoom-in, and timed animation steps.",
   quickGuideNotes:
     "Add presenter notes per slide. With a second display, presenter mode shows notes and the next slide separately from the audience view.",
+  quickGuideLearnMoreTitle: "Learn more",
+  quickGuideVideo: "Getting Started with Obsidian Excalidraw Slideshow v4",
+  quickGuideVideoThumbnailAlt: "Slideshow v4 video thumbnail",
+  quickGuideCourse: "Slideshow mini-course",
   startPresentation: "Start presentation",
   startFromBeginning: "From beginning",
   presentationStartOptions: "Presentation start options",

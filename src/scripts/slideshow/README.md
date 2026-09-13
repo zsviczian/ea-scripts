@@ -1,11 +1,18 @@
 # Slideshow
 
-Converts the active Excalidraw drawing into a slideshow presentation. The built
-script is emitted to `build/slideshow/slideshow.md`.
+Converts the active Excalidraw drawing into a slideshow presentation.
 
-[Watch the Slideshow 3.0 walkthrough](https://www.youtube.com/watch?v=JwgtCrIVeEU) and the [Excalidraw 2.27.0 update video](https://youtu.be/am2HOlbYsxI?si=4UPdmFMJcpM6j9oR&t=272)
+[![](https://raw.githubusercontent.com/zsviczian/obsidian-excalidraw-plugin/master/images/logo-slideshow-v4.png)](https://community.sketch-your-mind.com/slideshow)
+
+To get the most out of the Slideshow script check out the [Slideshow mini-course](https://community.sketch-your-mind.com/slideshow) on the Sketch Your Mind Community.
+
+![](https://youtu.be/7DDY8rRDzdU)
+
+[Also watch the Excalidraw 2.27.0 update video](https://youtu.be/am2HOlbYsxI?t=272)
 
 ![Slideshow example](https://raw.githubusercontent.com/zsviczian/obsidian-excalidraw-plugin/master/images/scripts-slideshow-2.jpg)
+
+[Slideshow mini-course](https://community.sketch-your-mind.com/slideshow)
 
 ## Launch behavior
 
