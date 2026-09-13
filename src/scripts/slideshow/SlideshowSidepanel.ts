@@ -58,10 +58,12 @@ import { hasFrameSlideshowDeclaration } from "./slideshowMetadata";
 import {
   loadSlideshowDisplayPreferences,
   loadSlideshowLaunchPreferences,
+  loadSlideshowPresentationSource,
   loadSorterThumbnailMaxWidth,
   openSlideshowSettingsModal,
   saveSlideshowDisplayPreferences,
   saveSlideshowLaunchPreferences,
+  saveSlideshowPresentationSource,
   saveSorterThumbnailMaxWidth,
   type SlideshowNotesMode,
   type SlideshowStartMode,
@@ -71,6 +73,7 @@ import { openSlideshowQuickGuideModal } from "./slideshowQuickGuide";
 import { SLIDESHOW_SIDEPANEL_STYLES } from "./styles";
 import {
   getSlideshowProgress,
+  getSlideshowProgressForSource,
   getSlideshowProgressSource,
   getSlideshowProgressType,
 } from "./slideshowRuntime";
@@ -699,7 +702,9 @@ export class SlideshowSidepanel {
     }
     const choices = resolveSlideDeckChoices(ea);
     const drawingKey = view.file.path;
-    const storedSource = this.presentationSourceByDrawing.get(drawingKey);
+    const storedSource =
+      this.presentationSourceByDrawing.get(drawingKey) ??
+      loadSlideshowPresentationSource(ea, drawingKey);
     const presentationSourceKey = chooseSidepanelPresentationSourceKey(
       choices,
       storedSource,
@@ -730,6 +735,7 @@ export class SlideshowSidepanel {
       null;
     const expandedNotesId = this.sorter?.getExpandedNotesSlideId() ?? null;
     const sorterScrollTop = this.sorter?.getScrollTop() ?? 0;
+    this.previewService?.cancelPending();
     this.sorter?.destroy();
     this.sorter = null;
     this.choices = choices;
@@ -771,16 +777,24 @@ export class SlideshowSidepanel {
     root.appendChild(header);
 
     const noVisibleSlides = Boolean(this.resolved && this.resolved.deck.visibleSlides.length === 0);
+    const exactResumeProgress =
+      this.boundView && this.presentationSourceKey
+        ? getSlideshowProgressForSource(this.boundView, this.presentationSourceKey)
+        : undefined;
     const resumeSlide =
       this.boundView && this.resolved
         ? getResumeSlideForPresentation(
-            getSlideshowProgress(this.boundView),
-            getSlideshowProgressType(this.boundView),
+            exactResumeProgress ?? getSlideshowProgress(this.boundView),
+            exactResumeProgress !== undefined && this.presentationSourceKey
+              ? getPresentationSourceType(this.presentationSourceKey)
+              : getSlideshowProgressType(this.boundView),
             this.presentationSourceKey
               ? getPresentationSourceType(this.presentationSourceKey)
               : null,
             this.resolved.deck.visibleSlides.length,
-            getSlideshowProgressSource(this.boundView),
+            exactResumeProgress !== undefined
+              ? (this.presentationSourceKey ?? undefined)
+              : getSlideshowProgressSource(this.boundView),
             this.presentationSourceKey,
           )
         : null;
@@ -1161,16 +1175,21 @@ export class SlideshowSidepanel {
   }
 
   private persistLaunchPreferences(): Promise<void> {
+    const source = this.presentationSourceKey;
+    const drawingPath = this.boundView?.file.path;
     const preferences = {
       startMode: this.startMode,
       windowMode: this.windowMode,
       notesMode: this.notesMode,
-      ...(this.presentationSourceKey
-        ? { presentationType: getPresentationSourceType(this.presentationSourceKey) }
-        : {}),
+      ...(source ? { presentationType: getPresentationSourceType(source) } : {}),
     };
     this.settingsWriteQueue = this.settingsWriteQueue
-      .then(() => saveSlideshowLaunchPreferences(this.options.ea, preferences))
+      .then(async () => {
+        await saveSlideshowLaunchPreferences(this.options.ea, preferences);
+        if (source && drawingPath) {
+          await saveSlideshowPresentationSource(this.options.ea, drawingPath, source);
+        }
+      })
       .catch((error) => console.error("Slideshow launch preference save failed", error));
     return this.settingsWriteQueue;
   }
@@ -1216,17 +1235,42 @@ export class SlideshowSidepanel {
     return this.settingsWriteQueue;
   }
 
-  private hideSidepanelForWindowedPresentation(): void {
+  private async prepareWindowedPresentation(view: ScriptExcalidrawView): Promise<void> {
     const sidepanelLeaf = this.options.ea.getSidepanelLeaf();
     const container = sidepanelLeaf?.view.containerEl;
-    if (!container) return;
-    const rect = container.getBoundingClientRect();
-    const visible =
-      container.isConnected &&
-      rect.width > 1 &&
-      rect.height > 1 &&
-      this.ownerWindow.getComputedStyle(container).display !== "none";
-    if (visible) this.options.ea.toggleSidepanelView();
+    const sidepanelWindow = container?.ownerDocument.defaultView ?? null;
+    const requestFrame = view.ownerWindow.requestAnimationFrame?.bind(view.ownerWindow);
+    const nextFrame = (): Promise<void> =>
+      requestFrame
+        ? new Promise<void>((resolve) => requestFrame(() => resolve()))
+        : new Promise<void>((resolve) => view.ownerWindow.setTimeout(resolve, 0));
+
+    // A floating sidepanel lives in a separate native window. Hiding/toggling it would close or
+    // disturb that popout, so only transfer focus to the drawing that owns the presentation.
+    if (sidepanelWindow && sidepanelWindow !== view.ownerWindow) {
+      await app.workspace.setActiveLeaf(view.leaf, { focus: true });
+      return;
+    }
+
+    if (container) {
+      const isVisible = (): boolean => {
+        const rect = container.getBoundingClientRect();
+        return (
+          container.isConnected &&
+          rect.width > 1 &&
+          rect.height > 1 &&
+          view.ownerWindow.getComputedStyle(container).display !== "none"
+        );
+      };
+      if (isVisible()) {
+        this.options.ea.toggleSidepanelView();
+        // Obsidian can animate a dock closing. Do not let the controller measure the viewport
+        // until that layout change has actually reached the drawing.
+        for (let frame = 0; frame < 20 && isVisible(); frame += 1) await nextFrame();
+      }
+    }
+    await app.workspace.setActiveLeaf(view.leaf, { focus: true });
+    await nextFrame();
   }
 
   private async launchPresentation(): Promise<void> {
@@ -1239,12 +1283,17 @@ export class SlideshowSidepanel {
 
     await this.persistLaunchPreferences();
 
+    const exactResumeProgress = getSlideshowProgressForSource(view, presentationSourceKey);
     const resume = getResumeSlideForPresentation(
-      getSlideshowProgress(view),
-      getSlideshowProgressType(view),
+      exactResumeProgress ?? getSlideshowProgress(view),
+      exactResumeProgress !== undefined
+        ? presentationType
+        : getSlideshowProgressType(view),
       presentationType,
       resolved.deck.visibleSlides.length,
-      getSlideshowProgressSource(view),
+      exactResumeProgress !== undefined
+        ? presentationSourceKey
+        : getSlideshowProgressSource(view),
       presentationSourceKey,
     );
     const selectedId = this.sorter?.getSelectedSlideId() ?? null;
@@ -1293,7 +1342,7 @@ export class SlideshowSidepanel {
         : {}),
     };
 
-    if (!startFullscreen) this.hideSidepanelForWindowedPresentation();
+    if (!startFullscreen) await this.prepareWindowedPresentation(view);
     await this.options.startPresentation(presentationSourceKey, launchOptions);
   }
 

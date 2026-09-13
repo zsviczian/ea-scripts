@@ -55,6 +55,40 @@ describe("AsyncTaskQueue", () => {
     expect(order).toEqual(["start-a", "end-a", "b"]);
   });
 
+  it("runs up to the configured concurrency while still deduplicating keys", async () => {
+    const queue = new AsyncTaskQueue<string>(2);
+    const started: string[] = [];
+    let releaseA!: () => void;
+    let releaseB!: () => void;
+    const a = queue.enqueue("a", async () => {
+      started.push("a");
+      await new Promise<void>((resolve) => {
+        releaseA = resolve;
+      });
+      return "a";
+    });
+    const b = queue.enqueue("b", async () => {
+      started.push("b");
+      await new Promise<void>((resolve) => {
+        releaseB = resolve;
+      });
+      return "b";
+    });
+    const c = queue.enqueue("c", async () => {
+      started.push("c");
+      return "c";
+    });
+    await Promise.resolve();
+    expect(started).toEqual(["a", "b"]);
+    releaseA();
+    await expect(a).resolves.toBe("a");
+    await Promise.resolve();
+    expect(started).toEqual(["a", "b", "c"]);
+    releaseB();
+    await expect(b).resolves.toBe("b");
+    await expect(c).resolves.toBe("c");
+  });
+
   it("invalidates queued work on clear", async () => {
     const queue = new AsyncTaskQueue<string>();
     let release: (() => void) | undefined;
@@ -67,8 +101,8 @@ describe("AsyncTaskQueue", () => {
     const stale = queue.enqueue("b", async () => "b");
     await Promise.resolve();
     queue.clear();
+    await expect(stale).resolves.toBeUndefined();
     release?.();
     await first;
-    await expect(stale).resolves.toBeUndefined();
   });
 });

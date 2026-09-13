@@ -14,6 +14,7 @@ const FALLBACK_BACKGROUND = "#ffffff";
 const PREVIEW_CACHE_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PREVIEW_WIDTH = 960;
 const MAX_PREVIEW_SCALE = 2;
+const PREVIEW_EXPORT_CONCURRENCY = 2;
 
 interface CachedPreview {
   objectUrl: string;
@@ -27,24 +28,6 @@ export interface SlidePreviewState {
   originalOpacities?: ReadonlyMap<string, number>;
   /** Target raster width. Sorter thumbnails should use less than presenter previews. */
   targetWidth?: number;
-}
-
-const EA_EXPORT_QUEUES = new WeakMap<object, Promise<void>>();
-
-async function withEaExportLock<T>(ea: ExcalidrawAutomate, task: () => Promise<T>): Promise<T> {
-  const key = ea as unknown as object;
-  const previous = EA_EXPORT_QUEUES.get(key) ?? Promise.resolve();
-  let release: (() => void) | undefined;
-  const gate = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  EA_EXPORT_QUEUES.set(key, previous.catch(() => undefined).then(() => gate));
-  await previous.catch(() => undefined);
-  try {
-    return await task();
-  } finally {
-    release?.();
-  }
 }
 
 /** Calculates preview bounds using the configured presentation/print viewport. */
@@ -121,7 +104,7 @@ export function getHiddenBuildElementIds(
 
 /** Owns bounded slide preview exports and their size-aware object-URL cache. */
 export class SlidePreviewService {
-  private readonly queue = new AsyncTaskQueue<string>();
+  private readonly queue = new AsyncTaskQueue<string>(PREVIEW_EXPORT_CONCURRENCY);
   private readonly cached = new ByteBudgetLruCache<string, CachedPreview>(
     PREVIEW_CACHE_BYTES,
     (preview) => URL.revokeObjectURL(preview.objectUrl),
@@ -144,10 +127,15 @@ export class SlidePreviewService {
     return `${this.config.printSlideWidth} / ${this.config.printSlideHeight}`;
   }
 
-  /** Drops cached previews and invalidates queued work, for example after switching drawings. */
-  public clear(): void {
+  /** Invalidates queued preview work while retaining already-rendered bitmaps. */
+  public cancelPending(): void {
     this.generation += 1;
     this.queue.clear();
+  }
+
+  /** Drops cached previews and invalidates queued work, for example after switching drawings. */
+  public clear(): void {
+    this.cancelPending();
     this.cached.clear();
   }
 
@@ -190,55 +178,46 @@ export class SlidePreviewService {
       width: Math.abs(rect.right - rect.left),
       height: Math.abs(rect.bottom - rect.top),
     };
-    return await withEaExportLock(this.ea, async () => {
-      if (generation !== this.generation) return undefined;
-      this.ea.clear();
-      try {
-        this.ea.copyViewElementsToEAforEditing(localElements);
-        if (slide.kind === "path") {
-          const hiddenPath = this.ea.getElement(slide.pathId);
-          if (hiddenPath) hiddenPath.opacity = 0;
-        }
-        for (const [id, opacity] of originalOpacities ?? []) {
-          const element = this.ea.getElement(id);
-          if (element) element.opacity = opacity;
-        }
-        for (const id of hiddenElementIds) {
-          const element = this.ea.getElement(id);
-          if (element) element.opacity = 0;
-        }
-
-        const scale = Math.min(
-          MAX_PREVIEW_SCALE,
-          Math.max(targetWidth / Math.max(exportArea.width, 1), 0.01),
-        );
-        const blob = await this.ea.createViewPNG({
-          withBackground: true,
-          theme: appState.theme,
-          frameRendering: {
-            enabled: true,
-            name: false,
-            outline: false,
-            clip: false,
-          },
-          padding: 0,
-          selectedOnly: false,
-          embedScene: false,
-          elementsOverride: this.ea.getElements(),
-          exportArea,
-          scale,
-        });
-        if (generation !== this.generation) return undefined;
-        const cached = {
-          objectUrl: URL.createObjectURL(blob),
-          backgroundColor: readBackgroundColor(appState),
-        };
-        this.cached.set(cacheKey, cached, blob.size);
-        return cached;
-      } finally {
-        this.ea.clear();
-      }
+    if (generation !== this.generation) return undefined;
+    const hiddenIds = new Set(hiddenElementIds);
+    // Preview-only changes touch opacity at the element root. Preserve IDs and nested payloads with
+    // shallow copies so independent PNG exports do not contend for EA's shared mutable workbench.
+    const exportElements = localElements.map((element) => {
+      let opacity = element.opacity;
+      if (slide.kind === "path" && element.id === slide.pathId) opacity = 0;
+      const originalOpacity = originalOpacities?.get(element.id);
+      if (originalOpacity !== undefined) opacity = originalOpacity;
+      if (hiddenIds.has(element.id)) opacity = 0;
+      if (opacity === element.opacity) return element;
+      return { ...element, opacity } as ExcalidrawElement;
     });
+    const scale = Math.min(
+      MAX_PREVIEW_SCALE,
+      Math.max(targetWidth / Math.max(exportArea.width, 1), 0.01),
+    );
+    const blob = await this.ea.createViewPNG({
+      withBackground: true,
+      theme: appState.theme,
+      frameRendering: {
+        enabled: true,
+        name: false,
+        outline: false,
+        clip: false,
+      },
+      padding: 0,
+      selectedOnly: false,
+      embedScene: false,
+      elementsOverride: exportElements,
+      exportArea,
+      scale,
+    });
+    if (generation !== this.generation) return undefined;
+    const cached = {
+      objectUrl: URL.createObjectURL(blob),
+      backgroundColor: readBackgroundColor(appState),
+    };
+    this.cached.set(cacheKey, cached, blob.size);
+    return cached;
   }
 
   /** Creates a bounded raster preview in the caller's owner document. */

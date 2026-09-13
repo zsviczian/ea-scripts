@@ -152,6 +152,7 @@ export const SLIDESHOW_PRESENTER_STYLES = `
 .slideshow-presenter__notes.is-empty { color:var(--text-muted); font-style:italic; }
 .slideshow-presenter__progress { display:flex; align-items:center; gap:8px; color:var(--text-muted); font-size:var(--font-ui-small); }
 .slideshow-presenter__controls { display:flex; flex-wrap:wrap; gap:8px; margin-top:auto; padding-top:4px; }
+.slideshow-presenter:not(.is-notes-focused) .slideshow-presenter__controls { align-self:flex-end; }
 .slideshow-presenter__controls button { min-width:44px; min-height:40px; display:inline-flex; align-items:center; justify-content:center; gap:6px; }
 .slideshow-presenter__controls svg, .slideshow-presenter__close svg, .slideshow-presenter__layout-toggle svg { width:18px; height:18px; }
 .slideshow-presenter.is-notes-focused { overflow:hidden; }

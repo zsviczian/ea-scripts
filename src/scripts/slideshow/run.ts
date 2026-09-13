@@ -31,6 +31,10 @@ export async function runSlideshow(
 
   const targetView = scriptEa.targetView;
   if (!targetView) return;
+  const manualModifiers =
+    scriptUtils.executionSource === "manual"
+      ? { ...targetView.modifierKeyDown }
+      : undefined;
 
   const context: SlideshowViewContext = {
     ea: scriptEa,
@@ -48,5 +52,5 @@ export async function runSlideshow(
 
   if (scriptUtils.executionSource !== "manual") return;
 
-  await runManualSlideshowInvocation(context);
+  await runManualSlideshowInvocation(context, manualModifiers);
 }

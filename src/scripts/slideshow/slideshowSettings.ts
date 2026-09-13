@@ -4,7 +4,7 @@
  */
 
 import type { SlideshowTranslator } from "./lang";
-import type { PresentationPathType, SlideshowConfig } from "./types";
+import type { PresentationPathType, PresentationSourceKey, SlideshowConfig } from "./types";
 
 export const DEFAULT_SLIDESHOW_CONFIG: SlideshowConfig = {
   transitionStepCount: 100,
@@ -41,6 +41,7 @@ const START_MODE_SETTING = "slideshowStartMode";
 const WINDOW_MODE_SETTING = "slideshowWindowMode";
 const NOTES_MODE_SETTING = "slideshowNotesMode";
 const PRESENTATION_TYPE_SETTING = "slideshowPresentationType";
+const PRESENTATION_SOURCE_BY_DRAWING_SETTING = "slideshowPresentationSourceByDrawing";
 const DISPLAY_TARGETS_SETTING = "slideshowDisplayTargetsByDevice";
 const DISPLAY_TARGETS_BY_CONFIGURATION_SETTING =
   "slideshowDisplayTargetsByDeviceConfiguration";
@@ -117,6 +118,41 @@ export async function saveSlideshowLaunchPreferences(
     ...(preferences.presentationType
       ? { [PRESENTATION_TYPE_SETTING]: preferences.presentationType }
       : {}),
+  });
+}
+
+/** Reads the exact slideshow source last selected for one drawing. */
+export function loadSlideshowPresentationSource(
+  ea: ExcalidrawAutomate,
+  drawingPath: string,
+): PresentationSourceKey | undefined {
+  const raw = readSettings(ea)[PRESENTATION_SOURCE_BY_DRAWING_SETTING];
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const source = (raw as Record<string, unknown>)[drawingPath];
+  if (source === "frame") return "frame";
+  return typeof source === "string" && source.startsWith("line:")
+    ? (source as PresentationSourceKey)
+    : undefined;
+}
+
+/** Persists the exact slideshow source selected for one drawing. */
+export async function saveSlideshowPresentationSource(
+  ea: ExcalidrawAutomate,
+  drawingPath: string,
+  source: PresentationSourceKey,
+): Promise<void> {
+  const settings = ea.getScriptSettings();
+  const raw = settings[PRESENTATION_SOURCE_BY_DRAWING_SETTING];
+  const byDrawing =
+    raw && typeof raw === "object" && !Array.isArray(raw)
+      ? (raw as Record<string, unknown>)
+      : {};
+  await ea.setScriptSettings({
+    ...settings,
+    [PRESENTATION_SOURCE_BY_DRAWING_SETTING]: {
+      ...byDrawing,
+      [drawingPath]: source,
+    },
   });
 }
 

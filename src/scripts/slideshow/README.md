@@ -17,8 +17,10 @@ script is emitted to `build/slideshow/slideshow.md`.
   hotkey starts that view's presentation. A normal invocation starts fullscreen; whether presenter
   notes open follows the persisted sidepanel setting. Shift resumes saved progress, Alt/Option
   starts windowed, and Cmd/Ctrl opens/focuses the Slideshow sidepanel instead of presenting.
-  Invoking the script again while a presentation is active advances the existing controller unless
-  Cmd/Ctrl is held, in which case the presentation ends and the sidepanel opens.
+  A selected frame or line/arrow overrides the saved source; with no relevant selection, the exact
+  presentation source last chosen in the sidepanel for that drawing is used. A normal invocation
+  while a presentation is active advances the existing controller. Shift re-resolves the selected or
+  saved source and resumes that source's own continuation point.
 - Slideshow uses `utils.executionSource` so autostart remains registration-only while the very
   first manual toolbar, command, or hotkey invocation can start presenting immediately.
 - The presentation toolbar's settings button ends the active presentation and opens the sidepanel.
@@ -32,11 +34,11 @@ script is emitted to `build/slideshow/slideshow.md`.
 A drawing can contain one frame presentation plus any number of independent line/arrow presentations. The sidepanel keeps an explicit presentation-source selection; selecting ordinary canvas elements never changes which deck the sorter is editing.
 
 - Frames form one presentation source when the drawing contains frames.
-- A line/arrow becomes a presentation source only after slideshow metadata is created for it. Selecting an ordinary line does **not** implicitly turn it into a slideshow or replace the sidepanel deck.
+- A line/arrow becomes a presentation source only after slideshow metadata is created for it. Merely selecting an ordinary line does not replace the sidepanel deck, but manually launching Slideshow with that line selected creates the presentation metadata and uses that line for the launch.
 - When an ordinary line/arrow with at least one complete point pair is selected, the sidepanel shows a contextual **Create line presentation** action in the top toolbar.
 - Every persisted line presentation has its own optional name. Use its ellipsis/settings action beside the deck summary to rename it or remove only its slideshow metadata. Removing presentation metadata never deletes the line itself and restores its original styling if the path had been persistently hidden.
 - If presentation names collide, the selector disambiguates them only in the UI as `Name (1)`, `Name (2)`, and so on; element ids remain the stable identity. Unnamed paths use `Line presentation` with the same duplicate-numbering rule.
-- When multiple sources exist, the presentation selector lists `Frames` plus every named line presentation independently. Manual script launch prefers a selected **persisted** line presentation; otherwise frames are the default when available, then the first persisted line presentation.
+- When multiple sources exist, the presentation selector lists `Frames` plus every named line presentation independently. The selected source is persisted per drawing and becomes the manual-launch default whenever no frame or line/arrow is selected on the canvas. A selected frame or line/arrow overrides that default for the invocation.
 - Frames without slideshow metadata retain alphabetical ordering.
 - The first sorter mutation writes explicit normalized `order` metadata; after that, frame renames do not change presentation order.
 - Excluded frame and line slides remain visible and editable in the sorter, but are omitted from presentation and PDF output.
@@ -122,7 +124,8 @@ Presentation navigation, the toolbar slide picker, and PDF export consume the ca
 - **Normal script invocation:** start fullscreen. Slides-only vs presenter notes follows the sidepanel setting.
 - **Run in a window:** Hold Alt/Option while launching the script.
 - **Resume from the last slide:** Hold Shift while launching the script. Progress is held only in
-  temporary runtime memory and is tracked independently for each concrete Excalidraw view, even
-  when two views show the same file. It can be combined with Alt/Option.
+  temporary runtime memory and is tracked independently for each presentation source in each
+  concrete Excalidraw view, even when two views show the same file. It can be combined with
+  Alt/Option.
 - **Open the Slideshow sidepanel:** Hold Cmd on macOS or Ctrl on Windows/Linux while invoking the script.
 

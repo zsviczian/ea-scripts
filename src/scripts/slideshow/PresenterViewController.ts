@@ -458,8 +458,8 @@ export class PresenterViewController {
     const currentSlide = this.getSlide(state.currentSlideId);
     const nextSlide = this.getSlide(state.nextSlideId);
     const originalOpacities = this.options.getAnimationOriginalOpacities?.();
-    // EA is a shared workbench. Keep current/next exports sequential, especially when
-    // the next navigation is another build state of the same slide.
+    // Keep the two high-resolution presenter exports sequential so this view does not double
+    // rasterization and image-memory pressure during a slide transition.
     const currentPreview = currentSlide
       ? await this.previewService.createPreview(
           currentSlide,

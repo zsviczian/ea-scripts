@@ -9,14 +9,17 @@ import {
 import {
   DEFAULT_SLIDESHOW_CONFIG,
   loadPresenterNotesFontSize,
+  loadSlideshowPresentationSource,
   loadSorterThumbnailMaxWidth,
   normalizeSlideshowConfig,
   resetSlideshowConfigToDefaults,
   savePresenterNotesFontSize,
   saveSlideshowConfig,
+  saveSlideshowPresentationSource,
   saveSorterThumbnailMaxWidth,
 } from "../slideshowSettings";
 import {
+  chooseManualPresentationSourceKey,
   ensureManualSlideshowDeclaration,
   hasSlideshowMetadata,
   registerSlideshowElementActionProvider,
@@ -59,6 +62,7 @@ import {
 } from "../slideshowMetadata";
 import {
   getSlideshowProgress,
+  getSlideshowProgressForSource,
   getSlideshowProgressSource,
   getSlideshowProgressType,
   getSlideshowRuntime,
@@ -274,18 +278,18 @@ describe("slideshow checkpoint 2 mutations", () => {
     expect(ea.commits).toBe(1);
   });
 
-  it("auto-declares an existing frame deck even when no frame is selected", async () => {
+  it("leaves an unselected drawing unresolved so the saved sidepanel source can win", async () => {
     const elements: ExcalidrawElement[] = [frame("a", "Alpha"), frame("b", "Bravo")];
     const ea = createFakeEa(elements);
     const view = {} as ScriptExcalidrawView;
 
     await expect(
       ensureManualSlideshowDeclaration({ ea, view } as unknown as SlideshowViewContext),
-    ).resolves.toBe("frame");
+    ).resolves.toBeUndefined();
 
-    expect(hasFrameSlideshowDeclaration(elements[0]?.customData)).toBe(true);
+    expect(hasFrameSlideshowDeclaration(elements[0]?.customData)).toBe(false);
     expect(hasFrameSlideshowDeclaration(elements[1]?.customData)).toBe(false);
-    expect(ea.commits).toBe(1);
+    expect(ea.commits).toBe(0);
   });
 
   it("declares a frame slideshow on only the selected frame without changing deck order", async () => {
@@ -1226,25 +1230,16 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(service.getAspectRatio()).toBe("1920 / 1080");
   });
 
-  it("uses the EA workbench to hide a line presentation path for preview export", async () => {
+  it("exports only slide-local elements without mutating the EA workbench", async () => {
     const path = line();
     const other = frame("a", "Alpha");
-    let workbench: ExcalidrawElement[] = [];
     let exported: ExcalidrawElement[] = [];
-    let copiedIds: string[] = [];
-    let clearCalls = 0;
+    const clear = vi.fn();
+    const copyViewElementsToEAforEditing = vi.fn();
     const ea = {
-      clear: () => {
-        clearCalls += 1;
-        workbench = [];
-      },
-      copyViewElementsToEAforEditing: (elements: readonly ExcalidrawElement[]) => {
-        copiedIds = elements.map((element) => element.id);
-        workbench = structuredClone(elements) as ExcalidrawElement[];
-      },
+      clear,
+      copyViewElementsToEAforEditing,
       getElementsIntersectionArea: (elements: readonly ExcalidrawElement[]) => [...elements],
-      getElement: (id: string) => workbench.find((element) => element.id === id),
-      getElements: () => workbench,
       createViewPNG: ({ elementsOverride }: { elementsOverride: ExcalidrawElement[] }) => {
         exported = structuredClone(elementsOverride) as ExcalidrawElement[];
         return Promise.resolve(new Blob(["preview"], { type: "image/png" }));
@@ -1283,10 +1278,9 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     expect(exported.find((element) => element.id === path.id)?.id).toBe(path.id);
     expect(exported.some((element) => element.id === other.id)).toBe(true);
     expect(new Set(exported.map((element) => element.id)).size).toBe(exported.length);
-    expect(copiedIds).toEqual([path.id, other.id]);
     expect(path.opacity).not.toBe(0);
-    expect(clearCalls).toBe(2);
-    expect(workbench).toEqual([]);
+    expect(clear).not.toHaveBeenCalled();
+    expect(copyViewElementsToEAforEditing).not.toHaveBeenCalled();
   });
 
   it("formats presentation slide titles with current and total slide numbers", () => {
@@ -1314,6 +1308,9 @@ describe("slideshow checkpoint 2 deck consumption", () => {
     );
     expect(SLIDESHOW_PRESENTER_STYLES).toContain(
       ".slideshow-presenter__notes { flex:1 1 auto; min-height:120px; font-size:var(--slideshow-presenter-notes-font-size, 18px)",
+    );
+    expect(SLIDESHOW_PRESENTER_STYLES).toContain(
+      ".slideshow-presenter:not(.is-notes-focused) .slideshow-presenter__controls { align-self:flex-end; }",
     );
   });
 
@@ -1494,6 +1491,54 @@ describe("slideshow checkpoint 2 element actions", () => {
     expect(hasSlideshowMetadata(slideshowLine)).toBe(true);
     expect(hasSlideshowMetadata(frame("b", "Bravo"))).toBe(false);
     expect(hasSlideshowMetadata(line())).toBe(false);
+  });
+
+  it("reads the latest persisted aspect ratio each time the frame-fit action runs", async () => {
+    vi.stubGlobal("app", {});
+    const elements: ExcalidrawElement[] = [
+      frame("a", "Alpha", { slideshow: { schemaVersion: 2, kind: "frame" } }),
+    ];
+    const ea = createFakeEa(elements, "a");
+    let scriptSettings: Record<string, unknown> = { printSlideWidth: 4, printSlideHeight: 3 };
+    let provider:
+      | ((element: ExcalidrawElement) => readonly SelectedElementMenuAction[])
+      | undefined;
+    Object.assign(ea, {
+      registerElementActionProvider: (
+        getActions: (element: ExcalidrawElement) => readonly SelectedElementMenuAction[],
+      ) => {
+        provider = getActions;
+        return () => undefined;
+      },
+      getScriptSettings: () => scriptSettings,
+    });
+    const view = {} as ScriptExcalidrawView;
+    registerSlideshowElementActionProvider({
+      ea,
+      utils: {} as ScriptUtils,
+      view,
+      config: { ...DEFAULT_SLIDESHOW_CONFIG, printSlideWidth: 16, printSlideHeight: 9 },
+      t: createSlideshowTranslator("en"),
+    });
+
+    const fit = provider?.(elements[0]!)?.find(
+      (action) => action.id === "fit-frame-to-slideshow-aspect",
+    );
+    fit?.action();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const resized = elements[0] as ExcalidrawFrameElement;
+    expect(resized.width / resized.height).toBeCloseTo(4 / 3);
+
+    scriptSettings = { printSlideWidth: 3, printSlideHeight: 2 };
+    fit?.action();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(resized.width / resized.height).toBeCloseTo(3 / 2);
+
+    resetSlideshowRuntimeForTests();
+    vi.unstubAllGlobals();
   });
 
   it("opens the clicked frame's deck and requests its sorter row", async () => {
@@ -1758,6 +1803,50 @@ describe("slideshow checkpoint 2 temporary progress", () => {
     vi.unstubAllGlobals();
   });
 
+  it("persists an exact default slideshow source independently for each drawing", async () => {
+    let settings: Record<string, unknown> = { unrelated: "keep" };
+    const ea = {
+      getScriptSettings: () => settings,
+      setScriptSettings: async (next: Record<string, unknown>) => {
+        settings = next;
+      },
+    } as unknown as ExcalidrawAutomate;
+
+    await saveSlideshowPresentationSource(ea, "Deck A.md", "line:path-a");
+    await saveSlideshowPresentationSource(ea, "Deck B.md", "frame");
+    expect(loadSlideshowPresentationSource(ea, "Deck A.md")).toBe("line:path-a");
+    expect(loadSlideshowPresentationSource(ea, "Deck B.md")).toBe("frame");
+    expect(settings.unrelated).toBe("keep");
+  });
+
+  it("prefers selection, then the saved exact source, then the legacy type fallback", () => {
+    const frameDeck = {
+      deck: buildFrameSlideDeck([frame("a", "Alpha")]),
+      pathElement: null,
+      frames: [],
+    };
+    const lineResolved = {
+      deck: buildFrameSlideDeck([frame("b", "Bravo")]),
+      pathElement: line(undefined, "path-a"),
+      frames: [],
+    };
+    const choices = {
+      frame: frameDeck,
+      lines: [{ key: "line:path-a", pathId: "path-a", name: "A", resolved: lineResolved }],
+      line: lineResolved,
+      defaultSourceKey: "frame",
+      defaultType: "frame",
+    } as unknown as ReturnType<typeof resolveSlideDeckChoices>;
+
+    expect(chooseManualPresentationSourceKey(choices, "frame", "line:path-a", "line")).toBe("frame");
+    expect(chooseManualPresentationSourceKey(choices, undefined, "line:path-a", "frame")).toBe(
+      "line:path-a",
+    );
+    expect(chooseManualPresentationSourceKey(choices, undefined, undefined, "line")).toBe(
+      "line:path-a",
+    );
+  });
+
   it("remembers progress independently for concrete views of the same drawing", () => {
     const firstView = {} as ScriptExcalidrawView;
     const secondView = {} as ScriptExcalidrawView;
@@ -1777,11 +1866,16 @@ describe("slideshow checkpoint 2 temporary progress", () => {
     expect(getResumeSlideForPresentation(undefined, "frame", "frame", 3)).toBeNull();
   });
 
-  it("associates resume progress with one exact line presentation source", () => {
+  it("associates resume progress independently with exact presentation sources", () => {
     const view = {} as ScriptExcalidrawView;
     setSlideshowProgress(view, 2, "line:path-b");
+    setSlideshowProgress(view, 4, "frame");
+    setSlideshowProgress(view, 1, "line:path-a");
     expect(getSlideshowProgressType(view)).toBe("line");
-    expect(getSlideshowProgressSource(view)).toBe("line:path-b");
+    expect(getSlideshowProgressSource(view)).toBe("line:path-a");
+    expect(getSlideshowProgressForSource(view, "line:path-b")).toBe(2);
+    expect(getSlideshowProgressForSource(view, "frame")).toBe(4);
+    expect(getSlideshowProgressForSource(view, "line:path-a")).toBe(1);
     expect(getResumeSlideForPresentation(2, "line", "line", 5, "line:path-b", "line:path-b")).toBe(
       2,
     );
@@ -1802,6 +1896,32 @@ describe("slideshow checkpoint 2 temporary progress", () => {
     setSlideshowProgress(view, 1, "line");
     expect(getSlideshowProgress(view)).toBe(1);
     expect(getSlideshowProgressType(view)).toBe("line");
+  });
+
+  it("snapshots manual modifier keys before awaiting autostart permission", async () => {
+    vi.stubGlobal("Notice", class {});
+    const view = {
+      modifierKeyDown: { shiftKey: false, altKey: false, ctrlKey: true, metaKey: false },
+    } as ScriptExcalidrawView;
+    const activate = vi.fn(async () => undefined);
+    getSlideshowRuntime().sidepanel = { activate };
+    const scriptEa = {
+      targetView: view,
+      obsidian: { moment: { locale: () => "en" } },
+      verifyMinimumPluginVersion: () => true,
+      setView: () => view,
+      getViewSelectedElement: () => null,
+      registerElementActionProvider: () => () => undefined,
+      registerAutostart: async () => {
+        (view.modifierKeyDown as ModifierKeyState).ctrlKey = false;
+        return "allow" as const;
+      },
+    } as unknown as ExcalidrawAutomate;
+
+    await runSlideshow(scriptEa, { executionSource: "manual" } as ScriptUtils, {} as never);
+
+    expect(activate).toHaveBeenCalledOnce();
+    expect(activate).toHaveBeenCalledWith(view, undefined, undefined, false);
   });
 
   it("keeps autostart registration-only and launches on the first manual invocation", async () => {
@@ -1853,6 +1973,52 @@ describe("slideshow checkpoint 2 temporary progress", () => {
       'Autostart is required for registering the "Edit Slide" button. Autostart does not mean slideshows will autostart when opening a drawing.',
       'Autostart is required for registering the "Edit Slide" button. Autostart does not mean slideshows will autostart when opening a drawing.',
     ]);
+  });
+});
+
+describe("slideshow checkpoint 2 sidepanel launch preparation", () => {
+  it("hides a docked sidepanel before measuring windowed presentation but only focuses from a popout", async () => {
+    const setActiveLeaf = vi.fn();
+    vi.stubGlobal("app", { workspace: { setActiveLeaf } });
+    const mainWindow = {
+      getComputedStyle: () => ({ display: "block" }),
+      setTimeout: (callback: () => void) => {
+        callback();
+        return 1;
+      },
+    } as unknown as Window;
+    const popoutWindow = {} as Window;
+    let containerWindow = mainWindow;
+    const container = {
+      ownerDocument: {
+        get defaultView() {
+          return containerWindow;
+        },
+      },
+      isConnected: true,
+      getBoundingClientRect: () => ({ width: 300, height: 700 }),
+    } as unknown as HTMLElement;
+    const toggleSidepanelView = vi.fn();
+    const ea = {
+      getSidepanelLeaf: () => ({ view: { containerEl: container } }),
+      toggleSidepanelView,
+    } as unknown as ExcalidrawAutomate;
+    const sidepanel = Object.create(SlideshowSidepanel.prototype) as SlideshowSidepanel;
+    Object.assign(sidepanel as object, { options: { ea } });
+    const prepare = (sidepanel as unknown as {
+      prepareWindowedPresentation(view: ScriptExcalidrawView): Promise<void>;
+    }).prepareWindowedPresentation.bind(sidepanel);
+    const view = { ownerWindow: mainWindow, leaf: {} } as ScriptExcalidrawView;
+
+    await prepare(view);
+    expect(toggleSidepanelView).toHaveBeenCalledOnce();
+    expect(setActiveLeaf).toHaveBeenCalledWith(view.leaf, { focus: true });
+
+    containerWindow = popoutWindow;
+    await prepare(view);
+    expect(toggleSidepanelView).toHaveBeenCalledOnce();
+    expect(setActiveLeaf).toHaveBeenCalledTimes(2);
+    vi.unstubAllGlobals();
   });
 });
 

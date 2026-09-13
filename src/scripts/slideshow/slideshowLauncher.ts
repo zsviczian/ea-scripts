@@ -17,6 +17,7 @@ import {
   resolvePresentationSetup,
   resolvePresentationSource,
   resolveSlideDeckChoices,
+  type SlideDeckChoices,
 } from "./presentationPath";
 import { SlideshowController } from "./SlideshowController";
 import { SlideshowSidepanel } from "./SlideshowSidepanel";
@@ -29,11 +30,14 @@ import {
 } from "./slideDeckMutations";
 import { hasFrameSlideshowDeclaration } from "./slideshowMetadata";
 import {
+  loadSlideshowConfig,
   loadSlideshowDisplayPreferences,
   loadSlideshowLaunchPreferences,
+  loadSlideshowPresentationSource,
 } from "./slideshowSettings";
 import {
   getSlideshowProgress,
+  getSlideshowProgressForSource,
   getSlideshowProgressSource,
   getSlideshowProgressType,
   getSlideshowRuntime,
@@ -66,9 +70,8 @@ export interface ManualSlideshowInvocationIntent {
 }
 
 /**
- * Converts the current manual-launch target into persisted slideshow metadata when needed.
- * A selected line/arrow wins over frames. Otherwise any frame deck is implicitly declared,
- * using the selected frame when available and the first scene frame as a fallback.
+ * Converts an explicitly selected manual-launch target into persisted slideshow metadata when needed.
+ * No selection is left unresolved so the per-drawing sidepanel preference can decide the launch source.
  */
 export async function ensureManualSlideshowDeclaration(
   context: SlideshowViewContext,
@@ -84,16 +87,13 @@ export async function ensureManualSlideshowDeclaration(
       await createLinePresentation(ea, selected.id);
       return `line:${selected.id}`;
     }
+    return undefined;
   }
 
+  if (!isFrameElement(selected)) return undefined;
   const frames = ea.getViewElements().filter(isFrameElement);
-  if (frames.length === 0) return undefined;
-
   const alreadyDeclared = frames.some((frame) => hasFrameSlideshowDeclaration(frame.customData));
-  if (!alreadyDeclared) {
-    const declarationFrame = isFrameElement(selected) ? selected : frames[0];
-    if (declarationFrame) await declareFrameSlideshow(ea, declarationFrame.id);
-  }
+  if (!alreadyDeclared) await declareFrameSlideshow(ea, selected.id);
   return "frame";
 }
 
@@ -109,6 +109,20 @@ export function resolveManualInvocationIntent(
     resume: modifiers.shiftKey,
     startFullscreen: !modifiers.altKey,
   };
+}
+
+/** Chooses the exact presentation source for a manual launch. */
+export function chooseManualPresentationSourceKey(
+  choices: SlideDeckChoices,
+  selectedSource: PresentationSourceKey | undefined,
+  savedSource: PresentationSourceKey | undefined,
+  preferredType: PresentationPathType | undefined,
+): PresentationSourceKey | undefined {
+  if (selectedSource && resolvePresentationSource(choices, selectedSource)) return selectedSource;
+  if (savedSource && resolvePresentationSource(choices, savedSource)) return savedSource;
+  if (preferredType === "frame" && choices.frame) return "frame";
+  if (preferredType === "line" && choices.lines[0]) return choices.lines[0].key;
+  return choices.defaultSourceKey ?? undefined;
 }
 
 function resolveLaunchModifiers(view: ScriptExcalidrawView): { startFullscreen: boolean } {
@@ -170,7 +184,7 @@ export function registerSlideshowElementActionProvider(
           void resizeFrameToPresentationAspect(
             latestContext.ea,
             element.id,
-            latestContext.config,
+            loadSlideshowConfig(latestContext.ea),
           ).catch((error) => {
             console.error("Slideshow frame aspect-ratio resize failed", error);
             new Notice(latestContext.t("resizeFrameFailed"));
@@ -212,11 +226,13 @@ export async function startSlideshowPresentation(
   const modifierDefaults = resolveLaunchModifiers(view);
   const savedProgressType = getSlideshowProgressType(view);
   const savedProgressSource = getSlideshowProgressSource(view);
+  const exactProgress = getSlideshowProgressForSource(view, setup.sourceKey);
   const resumedSlide =
     launch.resume &&
-    (!savedProgressType || savedProgressType === setup.pathType) &&
-    (!savedProgressSource || savedProgressSource === setup.sourceKey)
-      ? getSlideshowProgress(view)
+    (exactProgress !== undefined ||
+      ((!savedProgressType || savedProgressType === setup.pathType) &&
+        (!savedProgressSource || savedProgressSource === setup.sourceKey)))
+      ? (exactProgress ?? getSlideshowProgress(view))
       : undefined;
   const initialSlide = launch.initialSlide ?? resumedSlide ?? 0;
 
@@ -386,22 +402,34 @@ export async function openSlideshowSidepanel(
 }
 
 /** Routes a script-button, command-palette, or hotkey invocation for the current view. */
-export async function runManualSlideshowInvocation(context: SlideshowViewContext): Promise<void> {
+export async function runManualSlideshowInvocation(
+  context: SlideshowViewContext,
+  modifiers: Pick<ModifierKeyState, "altKey" | "shiftKey" | "ctrlKey" | "metaKey"> =
+    context.view.modifierKeyDown,
+): Promise<void> {
   const active = getSlideshowRuntime().presentations.get(context.view);
-  const preferredSourceKey = active ? undefined : await ensureManualSlideshowDeclaration(context);
-  const intent = resolveManualInvocationIntent(context.view.modifierKeyDown);
-  if (intent.openSidepanel) {
-    await openSlideshowSidepanel(context, preferredSourceKey);
+  const intent = resolveManualInvocationIntent(modifiers);
+  if (active && !intent.resume && !intent.openSidepanel) {
+    active.advance();
     return;
   }
 
-  if (active) {
-    active.advance();
+  const selectedSourceKey = await ensureManualSlideshowDeclaration(context);
+  if (intent.openSidepanel) {
+    await openSlideshowSidepanel(context, selectedSourceKey);
     return;
   }
 
   context.ea.setView(context.view);
   const preferences = loadSlideshowLaunchPreferences(context.ea);
+  const choices = resolveSlideDeckChoices(context.ea);
+  const savedSource = loadSlideshowPresentationSource(context.ea, context.view.file.path);
+  const preferredSourceKey = chooseManualPresentationSourceKey(
+    choices,
+    selectedSourceKey,
+    savedSource,
+    preferences.presentationType,
+  );
   const ownerWindow = context.view.ownerWindow;
   const displays = context.ea.DEVICE.isMobile ? [] : getAvailableDisplays(ownerWindow);
   const openPresenterView =

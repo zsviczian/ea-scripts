@@ -40,6 +40,7 @@ export interface SlideshowRuntimeState {
   readonly progress: WeakMap<ScriptExcalidrawView, number>;
   readonly progressType: WeakMap<ScriptExcalidrawView, PresentationPathType>;
   readonly progressSource: WeakMap<ScriptExcalidrawView, PresentationSourceKey>;
+  readonly progressBySource: WeakMap<ScriptExcalidrawView, Map<PresentationSourceKey, number>>;
   readonly presentations: WeakMap<ScriptExcalidrawView, SlideshowPresentationHandle>;
   sidepanel: SlideshowSidepanelHandle | null;
 }
@@ -56,6 +57,7 @@ export function getSlideshowRuntime(): SlideshowRuntimeState {
     progress: new WeakMap(),
     progressType: new WeakMap(),
     progressSource: new WeakMap(),
+    progressBySource: new WeakMap(),
     presentations: new WeakMap(),
     sidepanel: null,
   };
@@ -69,6 +71,11 @@ export function getSlideshowRuntime(): SlideshowRuntimeState {
   if (!("progressSource" in runtime) || !runtime.progressSource) {
     Object.assign(runtime, {
       progressSource: new WeakMap<ScriptExcalidrawView, PresentationSourceKey>(),
+    });
+  }
+  if (!("progressBySource" in runtime) || !runtime.progressBySource) {
+    Object.assign(runtime, {
+      progressBySource: new WeakMap<ScriptExcalidrawView, Map<PresentationSourceKey, number>>(),
     });
   }
   return runtime;
@@ -101,7 +108,14 @@ export function setSlideshowProgress(
     const type: PresentationPathType = presentationSource === "frame" ? "frame" : "line";
     runtime.progressType.set(view, type);
     if (presentationSource === "frame" || presentationSource.startsWith("line:")) {
-      runtime.progressSource.set(view, presentationSource as PresentationSourceKey);
+      const source = presentationSource as PresentationSourceKey;
+      runtime.progressSource.set(view, source);
+      let bySource = runtime.progressBySource.get(view);
+      if (!bySource) {
+        bySource = new Map<PresentationSourceKey, number>();
+        runtime.progressBySource.set(view, bySource);
+      }
+      bySource.set(source, slide);
     }
   }
 }
@@ -124,6 +138,17 @@ export function getSlideshowProgressSource(
   view: ScriptExcalidrawView,
 ): PresentationSourceKey | undefined {
   return getSlideshowRuntime().progressSource.get(view);
+}
+
+/** Returns the last temporary slide position saved for one exact slideshow source. */
+export function getSlideshowProgressForSource(
+  view: ScriptExcalidrawView,
+  source: PresentationSourceKey,
+): number | undefined {
+  const runtime = getSlideshowRuntime();
+  const exact = runtime.progressBySource.get(view)?.get(source);
+  if (exact !== undefined) return exact;
+  return runtime.progressSource.get(view) === source ? runtime.progress.get(view) : undefined;
 }
 
 /** Clears the shared runtime. Intended for tests and development reloads. */
