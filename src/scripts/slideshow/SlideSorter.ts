@@ -8,7 +8,7 @@
 import type { SlideDeck, SlideDeckSlide } from "./SlideDeck";
 import type { SlidePreviewService } from "./SlidePreviewService";
 import type { SlideshowTranslator } from "./lang";
-import type { AnimationStep, SlideshowIcons } from "./types";
+import { isExitAnimationEffect, type AnimationStep, type SlideshowIcons } from "./types";
 
 export interface SlideSorterCallbacks {
   move(fromIndex: number, toIndex: number): Promise<void>;
@@ -154,6 +154,16 @@ export function getDragAutoScrollVelocity(
   return 0;
 }
 
+function getFinalPreviewAnimationFingerprint(steps: readonly AnimationStep[]): string {
+  if (!steps.some((step) => isExitAnimationEffect(step.effect))) return "all-visible";
+  return JSON.stringify(
+    steps.map((step) => ({
+      phase: isExitAnimationEffect(step.effect) ? "exit" : "enter",
+      targets: step.targets,
+    })),
+  );
+}
+
 /** Owns one rendered sorter instance and pending presenter-note edits. */
 export class SlideSorter {
   private selectedSlideId: string | null = null;
@@ -225,13 +235,153 @@ export class SlideSorter {
     }
   }
 
+  /** Re-establishes lazy loading after focus returns, without touching already-populated thumbnails. */
+  public resumePreviewRendering(): void {
+    if (!this.previewRenderingEnabled) return;
+    this.renderGeneration += 1;
+    const generation = this.renderGeneration;
+    this.previewObserver?.disconnect();
+    this.previewObserver = this.createPreviewObserver(generation);
+    const hosts = Array.from(
+      this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__preview"),
+    ).filter(
+      (host) => !host.firstElementChild || host.dataset.previewDirty === "true",
+    );
+    for (const host of hosts) {
+      const slide = this.options.deck.slides.find(
+        (candidate) => candidate.id === host.dataset.slideId,
+      );
+      if (!slide) continue;
+      if (this.previewObserver) this.previewObserver.observe(host);
+      else this.renderPreview(host, slide, generation);
+    }
+  }
+
+  /**
+   * Reconciles deck metadata/ordering into the existing rows when slide identity is unchanged.
+   * Returns false when the sorter must be rebuilt because slides were added, removed, or changed kind.
+   */
+  public syncDeck(nextDeck: SlideDeck, refreshChangedPreviews = true): boolean {
+    const deck = this.options.deck;
+    if (deck.kind !== nextDeck.kind || deck.slides.length !== nextDeck.slides.length) return false;
+
+    const currentById = new Map(deck.slides.map((slide) => [slide.id, slide]));
+    if (
+      nextDeck.slides.some((slide) => {
+        const current = currentById.get(slide.id);
+        return !current || current.kind !== slide.kind;
+      })
+    ) {
+      return false;
+    }
+
+    const previousOrder = deck.slides.map((slide) => slide.id).join("\u0000");
+    const nextOrder = nextDeck.slides.map((slide) => slide.id).join("\u0000");
+    const previewRefreshIds = new Set<string>();
+    const nextSlides: SlideDeckSlide[] = [];
+
+    for (const incoming of nextDeck.slides) {
+      const current = currentById.get(incoming.id);
+      if (!current) return false;
+      const rectChanged =
+        current.rect.x1 !== incoming.rect.x1 ||
+        current.rect.y1 !== incoming.rect.y1 ||
+        current.rect.x2 !== incoming.rect.x2 ||
+        current.rect.y2 !== incoming.rect.y2;
+      const animationChanged =
+        getFinalPreviewAnimationFingerprint(current.animationSteps) !==
+        getFinalPreviewAnimationFingerprint(incoming.animationSteps);
+      if (rectChanged || animationChanged) previewRefreshIds.add(current.id);
+
+      Object.assign(current, {
+        ...incoming,
+        rect: { ...incoming.rect },
+        animationSteps: incoming.animationSteps.map((step) => structuredClone(step)),
+      });
+      nextSlides.push(current);
+    }
+
+    deck.name = nextDeck.name;
+    deck.slides = nextSlides;
+    deck.visibleSlides = nextSlides.filter((slide) => !slide.excluded);
+    deck.hasExplicitFrameOrder = nextDeck.hasExplicitFrameOrder;
+
+    const rowsById = new Map(
+      Array.from(this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__row")).map(
+        (row) => [row.dataset.slideId ?? "", row],
+      ),
+    );
+    if (previousOrder !== nextOrder) {
+      for (const slide of deck.slides) {
+        const row = rowsById.get(slide.id);
+        if (row) this.options.container.appendChild(row);
+      }
+    }
+
+    deck.slides.forEach((slide, index) => {
+      const row = rowsById.get(slide.id);
+      if (!row) return;
+      this.updateRowOrderState(row, slide, index);
+      this.updateRowInclusion(row, slide);
+      this.updateNotesBadge(row, slide);
+      this.updateAnimationBadge(row, slide);
+    });
+    if (
+      this.expandedNotesSlideId &&
+      this.notesTextarea &&
+      this.notesTextarea.ownerDocument.activeElement !== this.notesTextarea
+    ) {
+      const slide = deck.slides.find((candidate) => candidate.id === this.expandedNotesSlideId);
+      if (slide) this.notesTextarea.value = slide.notes ?? "";
+    }
+
+    if (this.selectedSlideId && !currentById.has(this.selectedSlideId)) {
+      this.selectedSlideId = deck.slides[0]?.id ?? null;
+      this.updateSelectedRows();
+    }
+    if (refreshChangedPreviews) {
+      for (const slideId of previewRefreshIds) this.refreshSlidePreview(slideId);
+    }
+    return true;
+  }
+
+  /** Captures mounted preview nodes so a rare full sidepanel rebuild can reuse them without blinking. */
+  public capturePreviewContents(): Map<string, Node[]> {
+    const result = new Map<string, Node[]>();
+    this.options.container
+      .querySelectorAll<HTMLElement>(".slideshow-sorter__preview")
+      .forEach((host) => {
+        const slideId = host.dataset.slideId;
+        if (slideId && host.childNodes.length > 0) result.set(slideId, Array.from(host.childNodes));
+      });
+    return result;
+  }
+
+  /** Restores previously mounted preview nodes into matching slide hosts after a full UI rebuild. */
+  public restorePreviewContents(
+    contents: ReadonlyMap<string, readonly Node[]>,
+    refreshRestored = true,
+  ): void {
+    this.options.container
+      .querySelectorAll<HTMLElement>(".slideshow-sorter__preview")
+      .forEach((host) => {
+        const slideId = host.dataset.slideId;
+        const nodes = slideId ? contents.get(slideId) : undefined;
+        if (!nodes || nodes.length === 0) return;
+        host.replaceChildren(...nodes);
+        if (!refreshRestored) this.previewObserver?.unobserve(host);
+      });
+  }
+
   /** Performs one lazy preview pass without enabling background thumbnail refreshes. */
   public refreshPreviewsOnce(): void {
     this.renderGeneration += 1;
     const generation = this.renderGeneration;
     const hosts = Array.from(
       this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__preview"),
-    ).filter((host) => !host.firstElementChild);
+    ).filter(
+      (host) => !host.firstElementChild || host.dataset.previewDirty === "true",
+    );
     if (hosts.length === 0) return;
     const observer = this.createPreviewObserver(generation, true, true);
     if (observer) {
@@ -336,19 +486,25 @@ export class SlideSorter {
   ): void {
     const slide = this.options.deck.slides.find((candidate) => candidate.id === slideId);
     if (!slide) return;
+    const previewChanged =
+      getFinalPreviewAnimationFingerprint(slide.animationSteps) !==
+      getFinalPreviewAnimationFingerprint(steps);
     Object.assign(slide, { animationSteps: steps.map((step) => structuredClone(step)) });
     const row = this.getRow(slideId);
     if (row) this.updateAnimationBadge(row, slide);
-    if (refreshPreview) this.refreshSlidePreview(slideId);
+    if (refreshPreview && previewChanged) this.refreshSlidePreview(slideId);
   }
 
   /** Refreshes only one slide image, retaining the existing bitmap until its replacement is ready. */
   public refreshSlidePreview(slideId: string): void {
-    if (!this.previewRenderingEnabled) return;
     const row = this.getRow(slideId);
     const host = row?.querySelector<HTMLElement>(".slideshow-sorter__preview") ?? null;
     const slide = this.options.deck.slides.find((candidate) => candidate.id === slideId);
     if (!host || !slide) return;
+    if (!this.previewRenderingEnabled) {
+      host.dataset.previewDirty = "true";
+      return;
+    }
     this.renderPreview(host, slide, this.renderGeneration);
   }
 
@@ -504,6 +660,9 @@ export class SlideSorter {
           !previewHost.isConnected
         )
           return;
+        const current = previewHost.querySelector<HTMLImageElement>("img");
+        delete previewHost.dataset.previewDirty;
+        if (current?.src === preview.src) return;
         previewHost.replaceChildren(preview);
       })
       .catch(() => undefined);
@@ -587,6 +746,20 @@ export class SlideSorter {
     badge.setAttribute("aria-label", label);
     badge.innerHTML = `${this.options.icons.sparkles}<span class="slideshow-sorter__badge-compact-count" aria-hidden="true">${count}</span><span class="slideshow-sorter__badge-text">${label}</span>`;
     badges.appendChild(badge);
+  }
+
+  private updateNotesBadge(row: HTMLElement, slide: SlideDeckSlide): void {
+    const badges = row.querySelector<HTMLElement>(".slideshow-sorter__badges");
+    if (!badges) return;
+    badges.querySelector(".slideshow-sorter__badge--notes")?.remove();
+    if (!slide.notes) return;
+    const badge = row.ownerDocument.createElement("span");
+    const label = this.options.t("notesPresent");
+    badge.className = "slideshow-sorter__badge slideshow-sorter__badge--notes";
+    badge.title = label;
+    badge.setAttribute("aria-label", label);
+    badge.innerHTML = `${this.options.icons.notebookPen}<span class="slideshow-sorter__badge-text">${label}</span>`;
+    badges.prepend(badge);
   }
 
   private createIconButton(
@@ -825,16 +998,28 @@ export class SlideSorter {
   private async selectSlide(slideId: string): Promise<void> {
     if (slideId === this.selectedSlideId) return;
     await this.flushNotes();
+    const previousNotesSlideId = this.expandedNotesSlideId;
     this.selectedSlideId = slideId;
     this.expandedNotesSlideId = null;
-    this.render(slideId);
+    this.notesTextarea = null;
+    this.options.container.classList.toggle(
+      "has-expanded-editor",
+      Boolean(this.options.animationEditingSlideId),
+    );
+    this.updateSelectedRows();
+    if (previousNotesSlideId) this.replaceRowPreservingPreview(previousNotesSlideId);
   }
 
   private async toggleNotes(slideId: string): Promise<void> {
     if (this.expandedNotesSlideId === slideId) {
       await this.flushNotes();
       this.expandedNotesSlideId = null;
-      this.render(this.selectedSlideId);
+      this.notesTextarea = null;
+      this.options.container.classList.toggle(
+        "has-expanded-editor",
+        Boolean(this.options.animationEditingSlideId),
+      );
+      this.replaceRowPreservingPreview(slideId);
       return;
     }
     await this.openNotes(slideId, false);
@@ -842,9 +1027,16 @@ export class SlideSorter {
 
   private async openNotes(slideId: string, focusNotes: boolean): Promise<void> {
     await this.flushNotes();
+    const previousNotesSlideId = this.expandedNotesSlideId;
     this.selectedSlideId = slideId;
     this.expandedNotesSlideId = slideId;
-    this.render(slideId, slideId);
+    this.notesTextarea = null;
+    this.options.container.classList.add("has-expanded-editor");
+    this.updateSelectedRows();
+    if (previousNotesSlideId && previousNotesSlideId !== slideId) {
+      this.replaceRowPreservingPreview(previousNotesSlideId);
+    }
+    this.replaceRowPreservingPreview(slideId);
     this.scrollToSlide(slideId, false, "start");
     if (focusNotes) this.notesTextarea?.focus();
   }
@@ -1030,6 +1222,8 @@ export class SlideSorter {
       await this.options.callbacks.saveNotes(slide, current);
       if (current.trim().length === 0) delete slide.notes;
       else slide.notes = current;
+      const row = this.getRow(slideId);
+      if (row) this.updateNotesBadge(row, slide);
     })();
     this.notesSaveInFlight = save;
     try {

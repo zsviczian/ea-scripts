@@ -1751,6 +1751,48 @@ describe("slideshow checkpoint 2 element actions", () => {
     expect(createPreview).toHaveBeenCalledTimes(3);
   });
 
+  it("retains dirty populated thumbnails until an explicit or focused refresh can replace them", async () => {
+    const previewHost = {
+      dataset: { slideId: "a" },
+      ownerDocument: {},
+      isConnected: true,
+      firstElementChild: {},
+      replaceChildren: vi.fn(),
+      querySelector: () => null,
+    } as unknown as HTMLElement;
+    const createPreview = vi.fn(async () => null);
+    const sorter = new SlideSorter({
+      ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
+      container: {
+        ownerDocument: { defaultView: {} },
+        querySelectorAll: () => [previewHost],
+      } as unknown as HTMLElement,
+      deck: buildFrameSlideDeck([frame("a", "Alpha")]),
+      previewService: { createPreview } as unknown as SlidePreviewService,
+      icons: {} as never,
+      t: createSlideshowTranslator("en"),
+      reorderEnabled: true,
+      previewRenderingEnabled: false,
+      callbacks: {
+        move: async () => undefined,
+        toggleInclusion: async () => undefined,
+        zoomToSlide: () => undefined,
+        saveNotes: async () => undefined,
+        requestAnimationEditor: () => undefined,
+        editLineSlide: async () => undefined,
+        notesBlurred: () => undefined,
+      },
+    });
+
+    sorter.refreshSlidePreview("a");
+    expect(previewHost.dataset.previewDirty).toBe("true");
+    expect(createPreview).not.toHaveBeenCalled();
+
+    sorter.refreshPreviewsOnce();
+    await Promise.resolve();
+    expect(createPreview).toHaveBeenCalledOnce();
+  });
+
   it("applies inclusion and reorder changes without rebuilding sorter rows", () => {
     const deck = buildFrameSlideDeck([frame("a", "Alpha"), frame("b", "Bravo")]);
     const rowA = { dataset: { slideId: "a" }, querySelector: () => null };
@@ -1795,6 +1837,116 @@ describe("slideshow checkpoint 2 element actions", () => {
     expect(appendChild).toHaveBeenCalledOnce();
     expect(appendChild).toHaveBeenCalledWith(rowA);
     expect(insertBefore).not.toHaveBeenCalled();
+  });
+
+  it("reconciles title and metadata changes in place without refreshing thumbnails", () => {
+    const deck = buildFrameSlideDeck([frame("a", "Alpha"), frame("b", "Bravo")]);
+    const rowA = { dataset: { slideId: "a" }, querySelector: () => null };
+    const rowB = { dataset: { slideId: "b" }, querySelector: () => null };
+    const sorter = new SlideSorter({
+      ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
+      container: {
+        ownerDocument: { defaultView: {} },
+        querySelectorAll: () => [rowA, rowB],
+        appendChild: vi.fn(),
+      } as unknown as HTMLElement,
+      deck,
+      previewService: {} as SlidePreviewService,
+      icons: {} as never,
+      t: createSlideshowTranslator("en"),
+      reorderEnabled: true,
+      callbacks: {
+        move: async () => undefined,
+        toggleInclusion: async () => undefined,
+        zoomToSlide: () => undefined,
+        saveNotes: async () => undefined,
+        requestAnimationEditor: () => undefined,
+        editLineSlide: async () => undefined,
+        notesBlurred: () => undefined,
+      },
+    });
+    const render = vi.spyOn(sorter, "render");
+    const refreshSlidePreview = vi.spyOn(sorter, "refreshSlidePreview");
+    const nextDeck = buildFrameSlideDeck([
+      frame("a", "Renamed", {
+        slideshow: { schemaVersion: 2, kind: "frame", order: 0, notes: "Note" },
+      }),
+      frame("b", "Bravo", {
+        slideshow: { schemaVersion: 2, kind: "frame", order: 1, excluded: true },
+      }),
+    ]);
+
+    expect(sorter.syncDeck(nextDeck)).toBe(true);
+
+    expect(deck.slides[0]?.title).toBe("Renamed");
+    expect(deck.slides[0]?.notes).toBe("Note");
+    expect(deck.slides[1]?.excluded).toBe(true);
+    expect(render).not.toHaveBeenCalled();
+    expect(refreshSlidePreview).not.toHaveBeenCalled();
+  });
+
+  it("refreshes a sorter thumbnail only when animation edits change final visibility", () => {
+    const deck = buildFrameSlideDeck([frame("a", "Alpha")]);
+    const slide = deck.slides[0];
+    if (!slide) throw new Error("Expected one slide.");
+    slide.animationSteps = [
+      {
+        id: "enter",
+        targets: [{ type: "element", id: "shape" }],
+        effect: "fade",
+        trigger: "advance",
+      },
+    ];
+    const sorter = new SlideSorter({
+      ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
+      container: {
+        ownerDocument: { defaultView: {} },
+        querySelectorAll: () => [],
+      } as unknown as HTMLElement,
+      deck,
+      previewService: {} as SlidePreviewService,
+      icons: {} as never,
+      t: createSlideshowTranslator("en"),
+      reorderEnabled: true,
+      callbacks: {
+        move: async () => undefined,
+        toggleInclusion: async () => undefined,
+        zoomToSlide: () => undefined,
+        saveNotes: async () => undefined,
+        requestAnimationEditor: () => undefined,
+        editLineSlide: async () => undefined,
+        notesBlurred: () => undefined,
+      },
+    });
+    const refreshSlidePreview = vi.spyOn(sorter, "refreshSlidePreview");
+
+    sorter.updateAnimationSteps("a", [
+      {
+        id: "enter",
+        targets: [{ type: "element", id: "shape" }],
+        effect: "slide",
+        direction: "left",
+        trigger: "advance",
+      },
+    ]);
+    expect(refreshSlidePreview).not.toHaveBeenCalled();
+
+    sorter.updateAnimationSteps("a", [
+      {
+        id: "enter",
+        targets: [{ type: "element", id: "shape" }],
+        effect: "slide",
+        direction: "left",
+        trigger: "advance",
+      },
+      {
+        id: "exit",
+        targets: [{ type: "element", id: "shape" }],
+        effect: "fade-out",
+        trigger: "advance",
+      },
+    ]);
+    expect(refreshSlidePreview).toHaveBeenCalledOnce();
   });
 
   it("pins sorter selection while a frame animation editor is active", async () => {

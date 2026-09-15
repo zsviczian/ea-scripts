@@ -122,9 +122,36 @@ function getDeckFingerprint(resolved: ResolvedSlideDeck | null): string {
       rect: slide.rect,
       notes: slide.notes ?? null,
       excluded: slide.excluded,
-      animationCount: slide.animationSteps.length,
+      animationSteps: slide.animationSteps,
     })),
   });
+}
+
+function getSidepanelChromeFingerprint(
+  choices: SlideDeckChoices,
+  presentationSourceKey: PresentationSourceKey | null,
+): string {
+  return JSON.stringify({
+    sources: [
+      ...(choices.frame ? ["frame"] : []),
+      ...choices.lines.map((line) => line.key),
+    ],
+    presentationSourceKey,
+  });
+}
+
+function getPreviewFingerprint(
+  appState: ReturnType<ExcalidrawAPI["getAppState"]>,
+  sceneVisualFingerprint: string,
+  elements: readonly ExcalidrawElement[],
+  resolved: ResolvedSlideDeck | null,
+): string {
+  const previewSceneFingerprint = resolved?.pathElement
+    ? getSceneVisualFingerprint(
+        elements.filter((element) => element.id !== resolved.pathElement?.id),
+      )
+    : sceneVisualFingerprint;
+  return `${appState.theme}|${appState.viewBackgroundColor}|${previewSceneFingerprint}`;
 }
 
 function getSidepanelFingerprint(
@@ -132,13 +159,14 @@ function getSidepanelFingerprint(
   choices: SlideDeckChoices,
   presentationSourceKey: PresentationSourceKey | null,
   appState: ReturnType<ExcalidrawAPI["getAppState"]>,
+  sceneVisualFingerprint = getSceneVisualFingerprint(ea.getViewElements()),
 ): string {
   const lineFingerprint = choices.lines
     .map((line) => `${line.key}:${line.name ?? ""}:${getDeckFingerprint(line.resolved)}`)
     .join("|");
   const convertibleId = getConvertibleSelectedLine(ea)?.id ?? "none";
   const declarableFrameId = getDeclarableSelectedFrame(ea)?.id ?? "none";
-  return `${presentationSourceKey ?? "none"}|${getDeckFingerprint(choices.frame)}|${lineFingerprint}|candidate=${convertibleId}|frameCandidate=${declarableFrameId}|${appState.theme}|${appState.viewBackgroundColor}|${getSceneVisualFingerprint(ea.getViewElements())}`;
+  return `${presentationSourceKey ?? "none"}|${getDeckFingerprint(choices.frame)}|${lineFingerprint}|candidate=${convertibleId}|frameCandidate=${declarableFrameId}|${appState.theme}|${appState.viewBackgroundColor}|${sceneVisualFingerprint}`;
 }
 
 /** Chooses the sorter source from stable panel state; canvas selection never changes it. */
@@ -386,6 +414,8 @@ export class SlideshowSidepanel {
   private refreshTimer = 0;
   private ownerWindow: Window;
   private lastFingerprint = "";
+  private lastPreviewFingerprint = "";
+  private lastChromeFingerprint = "";
   private pendingRefresh = false;
   private sorterMutationDepth = 0;
   private sceneSelectionSignature: string | null = null;
@@ -452,10 +482,10 @@ export class SlideshowSidepanel {
       return;
     }
     if (this.pendingRefresh) {
-      void this.refresh(true);
+      void this.refresh();
       return;
     }
-    this.sorter?.refreshPreviews();
+    this.sorter?.resumePreviewRendering();
   }
 
   /** Loads the currently visible thumbnails once without enabling background refreshes. */
@@ -499,8 +529,7 @@ export class SlideshowSidepanel {
     const drawingChanged = view === this.boundView && view.file !== this.boundDrawingFile;
     if (view === this.boundView && !drawingChanged) {
       this.options.ea.setView(view);
-      this.lastFingerprint = "";
-      await this.refresh(true);
+      await this.refresh();
       return;
     }
     const generation = ++this.bindGeneration;
@@ -530,6 +559,7 @@ export class SlideshowSidepanel {
       this.animationEditingSlideId = null;
       this.previewService?.clear();
       this.lastFingerprint = "";
+      this.lastPreviewFingerprint = "";
       void this.refresh(true);
     };
     tab.onExcalidrawViewClosed = () => this.bindView(null);
@@ -668,6 +698,8 @@ export class SlideshowSidepanel {
     this.sceneSelectionSignature = null;
     this.pendingSceneSlideId = null;
     this.lastFingerprint = "";
+    this.lastPreviewFingerprint = "";
+    this.lastChromeFingerprint = "";
     this.boundView = view;
     this.boundDrawingFile = view?.file ?? null;
     this.options.ea.setView(view);
@@ -720,6 +752,7 @@ export class SlideshowSidepanel {
         openSlideshowSettingsModal(ea, this.options.config, t, () => {
           this.previewService?.clear();
           this.lastFingerprint = "";
+          this.lastPreviewFingerprint = "";
           void this.refresh(true);
         });
       })();
@@ -727,11 +760,65 @@ export class SlideshowSidepanel {
     header.appendChild(settingsButton);
   }
 
+  /** Builds the selection/source-specific header action without rebuilding the sidepanel. */
+  private createHeaderContextAction(doc: Document): HTMLButtonElement | null {
+    const { ea, icons, t } = this.options;
+    const button = doc.createElement("button");
+    button.type = "button";
+    button.className =
+      "slideshow-sidepanel__icon-button slideshow-sidepanel__source-action";
+
+    if (getDeclarableSelectedFrame(ea)) {
+      button.setAttribute("aria-label", t("declareFrameSlideshow"));
+      button.innerHTML = icons.plus;
+      button.addEventListener("click", () => void this.declareSelectedFrameSlideshow());
+      return button;
+    }
+    if (getConvertibleSelectedLine(ea)) {
+      button.setAttribute("aria-label", t("createLinePresentation"));
+      button.innerHTML = icons.plus;
+      button.addEventListener("click", () => void this.convertSelectedLineToPresentation());
+      return button;
+    }
+    if (this.presentationSourceKey !== "frame" && this.resolved?.pathElement) {
+      const pathHidden = isPresentationPathHidden(this.resolved.pathElement);
+      button.setAttribute(
+        "aria-label",
+        t(pathHidden ? "showPresentationPath" : "hidePresentationPath"),
+      );
+      button.innerHTML = pathHidden ? icons.eyeOff : icons.eye;
+      button.addEventListener("click", () => void this.togglePresentationPathVisibility());
+      return button;
+    }
+    return null;
+  }
+
+  /** Reconciles only the selection/source-specific header action. */
+  private updateHeaderContextAction(): void {
+    const header =
+      this.options.tab.contentEl.querySelector<HTMLElement>(".slideshow-sidepanel__header");
+    if (!header) return;
+    const current = header.querySelector<HTMLElement>(".slideshow-sidepanel__source-action");
+    const next = this.createHeaderContextAction(header.ownerDocument);
+    if (current && next) {
+      current.replaceWith(next);
+      return;
+    }
+    if (current) {
+      current.remove();
+      return;
+    }
+    if (!next) return;
+    const anchor = header.querySelector<HTMLElement>(".slideshow-sidepanel__info-button");
+    header.insertBefore(next, anchor);
+  }
+
   private appendInfoButton(header: HTMLElement, doc: Document): void {
     const { ea, icons, t } = this.options;
     const infoButton = doc.createElement("button");
     infoButton.type = "button";
-    infoButton.className = "slideshow-sidepanel__icon-button";
+    infoButton.className =
+      "slideshow-sidepanel__icon-button slideshow-sidepanel__info-button";
     infoButton.setAttribute("aria-label", t("quickGuideButton"));
     infoButton.innerHTML = icons.info;
     infoButton.addEventListener("click", () => openSlideshowQuickGuideModal(ea, t));
@@ -817,13 +904,47 @@ export class SlideshowSidepanel {
       this.presentationSourceByDrawing.set(drawingKey, presentationSourceKey);
     const resolved = resolvePresentationSource(choices, presentationSourceKey);
     const appState = api.getAppState();
+    const elements = ea.getViewElements();
+    const sceneVisualFingerprint = getSceneVisualFingerprint(elements);
+    const previewFingerprint = getPreviewFingerprint(
+      appState,
+      sceneVisualFingerprint,
+      elements,
+      resolved,
+    );
+    const chromeFingerprint = getSidepanelChromeFingerprint(choices, presentationSourceKey);
     const compositeFingerprint = getSidepanelFingerprint(
       ea,
       choices,
       presentationSourceKey,
       appState,
+      sceneVisualFingerprint,
     );
     if (!force && compositeFingerprint === this.lastFingerprint) return;
+
+    const previewContentChanged = previewFingerprint !== this.lastPreviewFingerprint;
+    const canPatchExistingUi =
+      !force &&
+      Boolean(this.sorter && this.resolved && resolved) &&
+      presentationSourceKey === this.presentationSourceKey &&
+      chromeFingerprint === this.lastChromeFingerprint;
+    if (
+      canPatchExistingUi &&
+      resolved &&
+      this.sorter?.syncDeck(resolved.deck, !previewContentChanged)
+    ) {
+      this.choices = choices;
+      this.presentationSourceKey = presentationSourceKey;
+      this.resolved = resolved;
+      this.lastFingerprint = compositeFingerprint;
+      this.lastPreviewFingerprint = previewFingerprint;
+      this.lastChromeFingerprint = chromeFingerprint;
+      this.pendingRefresh = false;
+      this.updatePresentationSourceUi();
+      if (previewContentChanged) this.sorter.refreshPreviews();
+      this.pendingSceneSlideId = null;
+      return;
+    }
 
     const requestedSlideId = this.requestedSlideId;
     if (this.sceneSelectionSignature === null) {
@@ -838,6 +959,10 @@ export class SlideshowSidepanel {
       null;
     const expandedNotesId = this.sorter?.getExpandedNotesSlideId() ?? null;
     const sorterScrollTop = this.sorter?.getScrollTop() ?? 0;
+    const preservedPreviews =
+      presentationSourceKey === this.presentationSourceKey
+        ? this.sorter?.capturePreviewContents()
+        : undefined;
     this.previewService?.cancelPending();
     this.sorter?.destroy();
     this.sorter = null;
@@ -845,15 +970,53 @@ export class SlideshowSidepanel {
     this.presentationSourceKey = presentationSourceKey;
     this.resolved = resolved;
     this.lastFingerprint = compositeFingerprint;
+    this.lastPreviewFingerprint = previewFingerprint;
+    this.lastChromeFingerprint = chromeFingerprint;
     this.pendingRefresh = false;
     this.previewService ??= new SlidePreviewService(ea, api, this.options.config);
     const renderedSorter = this.render(selectedId, expandedNotesId);
+    if (preservedPreviews) {
+      renderedSorter?.restorePreviewContents(preservedPreviews, previewContentChanged);
+    }
     this.pendingSceneSlideId = null;
     if (requestedSlideId) {
       renderedSorter?.scrollToSlide(requestedSlideId);
     } else {
       renderedSorter?.restoreScrollTop(sorterScrollTop);
     }
+  }
+
+  /** Updates presentation labels/counts without rebuilding sorter rows or thumbnail hosts. */
+  private updatePresentationSourceUi(): void {
+    const deck = this.resolved?.deck;
+    if (!deck) return;
+    const sourceOptions = getPresentationSourceLabels(
+      this.choices,
+      this.options.t("frameDeck"),
+      this.options.t("linePresentationDefaultName"),
+    );
+    const sourceSelect =
+      this.options.tab.contentEl.querySelector<HTMLSelectElement>(
+        ".slideshow-sidepanel__presentation-source-select",
+      );
+    if (sourceSelect && sourceSelect.options.length === sourceOptions.length) {
+      sourceOptions.forEach((definition, index) => {
+        const option = sourceSelect.options.item(index);
+        if (option && option.value === definition.key) option.textContent = definition.label;
+      });
+    }
+    const summary =
+      this.options.tab.contentEl.querySelector<HTMLElement>(".slideshow-sidepanel__summary");
+    if (summary) {
+      const activeSourceLabel =
+        sourceOptions.find((option) => option.key === this.presentationSourceKey)?.label ??
+        (deck.kind === "frame"
+          ? this.options.t("frameDeck")
+          : this.options.t("linePresentationDefaultName"));
+      summary.dataset.sourceLabel = activeSourceLabel;
+    }
+    this.updateHeaderContextAction();
+    this.updateDeckSummaryAndAvailability();
   }
 
   private render(
@@ -937,40 +1100,8 @@ export class SlideshowSidepanel {
       void this.printPresentation(event);
     });
 
-    const declarableFrame = getDeclarableSelectedFrame(ea);
-    const convertibleLine = getConvertibleSelectedLine(ea);
-    if (declarableFrame) {
-      const createFrameButton = doc.createElement("button");
-      createFrameButton.type = "button";
-      createFrameButton.className = "slideshow-sidepanel__icon-button";
-      createFrameButton.setAttribute("aria-label", t("declareFrameSlideshow"));
-      createFrameButton.innerHTML = icons.plus;
-      createFrameButton.addEventListener("click", () => void this.declareSelectedFrameSlideshow());
-      header.appendChild(createFrameButton);
-    } else if (convertibleLine) {
-      const createPathButton = doc.createElement("button");
-      createPathButton.type = "button";
-      createPathButton.className = "slideshow-sidepanel__icon-button";
-      createPathButton.setAttribute("aria-label", t("createLinePresentation"));
-      createPathButton.innerHTML = icons.plus;
-      createPathButton.addEventListener(
-        "click",
-        () => void this.convertSelectedLineToPresentation(),
-      );
-      header.appendChild(createPathButton);
-    } else if (this.presentationSourceKey !== "frame" && this.resolved?.pathElement) {
-      const pathHidden = isPresentationPathHidden(this.resolved.pathElement);
-      const pathButton = doc.createElement("button");
-      pathButton.type = "button";
-      pathButton.className = "slideshow-sidepanel__icon-button";
-      pathButton.setAttribute(
-        "aria-label",
-        t(pathHidden ? "showPresentationPath" : "hidePresentationPath"),
-      );
-      pathButton.innerHTML = pathHidden ? icons.eyeOff : icons.eye;
-      pathButton.addEventListener("click", () => void this.togglePresentationPathVisibility());
-      header.appendChild(pathButton);
-    }
+    const contextAction = this.createHeaderContextAction(doc);
+    if (contextAction) header.appendChild(contextAction);
 
     this.appendInfoButton(header, doc);
     this.appendSettingsButton(header, doc);
@@ -1029,12 +1160,13 @@ export class SlideshowSidepanel {
       t("linePresentationDefaultName"),
     );
     if (sourceOptions.length > 1 && this.presentationSourceKey) {
-      appendSelect<PresentationSourceKey>(
+      const sourceSelect = appendSelect<PresentationSourceKey>(
         t("presentationType"),
         this.presentationSourceKey,
         sourceOptions.map((option) => ({ value: option.key, label: option.label })),
         (nextSource) => void this.selectPresentationSource(nextSource),
       );
+      sourceSelect.classList.add("slideshow-sidepanel__presentation-source-select");
     }
 
     const effectiveStartMode: SlideshowStartMode =
@@ -1454,13 +1586,7 @@ export class SlideshowSidepanel {
 
   private async printPresentation(event: MouseEvent): Promise<void> {
     await this.sorter?.flushNotes();
-    if (this.animationEditor) {
-      await this.animationEditor.destroy();
-      this.animationEditor = null;
-      this.animationEditingSlideId = null;
-      this.lastFingerprint = "";
-      await this.refresh(true);
-    }
+    if (this.animationEditor) await this.closeAnimationEditor();
     if (this.presentationSourceKey) {
       await this.options.printPresentation(this.presentationSourceKey, event);
     }
@@ -1553,8 +1679,7 @@ export class SlideshowSidepanel {
           else await renameLineSlide(ea, slide.pathId, slide.id, input.value);
           await view.forceSave(true);
           modal.close();
-          this.lastFingerprint = "";
-          await this.refresh(true);
+          await this.refresh();
         } catch (error) {
           console.error("Slideshow slide rename failed", error);
           new Notice(t("metadataSaveFailed"));
@@ -1679,8 +1804,7 @@ export class SlideshowSidepanel {
           await renameFramePresentation(ea, input.value);
           await view.forceSave(true);
           modal.close();
-          this.lastFingerprint = "";
-          await this.refresh(true);
+          await this.refresh();
         } catch (error) {
           console.error("Slideshow frame presentation rename failed", error);
           new Notice(t("metadataSaveFailed"));
@@ -1741,8 +1865,7 @@ export class SlideshowSidepanel {
           await renameLinePresentation(ea, source.pathId, input.value);
           await view.forceSave(true);
           modal.close();
-          this.lastFingerprint = "";
-          await this.refresh(true);
+          await this.refresh();
         } catch (error) {
           console.error("Slideshow line presentation rename failed", error);
           new Notice(t("metadataSaveFailed"));
@@ -1819,8 +1942,7 @@ export class SlideshowSidepanel {
         path.id,
         !isPresentationPathHidden(path),
       );
-      this.lastFingerprint = "";
-      await this.refresh(true);
+      await this.refresh();
     } catch (error) {
       console.error("Slideshow presentation path visibility update failed", error);
       new Notice(this.options.t("metadataSaveFailed"));
@@ -1856,19 +1978,37 @@ export class SlideshowSidepanel {
     const view = this.boundView;
     if (!view || view.file !== this.boundDrawingFile) {
       this.lastFingerprint = "";
+      this.lastPreviewFingerprint = "";
+      this.lastChromeFingerprint = "";
       return;
     }
     if (this.options.ea.targetView !== view) this.options.ea.setView(view);
     const api = this.options.ea.getExcalidrawAPI();
     if (!api) {
       this.lastFingerprint = "";
+      this.lastPreviewFingerprint = "";
+      this.lastChromeFingerprint = "";
       return;
     }
+    const appState = api.getAppState();
+    const elements = this.options.ea.getViewElements();
+    const sceneVisualFingerprint = getSceneVisualFingerprint(elements);
     this.lastFingerprint = getSidepanelFingerprint(
       this.options.ea,
       this.choices,
       this.presentationSourceKey,
-      api.getAppState(),
+      appState,
+      sceneVisualFingerprint,
+    );
+    this.lastPreviewFingerprint = getPreviewFingerprint(
+      appState,
+      sceneVisualFingerprint,
+      elements,
+      this.resolved,
+    );
+    this.lastChromeFingerprint = getSidepanelChromeFingerprint(
+      this.choices,
+      this.presentationSourceKey,
     );
     this.pendingRefresh = false;
   }
@@ -1930,8 +2070,9 @@ export class SlideshowSidepanel {
         await saveLineNotes(this.options.ea, slide.pathId, slide.id, notes);
       }
       await view.forceSave(true);
-      this.lastFingerprint = "";
-      if (!this.sorter?.isEditingNotes() && this.pendingRefresh) this.scheduleRefresh();
+      if (notes.trim().length === 0) delete slide.notes;
+      else slide.notes = notes;
+      this.updateLastFingerprintFromCurrentState();
     } catch (error) {
       console.error("Slideshow notes update failed", error);
       new Notice(this.options.t("metadataSaveFailed"));
