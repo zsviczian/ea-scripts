@@ -170,6 +170,59 @@ describe("slideshow checkpoint 4 presenter state", () => {
     expect(getHiddenBuildElementIds(slide, 2, elements)).toEqual([]);
   });
 
+  it("tracks exit animations in presenter and final-state previews", () => {
+    const steps: AnimationStep[] = [
+      {
+        id: "enter-a",
+        targets: [{ type: "element", id: "target-a" }],
+        effect: "appear",
+        trigger: "advance",
+      },
+      {
+        id: "exit-a",
+        targets: [{ type: "element", id: "target-a" }],
+        effect: "disappear",
+        trigger: "advance",
+      },
+      {
+        id: "exit-b",
+        targets: [{ type: "element", id: "target-b" }],
+        effect: "slide-out",
+        trigger: "advance",
+        direction: "right",
+      },
+      {
+        id: "exit-c",
+        targets: [{ type: "element", id: "target-c" }],
+        effect: "zoom-out",
+        trigger: "advance",
+      },
+    ];
+    const source = frame("frame", "Frame", 0, false, steps);
+    const slide = buildFrameSlideDeck([source]).slides[0] as FrameDeckSlide;
+    const elements = [
+      source as unknown as ExcalidrawElement,
+      element("target-a", 10),
+      element("target-b", 50),
+      element("target-c", 90),
+    ];
+
+    expect(getHiddenBuildElementIds(slide, 0, elements)).toEqual(["target-a"]);
+    expect(getHiddenBuildElementIds(slide, 1, elements)).toEqual([]);
+    expect(getHiddenBuildElementIds(slide, 2, elements)).toEqual(["target-a"]);
+    expect(getHiddenBuildElementIds(slide, 3, elements)).toEqual(["target-a", "target-b"]);
+    expect(getHiddenBuildElementIds(slide, 4, elements)).toEqual([
+      "target-a",
+      "target-b",
+      "target-c",
+    ]);
+    expect(getHiddenBuildElementIds(slide, undefined, elements)).toEqual([
+      "target-a",
+      "target-b",
+      "target-c",
+    ]);
+  });
+
   it("keeps monitor configuration keys stable across Electron runtime id and enumeration changes", () => {
     const a: SlideshowDisplay = {
       id: 1,

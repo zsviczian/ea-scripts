@@ -8,7 +8,7 @@
 import type { SlideDeck, SlideDeckSlide } from "./SlideDeck";
 import type { SlidePreviewService } from "./SlidePreviewService";
 import type { SlideshowTranslator } from "./lang";
-import type { SlideshowIcons } from "./types";
+import type { AnimationStep, SlideshowIcons } from "./types";
 
 export interface SlideSorterCallbacks {
   move(fromIndex: number, toIndex: number): Promise<void>;
@@ -31,6 +31,7 @@ export interface SlideSorterOptions {
   t: SlideshowTranslator;
   reorderEnabled: boolean;
   animationEditingSlideId?: string | null;
+  previewRenderingEnabled?: boolean;
   callbacks: SlideSorterCallbacks;
 }
 
@@ -45,6 +46,44 @@ export interface SorterRowRect {
   right: number;
   top: number;
   bottom: number;
+}
+
+/** Returns whether every rendered slide occupies its own visual row. */
+export function isSingleColumnSorterLayout(rowRects: readonly SorterRowRect[]): boolean {
+  if (rowRects.length <= 1) return true;
+  const firstLeft = rowRects[0]?.left ?? 0;
+  return rowRects.every((rect) => Math.abs(rect.left - firstLeft) <= 8);
+}
+
+export interface DropIndicatorPlacement {
+  beforeIndex: number | null;
+  afterIndex: number | null;
+  singleColumn: boolean;
+}
+
+/** Returns the rows that should visualize one insertion gap. */
+export function getDropIndicatorPlacement(
+  rowRects: readonly SorterRowRect[],
+  insertionIndex: number,
+): DropIndicatorPlacement {
+  const singleColumn = isSingleColumnSorterLayout(rowRects);
+  if (rowRects.length === 0) {
+    return { beforeIndex: null, afterIndex: null, singleColumn };
+  }
+  if (insertionIndex >= rowRects.length) {
+    return { beforeIndex: null, afterIndex: rowRects.length - 1, singleColumn };
+  }
+  const wrapsRow =
+    !singleColumn &&
+    insertionIndex > 0 &&
+    Math.abs(
+      (rowRects[insertionIndex - 1]?.top ?? 0) - (rowRects[insertionIndex]?.top ?? 0),
+    ) > 8;
+  return {
+    beforeIndex: insertionIndex,
+    afterIndex: wrapsRow ? insertionIndex - 1 : null,
+    singleColumn,
+  };
 }
 
 /** Returns the row-major insertion gap nearest a pointer in either list or grid layouts. */
@@ -125,15 +164,18 @@ export class SlideSorter {
   private renderGeneration = 0;
   private draggedIndex: number | null = null;
   private dropTargetIndex: number | null = null;
+  private dropIndicatorKey: string | null = null;
   private dragPointerX: number | null = null;
   private dragPointerY: number | null = null;
   private autoScrollVelocity = 0;
   private autoScrollFrame = 0;
   private notesSaveInFlight: Promise<void> | null = null;
   private previewObserver: IntersectionObserver | null = null;
+  private previewRenderingEnabled: boolean;
 
   public constructor(private readonly options: SlideSorterOptions) {
     this.ownerWindow = options.container.ownerDocument.defaultView ?? window;
+    this.previewRenderingEnabled = options.previewRenderingEnabled ?? true;
     this.selectedSlideId = options.deck.slides[0]?.id ?? null;
     options.container.addEventListener?.("dragover", this.handleContainerDragOver);
     options.container.addEventListener?.("dragleave", this.handleContainerDragLeave);
@@ -152,6 +194,162 @@ export class SlideSorter {
     this.previewObserver = null;
     this.ownerWindow = ownerWindow;
     this.render();
+  }
+
+  /** Enables or suspends sorter thumbnail work without rebuilding slide rows. */
+  public setPreviewRenderingEnabled(enabled: boolean): void {
+    if (enabled === this.previewRenderingEnabled) return;
+    this.previewRenderingEnabled = enabled;
+    this.renderGeneration += 1;
+    this.previewObserver?.disconnect();
+    this.previewObserver = null;
+  }
+
+  /** Refreshes visible/nearby thumbnails when preview rendering is enabled. */
+  public refreshPreviews(): void {
+    if (!this.previewRenderingEnabled) return;
+    this.renderGeneration += 1;
+    const generation = this.renderGeneration;
+    this.previewObserver?.disconnect();
+    this.previewObserver = this.createPreviewObserver(generation);
+    const hosts = Array.from(
+      this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__preview"),
+    );
+    for (const host of hosts) {
+      const slide = this.options.deck.slides.find(
+        (candidate) => candidate.id === host.dataset.slideId,
+      );
+      if (!slide) continue;
+      if (this.previewObserver) this.previewObserver.observe(host);
+      else this.renderPreview(host, slide, generation);
+    }
+  }
+
+  /** Performs one lazy preview pass without enabling background thumbnail refreshes. */
+  public refreshPreviewsOnce(): void {
+    this.renderGeneration += 1;
+    const generation = this.renderGeneration;
+    const hosts = Array.from(
+      this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__preview"),
+    ).filter((host) => !host.firstElementChild);
+    if (hosts.length === 0) return;
+    const observer = this.createPreviewObserver(generation, true, true);
+    if (observer) {
+      for (const host of hosts) observer.observe(host);
+      return;
+    }
+
+    const selectedHost = hosts.find((host) => host.dataset.slideId === this.selectedSlideId);
+    const fallbackHosts = Array.from(
+      new Set([...(selectedHost ? [selectedHost] : []), ...hosts.slice(0, 8)]),
+    );
+    for (const host of fallbackHosts) {
+      const slide = this.options.deck.slides.find(
+        (candidate) => candidate.id === host.dataset.slideId,
+      );
+      if (slide) this.renderPreview(host, slide, generation, true);
+    }
+  }
+
+  /** Expands or collapses one animation editor without rebuilding unaffected slide rows. */
+  public setAnimationEditingSlideId(slideId: string | null): void {
+    const previousSlideId = this.options.animationEditingSlideId ?? null;
+    if (previousSlideId === slideId) return;
+
+    const affected = new Set<string>();
+    if (previousSlideId) affected.add(previousSlideId);
+    if (slideId) {
+      affected.add(slideId);
+      this.selectedSlideId = slideId;
+      if (this.expandedNotesSlideId && this.expandedNotesSlideId !== slideId) {
+        affected.add(this.expandedNotesSlideId);
+        this.expandedNotesSlideId = null;
+        this.notesTextarea = null;
+      }
+    }
+    this.options.animationEditingSlideId = slideId;
+    this.options.container.classList.toggle(
+      "has-expanded-editor",
+      Boolean(this.expandedNotesSlideId || slideId),
+    );
+    this.updateSelectedRows();
+    for (const affectedSlideId of affected) this.replaceRowPreservingPreview(affectedSlideId);
+  }
+
+  /** Applies one include/exclude change in place; preview pixels are deliberately untouched. */
+  public applyInclusion(slideId: string, excluded: boolean): void {
+    const slide = this.options.deck.slides.find((candidate) => candidate.id === slideId);
+    if (!slide) return;
+    slide.excluded = excluded;
+    this.options.deck.visibleSlides = this.options.deck.slides.filter((candidate) => !candidate.excluded);
+    if (this.options.deck.kind === "frame") this.options.deck.hasExplicitFrameOrder = true;
+    const row = this.getRow(slideId);
+    if (row) this.updateRowInclusion(row, slide);
+  }
+
+  /** Applies a persisted reorder by moving existing row nodes rather than recreating them. */
+  public applyReorder(fromIndex: number, toIndex: number): void {
+    const { deck, container } = this.options;
+    if (
+      fromIndex < 0 ||
+      toIndex < 0 ||
+      fromIndex >= deck.slides.length ||
+      toIndex >= deck.slides.length ||
+      fromIndex === toIndex
+    ) {
+      return;
+    }
+    const [moved] = deck.slides.splice(fromIndex, 1);
+    if (!moved) return;
+    deck.slides.splice(toIndex, 0, moved);
+    deck.slides.forEach((slide, index) => {
+      if (slide.kind === "frame") slide.order = index;
+      else slide.pairIndex = index;
+    });
+    deck.visibleSlides = deck.slides.filter((slide) => !slide.excluded);
+    if (deck.kind === "frame") deck.hasExplicitFrameOrder = true;
+
+    const rowsById = new Map(
+      Array.from(container.querySelectorAll<HTMLElement>(".slideshow-sorter__row")).map((row) => [
+        row.dataset.slideId ?? "",
+        row,
+      ]),
+    );
+    const movedRow = rowsById.get(moved.id);
+    const nextSlide = deck.slides[toIndex + 1];
+    const nextRow = nextSlide ? rowsById.get(nextSlide.id) : undefined;
+    if (movedRow) {
+      if (nextRow) container.insertBefore(movedRow, nextRow);
+      else container.appendChild(movedRow);
+    }
+    deck.slides.forEach((slide, index) => {
+      const row = rowsById.get(slide.id);
+      if (row) this.updateRowOrderState(row, slide, index);
+    });
+  }
+
+  /** Updates one slide's animation badge/model and refreshes only that preview when requested. */
+  public updateAnimationSteps(
+    slideId: string,
+    steps: readonly AnimationStep[],
+    refreshPreview = true,
+  ): void {
+    const slide = this.options.deck.slides.find((candidate) => candidate.id === slideId);
+    if (!slide) return;
+    Object.assign(slide, { animationSteps: steps.map((step) => structuredClone(step)) });
+    const row = this.getRow(slideId);
+    if (row) this.updateAnimationBadge(row, slide);
+    if (refreshPreview) this.refreshSlidePreview(slideId);
+  }
+
+  /** Refreshes only one slide image, retaining the existing bitmap until its replacement is ready. */
+  public refreshSlidePreview(slideId: string): void {
+    if (!this.previewRenderingEnabled) return;
+    const row = this.getRow(slideId);
+    const host = row?.querySelector<HTMLElement>(".slideshow-sorter__preview") ?? null;
+    const slide = this.options.deck.slides.find((candidate) => candidate.id === slideId);
+    if (!host || !slide) return;
+    this.renderPreview(host, slide, this.renderGeneration);
   }
 
   /** Returns the currently selected stable slide id. */
@@ -202,9 +400,16 @@ export class SlideSorter {
     if (!this.options.deck.slides.some((slide) => slide.id === slideId)) return;
     if (slideId !== this.selectedSlideId) {
       await this.flushNotes();
+      const previousNotesSlideId = this.expandedNotesSlideId;
       this.selectedSlideId = slideId;
       this.expandedNotesSlideId = null;
-      this.render(slideId);
+      this.notesTextarea = null;
+      this.options.container.classList.toggle(
+        "has-expanded-editor",
+        Boolean(this.options.animationEditingSlideId),
+      );
+      this.updateSelectedRows();
+      if (previousNotesSlideId) this.replaceRowPreservingPreview(previousNotesSlideId);
     }
     this.scrollToSlide(slideId, false);
   }
@@ -219,7 +424,9 @@ export class SlideSorter {
     const { container, deck } = this.options;
     const scrollTop = container.scrollTop;
     this.previewObserver?.disconnect();
-    this.previewObserver = this.createPreviewObserver(generation);
+    this.previewObserver = this.previewRenderingEnabled
+      ? this.createPreviewObserver(generation)
+      : null;
     container.replaceChildren();
     this.notesTextarea = null;
     if (deck.slides.length === 0) return;
@@ -245,14 +452,20 @@ export class SlideSorter {
       const previewHost = row.querySelector<HTMLElement>(".slideshow-sorter__preview");
       if (previewHost) {
         previewHost.dataset.slideId = slide.id;
-        if (this.previewObserver) this.previewObserver.observe(previewHost);
-        else this.renderPreview(previewHost, slide, generation);
+        if (this.previewRenderingEnabled) {
+          if (this.previewObserver) this.previewObserver.observe(previewHost);
+          else this.renderPreview(previewHost, slide, generation);
+        }
       }
     });
     container.scrollTop = scrollTop;
   }
 
-  private createPreviewObserver(generation: number): IntersectionObserver | null {
+  private createPreviewObserver(
+    generation: number,
+    allowWhileSuspended = false,
+    disconnectAfterCallback = false,
+  ): IntersectionObserver | null {
     const Observer = (
       this.ownerWindow as Window & { IntersectionObserver?: typeof IntersectionObserver }
     ).IntersectionObserver;
@@ -266,8 +479,9 @@ export class SlideSorter {
           const slide = this.options.deck.slides.find(
             (candidate) => candidate.id === host.dataset.slideId,
           );
-          if (slide) this.renderPreview(host, slide, generation);
+          if (slide) this.renderPreview(host, slide, generation, allowWhileSuspended);
         }
+        if (disconnectAfterCallback) observer.disconnect();
       },
       { root: this.options.container, rootMargin: "240px 0px" },
     );
@@ -277,14 +491,102 @@ export class SlideSorter {
     previewHost: HTMLElement,
     slide: SlideDeckSlide,
     generation: number,
+    allowWhileSuspended = false,
   ): void {
+    if (!this.previewRenderingEnabled && !allowWhileSuspended) return;
     void this.options.previewService
       .createPreview(slide, previewHost.ownerDocument, { targetWidth: 480 })
       .then((preview) => {
-        if (!preview || generation !== this.renderGeneration || !previewHost.isConnected) return;
+        if (
+          !preview ||
+          (!this.previewRenderingEnabled && !allowWhileSuspended) ||
+          generation !== this.renderGeneration ||
+          !previewHost.isConnected
+        )
+          return;
         previewHost.replaceChildren(preview);
       })
       .catch(() => undefined);
+  }
+
+  private getRow(slideId: string): HTMLElement | null {
+    return (
+      Array.from(
+        this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__row"),
+      ).find((row) => row.dataset.slideId === slideId) ?? null
+    );
+  }
+
+  private getSlideIndex(slideId: string): number {
+    return this.options.deck.slides.findIndex((slide) => slide.id === slideId);
+  }
+
+  private updateSelectedRows(): void {
+    this.options.container
+      .querySelectorAll<HTMLElement>(".slideshow-sorter__row")
+      .forEach((row) => row.classList.toggle("is-selected", row.dataset.slideId === this.selectedSlideId));
+  }
+
+  private replaceRowPreservingPreview(slideId: string): void {
+    const row = this.getRow(slideId);
+    const index = this.getSlideIndex(slideId);
+    const slide = this.options.deck.slides[index];
+    if (!row || !slide || index < 0) return;
+    const existingPreview = row.querySelector<HTMLElement>(".slideshow-sorter__preview");
+    if (existingPreview) this.previewObserver?.unobserve(existingPreview);
+    const previewChildren = existingPreview ? Array.from(existingPreview.childNodes) : [];
+    const replacement = this.createRow(slide, index);
+    const replacementPreview = replacement.querySelector<HTMLElement>(".slideshow-sorter__preview");
+    if (replacementPreview && previewChildren.length > 0) {
+      replacementPreview.replaceChildren(...previewChildren);
+    }
+    row.replaceWith(replacement);
+    if (replacementPreview && previewChildren.length === 0 && this.previewRenderingEnabled) {
+      if (this.previewObserver) this.previewObserver.observe(replacementPreview);
+      else this.renderPreview(replacementPreview, slide, this.renderGeneration);
+    }
+  }
+
+  private updateRowInclusion(row: HTMLElement, slide: SlideDeckSlide): void {
+    row.classList.toggle("is-excluded", slide.excluded);
+    const button = row.querySelector<HTMLButtonElement>(".slideshow-sorter__toggle-inclusion");
+    if (!button) return;
+    const label = this.options.t(slide.excluded ? "includeSlide" : "excludeSlide");
+    button.innerHTML = slide.excluded ? this.options.icons.eyeOff : this.options.icons.eye;
+    button.setAttribute("aria-label", label);
+  }
+
+  private updateRowOrderState(row: HTMLElement, slide: SlideDeckSlide, index: number): void {
+    const title = row.querySelector<HTMLElement>(".slideshow-sorter__title");
+    if (title) {
+      const titleText = this.options.t("slideNumberAndTitle", {
+        number: index + 1,
+        title: slide.title,
+      });
+      title.textContent = titleText;
+      title.title = titleText;
+    }
+    const up = row.querySelector<HTMLButtonElement>(".slideshow-sorter__move-up");
+    const down = row.querySelector<HTMLButtonElement>(".slideshow-sorter__move-down");
+    if (up) up.disabled = !this.options.reorderEnabled || index === 0;
+    if (down) {
+      down.disabled = !this.options.reorderEnabled || index === this.options.deck.slides.length - 1;
+    }
+  }
+
+  private updateAnimationBadge(row: HTMLElement, slide: SlideDeckSlide): void {
+    const badges = row.querySelector<HTMLElement>(".slideshow-sorter__badges");
+    if (!badges) return;
+    badges.querySelector(".slideshow-sorter__badge--animation")?.remove();
+    if (slide.animationSteps.length === 0) return;
+    const badge = row.ownerDocument.createElement("span");
+    const count = slide.animationSteps.length;
+    const label = this.options.t("animationCount", { count });
+    badge.className = "slideshow-sorter__badge slideshow-sorter__badge--animation";
+    badge.title = label;
+    badge.setAttribute("aria-label", label);
+    badge.innerHTML = `${this.options.icons.sparkles}<span class="slideshow-sorter__badge-compact-count" aria-hidden="true">${count}</span><span class="slideshow-sorter__badge-text">${label}</span>`;
+    badges.appendChild(badge);
   }
 
   private createIconButton(
@@ -318,7 +620,7 @@ export class SlideSorter {
     row.setAttribute("role", "listitem");
     row.addEventListener("click", () => void this.selectSlide(slide.id));
     row.addEventListener("dblclick", () => this.options.callbacks.zoomToSlide(slide));
-    row.addEventListener("keydown", (event) => this.handleRowKeydown(event, slide, index));
+    row.addEventListener("keydown", (event) => this.handleRowKeydown(event, slide));
 
     const top = doc.createElement("div");
     top.className = "slideshow-sorter__top";
@@ -376,7 +678,7 @@ export class SlideSorter {
           .querySelectorAll<HTMLElement>(".slideshow-sorter__row.is-selected")
           .forEach((selectedRow) => selectedRow.classList.remove("is-selected"));
         row.classList.add("is-selected");
-        this.draggedIndex = index;
+        this.draggedIndex = this.getSlideIndex(slide.id);
         row.classList.add("is-dragging");
         event.dataTransfer?.setData("text/plain", String(index));
         if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
@@ -398,37 +700,41 @@ export class SlideSorter {
 
     const actions = doc.createElement("div");
     actions.className = "slideshow-sorter__actions";
-    actions.appendChild(
-      this.createIconButton(
-        doc,
-        icons.chevronUp,
-        t("moveSlideUp"),
-        !reorderEnabled || index === 0,
-        () => {
-          void this.options.callbacks.move(index, index - 1);
-        },
-      ),
+    const moveUpButton = this.createIconButton(
+      doc,
+      icons.chevronUp,
+      t("moveSlideUp"),
+      !reorderEnabled || index === 0,
+      () => {
+        const currentIndex = this.getSlideIndex(slide.id);
+        if (currentIndex > 0) void this.options.callbacks.move(currentIndex, currentIndex - 1);
+      },
     );
-    actions.appendChild(
-      this.createIconButton(
-        doc,
-        icons.chevronDown,
-        t("moveSlideDown"),
-        !reorderEnabled || index === deck.slides.length - 1,
-        () => {
-          void this.options.callbacks.move(index, index + 1);
-        },
-      ),
+    moveUpButton.classList.add("slideshow-sorter__move-up");
+    actions.appendChild(moveUpButton);
+    const moveDownButton = this.createIconButton(
+      doc,
+      icons.chevronDown,
+      t("moveSlideDown"),
+      !reorderEnabled || index === deck.slides.length - 1,
+      () => {
+        const currentIndex = this.getSlideIndex(slide.id);
+        if (currentIndex >= 0 && currentIndex < this.options.deck.slides.length - 1) {
+          void this.options.callbacks.move(currentIndex, currentIndex + 1);
+        }
+      },
     );
-    actions.appendChild(
-      this.createIconButton(
-        doc,
-        slide.excluded ? icons.eyeOff : icons.eye,
-        slide.excluded ? t("includeSlide") : t("excludeSlide"),
-        false,
-        () => void this.options.callbacks.toggleInclusion(slide, !slide.excluded),
-      ),
+    moveDownButton.classList.add("slideshow-sorter__move-down");
+    actions.appendChild(moveDownButton);
+    const inclusionButton = this.createIconButton(
+      doc,
+      slide.excluded ? icons.eyeOff : icons.eye,
+      slide.excluded ? t("includeSlide") : t("excludeSlide"),
+      false,
+      () => void this.options.callbacks.toggleInclusion(slide, !slide.excluded),
     );
+    inclusionButton.classList.add("slideshow-sorter__toggle-inclusion");
+    actions.appendChild(inclusionButton);
     const animationExpanded = this.options.animationEditingSlideId === slide.id;
     const animationButton = this.createIconButton(
       doc,
@@ -443,7 +749,8 @@ export class SlideSorter {
     if (slide.kind === "path") {
       actions.appendChild(
         this.createIconButton(doc, icons.edit, t("editLineSlide"), false, () => {
-          void this.options.callbacks.editLineSlide(slide, index);
+          const currentIndex = this.getSlideIndex(slide.id);
+          if (currentIndex >= 0) void this.options.callbacks.editLineSlide(slide, currentIndex);
         }),
       );
     }
@@ -470,7 +777,9 @@ export class SlideSorter {
     return row;
   }
 
-  private handleRowKeydown(event: KeyboardEvent, slide: SlideDeckSlide, index: number): void {
+  private handleRowKeydown(event: KeyboardEvent, slide: SlideDeckSlide): void {
+    const index = this.getSlideIndex(slide.id);
+    if (index < 0) return;
     const rows = Array.from(
       this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__row"),
     );
@@ -617,16 +926,27 @@ export class SlideSorter {
     const rows = Array.from(
       this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__row"),
     );
-    const insertionIndex = getDropInsertionIndexFromRects(
-      rows.map((row) => row.getBoundingClientRect()),
-      pointerX,
-      pointerY,
-    );
-    if (insertionIndex === this.dropTargetIndex) return;
+    const rowRects = rows.map((row) => row.getBoundingClientRect());
+    const insertionIndex = getDropInsertionIndexFromRects(rowRects, pointerX, pointerY);
+    const placement = getDropIndicatorPlacement(rowRects, insertionIndex);
+    const indicatorKey = [
+      insertionIndex,
+      placement.beforeIndex ?? "none",
+      placement.afterIndex ?? "none",
+      placement.singleColumn ? 1 : 0,
+    ].join(":");
+    this.options.container.classList.toggle("is-single-column", placement.singleColumn);
+    if (indicatorKey === this.dropIndicatorKey) return;
+
     this.clearDropIndicator();
     this.dropTargetIndex = insertionIndex;
-    if (insertionIndex < rows.length) rows[insertionIndex]?.classList.add("is-drop-before");
-    else rows[rows.length - 1]?.classList.add("is-drop-after");
+    this.dropIndicatorKey = indicatorKey;
+    if (placement.beforeIndex !== null) {
+      rows[placement.beforeIndex]?.classList.add("is-drop-before");
+    }
+    if (placement.afterIndex !== null) {
+      rows[placement.afterIndex]?.classList.add("is-drop-after");
+    }
   }
 
   private clearDropIndicator(): void {
@@ -635,6 +955,7 @@ export class SlideSorter {
       [];
     rows.forEach((row) => row.classList.remove("is-drop-before", "is-drop-after"));
     this.dropTargetIndex = null;
+    this.dropIndicatorKey = null;
   }
 
   private updateAutoScroll(pointerY: number): void {

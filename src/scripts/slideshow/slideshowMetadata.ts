@@ -20,7 +20,16 @@ import type {
 
 const FRAME_SCHEMA_VERSION = 2 as const;
 const LINE_SCHEMA_VERSION = 2 as const;
-const animationEffects = new Set<AnimationEffect>(["appear", "fade", "slide", "zoom"]);
+const animationEffects = new Set<AnimationEffect>([
+  "appear",
+  "fade",
+  "slide",
+  "zoom",
+  "disappear",
+  "fade-out",
+  "slide-out",
+  "zoom-out",
+]);
 const animationTriggers = new Set<AnimationTrigger>(["advance", "after-delay"]);
 const animationDirections = new Set<AnimationDirection>(["left", "right", "up", "down"]);
 
@@ -71,7 +80,11 @@ function readAnimationTarget(value: unknown): AnimationTarget | null {
     return null;
   }
   if (value.type === "element" || value.type === "group") {
-    return { type: value.type, id: value.id };
+    return {
+      type: value.type,
+      id: value.id,
+      ...(value.scope === "viewport" ? { scope: "viewport" as const } : {}),
+    };
   }
   return null;
 }

@@ -119,6 +119,7 @@ export class SlideshowController {
       ea: options.ea,
       api: options.api,
       hostView: options.hostView,
+      config: options.config,
       onStateChange: () => this.emitPresentationState(),
     });
   }
@@ -446,37 +447,57 @@ export class SlideshowController {
     rect: NavigationRect,
     steps = this.config.transitionStepCount,
   ): Promise<void> {
-    const startTimer = Date.now();
     let watchdog = 0;
     while (this.busy && watchdog++ < 15) await sleepInWindow(this.ownerWindow, 100);
     if (this.busy && watchdog >= 15) return;
     this.busy = true;
     try {
-      this.api.updateScene({ appState: { shouldCacheIgnoreZoom: true } });
+      this.api.updateScene({
+        appState: { shouldCacheIgnoreZoom: true },
+        captureUpdate: "NEVER",
+      });
       const { scrollX, scrollY, zoom } = this.api.getAppState();
-      const zoomStep = (zoom.value - rect.nextZoom) / steps;
-      const xStep = (rect.left + scrollX) / steps;
-      const yStep = (rect.top + scrollY) / steps;
-      let index = 1;
-      while (index <= steps) {
+      const stepCount = Math.max(1, Math.trunc(steps));
+      const zoomStep = (zoom.value - rect.nextZoom) / stepCount;
+      const xStep = (rect.left + scrollX) / stepCount;
+      const yStep = (rect.top + scrollY) / stepCount;
+      const startTimer = Date.now();
+      let renderedStep = 0;
+      while (renderedStep < stepCount) {
+        const elapsed = Date.now() - startTimer;
+        const nextStep =
+          this.config.transitionDelay <= 0 || elapsed >= this.config.transitionDelay
+            ? stepCount
+            : Math.max(
+                1,
+                Math.min(
+                  Math.round(stepCount * (elapsed / this.config.transitionDelay)),
+                  stepCount,
+                ),
+              );
+        if (nextStep <= renderedStep) {
+          await sleepInWindow(this.ownerWindow, this.config.frameSleep);
+          continue;
+        }
+        renderedStep = nextStep;
         this.api.updateScene({
           appState: {
-            scrollX: scrollX - xStep * index,
-            scrollY: scrollY - yStep * index,
-            zoom: { value: (zoom.value - zoomStep * index) as typeof zoom.value },
+            scrollX: scrollX - xStep * renderedStep,
+            scrollY: scrollY - yStep * renderedStep,
+            zoom: { value: (zoom.value - zoomStep * renderedStep) as typeof zoom.value },
           },
+          captureUpdate: "NEVER",
         });
-        const elapsed = Date.now() - startTimer;
-        if (elapsed > this.config.transitionDelay) index = index < steps ? steps : steps + 1;
-        else {
-          const timeProgress = elapsed / this.config.transitionDelay;
-          index = Math.min(Math.round(steps * timeProgress), steps);
+        if (renderedStep < stepCount) {
           await sleepInWindow(this.ownerWindow, this.config.frameSleep);
         }
       }
-      this.api.updateScene({ appState: { shouldCacheIgnoreZoom: false } });
       if (this.isLaserOn) this.api.setActiveTool({ type: "laser" });
     } finally {
+      this.api.updateScene({
+        appState: { shouldCacheIgnoreZoom: false },
+        captureUpdate: "NEVER",
+      });
       this.busy = false;
     }
   }
@@ -490,7 +511,6 @@ export class SlideshowController {
       }
       this.stateEmissionPauseDepth += 1;
       try {
-        await this.animationRuntime?.leaveSlide();
         this.slide += 1;
         this.controls?.setSelectedSlide(this.slide + 1);
         await this.enterSlide(this.slide, false);
@@ -509,7 +529,6 @@ export class SlideshowController {
     }
     this.stateEmissionPauseDepth += 1;
     try {
-      await this.animationRuntime?.leaveSlide();
       this.slide -= 1;
       this.controls?.setSelectedSlide(this.slide + 1);
       await this.enterSlide(this.slide, true);
@@ -524,7 +543,6 @@ export class SlideshowController {
     const bounded = Math.min(Math.max(index, 0), this.setup.slides.length - 1);
     this.stateEmissionPauseDepth += 1;
     try {
-      await this.animationRuntime?.leaveSlide();
       this.slide = bounded;
       this.controls?.setSelectedSlide(this.slide + 1);
       await this.enterSlide(this.slide, false);

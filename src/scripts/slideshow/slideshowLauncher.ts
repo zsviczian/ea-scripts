@@ -383,6 +383,7 @@ export async function openSlideshowSidepanel(
       await sidepanel.activate(view, source, slideId);
       tab.open();
       sidepanel.revealRequestedSlide();
+      sidepanel.refreshPreviewsOnce();
       if (!shouldReassertActiveTab) return;
 
       await sleepInWindow(view.ownerWindow, 250);

@@ -110,6 +110,12 @@ export const SLIDESHOW_SIDEPANEL_STYLES = `
 .slideshow-sorter:not(.has-expanded-editor) .slideshow-sorter__row.is-drop-after::after { top:8px; bottom:8px; width:0; border-top:0; border-left:2px dashed var(--interactive-accent); }
 .slideshow-sorter:not(.has-expanded-editor) .slideshow-sorter__row.is-drop-before::before { left:-6px; right:auto; }
 .slideshow-sorter:not(.has-expanded-editor) .slideshow-sorter__row.is-drop-after::after { right:-6px; left:auto; }
+.slideshow-sorter:not(.has-expanded-editor).is-single-column .slideshow-sorter__row.is-drop-before { margin-top:22px; }
+.slideshow-sorter:not(.has-expanded-editor).is-single-column .slideshow-sorter__row.is-drop-after { margin-bottom:22px; }
+.slideshow-sorter:not(.has-expanded-editor).is-single-column .slideshow-sorter__row.is-drop-before::before,
+.slideshow-sorter:not(.has-expanded-editor).is-single-column .slideshow-sorter__row.is-drop-after::after { left:8px; right:8px; width:auto; border-left:0; border-top:2px dashed var(--interactive-accent); }
+.slideshow-sorter:not(.has-expanded-editor).is-single-column .slideshow-sorter__row.is-drop-before::before { top:-13px; bottom:auto; }
+.slideshow-sorter:not(.has-expanded-editor).is-single-column .slideshow-sorter__row.is-drop-after::after { top:auto; bottom:-13px; }
 .slideshow-sorter.has-expanded-editor .slideshow-sorter__row { width:min(100%,820px); box-sizing:border-box; }
 
 @container slideshow-panel (max-width: 300px) {

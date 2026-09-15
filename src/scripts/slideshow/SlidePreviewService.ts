@@ -9,6 +9,7 @@ import { getNavigationRect } from "../../sharedUtils/presentationGeometry";
 import { getAnimationSlideScope, resolveAnimationTargetElementIds } from "./AnimationRuntime";
 import type { SlideDeckSlide } from "./SlideDeck";
 import type { SlideshowConfig } from "./types";
+import { isExitAnimationEffect } from "./types";
 
 const FALLBACK_BACKGROUND = "#ffffff";
 const PREVIEW_CACHE_BYTES = 64 * 1024 * 1024;
@@ -20,6 +21,14 @@ interface CachedPreview {
   objectUrl: string;
   backgroundColor: string;
 }
+
+interface CachedElementFingerprint {
+  version: unknown;
+  versionNonce: unknown;
+  value: string;
+}
+
+const elementFingerprintCache = new WeakMap<object, CachedElementFingerprint>();
 
 export interface SlidePreviewState {
   /** Number of frame build steps that should already be visible. Omit for final state. */
@@ -64,7 +73,26 @@ function cloneWithoutMetadata(element: ExcalidrawElement): Record<string, unknow
 
 /** Creates a stable visual fingerprint that ignores slideshow-only metadata changes. */
 export function getSceneVisualFingerprint(elements: readonly ExcalidrawElement[]): string {
-  return JSON.stringify(elements.map(cloneWithoutMetadata));
+  return `[${elements
+    .map((element) => {
+      const raw = element as unknown as Record<string, unknown>;
+      const cacheKey = element as unknown as object;
+      if (raw.version === undefined && raw.versionNonce === undefined) {
+        return JSON.stringify(cloneWithoutMetadata(element));
+      }
+      const cached = elementFingerprintCache.get(cacheKey);
+      if (cached && cached.version === raw.version && cached.versionNonce === raw.versionNonce) {
+        return cached.value;
+      }
+      const value = JSON.stringify(cloneWithoutMetadata(element));
+      elementFingerprintCache.set(cacheKey, {
+        version: raw.version,
+        versionNonce: raw.versionNonce,
+        value,
+      });
+      return value;
+    })
+    .join(",")}]`;
 }
 
 /** Fingerprints only content that can be visible in one preview export. */
@@ -87,19 +115,54 @@ export function getHiddenBuildElementIds(
   slide: SlideDeckSlide,
   completedAnimationSteps: number | undefined,
   elements: readonly ExcalidrawElement[],
+  config?: Pick<SlideshowConfig, "printSlideWidth" | "printSlideHeight" | "maxZoom">,
 ): string[] {
-  if (completedAnimationSteps === undefined) return [];
+  if (slide.animationSteps.length === 0) return [];
+  if (
+    completedAnimationSteps === undefined &&
+    !slide.animationSteps.some((step) => isExitAnimationEffect(step.effect))
+  ) {
+    return [];
+  }
   const completed = Math.min(
-    Math.max(Math.trunc(completedAnimationSteps), 0),
+    Math.max(
+      Math.trunc(completedAnimationSteps ?? slide.animationSteps.length),
+      0,
+    ),
     slide.animationSteps.length,
   );
-  const ids = new Set<string>();
-  for (const step of slide.animationSteps.slice(completed)) {
-    for (const id of resolveAnimationTargetElementIds(getAnimationSlideScope(slide), step.targets, elements)) {
-      ids.add(id);
+  const scope = getAnimationSlideScope(slide, config);
+  const resolved = slide.animationSteps.map((step) => ({
+    step,
+    ids: resolveAnimationTargetElementIds(scope, step.targets, elements),
+  }));
+  const claimedByLaterStep = new Set<string>();
+  for (let index = resolved.length - 1; index >= 0; index -= 1) {
+    const current = resolved[index];
+    if (!current) continue;
+    const phase = isExitAnimationEffect(current.step.effect) ? "exit" : "enter";
+    current.ids = current.ids.filter((id) => !claimedByLaterStep.has(`${phase}:${id}`));
+    for (const id of current.ids) claimedByLaterStep.add(`${phase}:${id}`);
+  }
+
+  const hiddenIds = new Set<string>();
+  const initialized = new Set<string>();
+  for (const current of resolved) {
+    const exits = isExitAnimationEffect(current.step.effect);
+    for (const id of current.ids) {
+      if (initialized.has(id)) continue;
+      initialized.add(id);
+      if (!exits) hiddenIds.add(id);
     }
   }
-  return [...ids].sort();
+  for (const current of resolved.slice(0, completed)) {
+    const exits = isExitAnimationEffect(current.step.effect);
+    for (const id of current.ids) {
+      if (exits) hiddenIds.add(id);
+      else hiddenIds.delete(id);
+    }
+  }
+  return [...hiddenIds].sort();
 }
 
 /** Owns bounded slide preview exports and their size-aware object-URL cache. */
@@ -232,6 +295,7 @@ export class SlidePreviewService {
       slide,
       state.completedAnimationSteps,
       elements,
+      this.config,
     );
     const appState = this.api.getAppState();
     const targetWidth = Math.max(Math.trunc(state.targetWidth ?? DEFAULT_PREVIEW_WIDTH), 1);

@@ -4,8 +4,9 @@
  */
 
 import type { SlideDeckSlide } from "./SlideDeck";
-import type { SlideRect } from "../../sharedUtils/presentationGeometry";
-import type { AnimationStep, AnimationTarget } from "./types";
+import { getNavigationRect, type SlideRect } from "../../sharedUtils/presentationGeometry";
+import type { AnimationStep, AnimationTarget, SlideshowConfig } from "./types";
+import { isExitAnimationEffect } from "./types";
 
 interface AnimationElementShape {
   id: string;
@@ -41,6 +42,7 @@ interface ActiveAnimationSlide {
 
 export interface AnimationSlideScope {
   rect: SlideRect;
+  legacyRect?: SlideRect;
   ownerElementId?: string;
 }
 
@@ -48,8 +50,11 @@ export interface AnimationRuntimeOptions {
   ea: ExcalidrawAutomate;
   api: ExcalidrawAPI;
   hostView: ScriptExcalidrawView;
+  config?: Pick<SlideshowConfig, "printSlideWidth" | "printSlideHeight" | "maxZoom">;
   onStateChange?(state: AnimationRuntimeState): void;
 }
+
+const ANIMATION_ELIGIBILITY_MARGIN_RATIO = 0.1;
 
 function asAnimationShape(element: ExcalidrawElement): AnimationElementShape {
   return element as unknown as AnimationElementShape;
@@ -75,6 +80,34 @@ interface AnimationOverlayViewState {
   scrollX: number;
   scrollY: number;
   zoom: { value: number };
+}
+
+interface AnimationElementContext {
+  byId: Map<string, ExcalidrawElement>;
+  groupMembers: Map<string, ExcalidrawElement[]>;
+}
+
+const animationElementContextCache = new WeakMap<object, AnimationElementContext>();
+
+function getAnimationElementContext(
+  elements: readonly ExcalidrawElement[],
+): AnimationElementContext {
+  const cacheKey = elements as unknown as object;
+  const cached = animationElementContextCache.get(cacheKey);
+  if (cached) return cached;
+  const byId = new Map<string, ExcalidrawElement>();
+  const groupMembers = new Map<string, ExcalidrawElement[]>();
+  for (const element of elements) {
+    byId.set(element.id, element);
+    for (const groupId of asAnimationShape(element).groupIds ?? []) {
+      const members = groupMembers.get(groupId);
+      if (members) members.push(element);
+      else groupMembers.set(groupId, [element]);
+    }
+  }
+  const context = { byId, groupMembers };
+  animationElementContextCache.set(cacheKey, context);
+  return context;
 }
 
 /**
@@ -158,10 +191,42 @@ function rectFromSlideRect(rect: SlideRect): ElementRect {
   };
 }
 
-/** Returns the geometric animation scope for either a frame slide or a line slide. */
-export function getAnimationSlideScope(slide: SlideDeckSlide): AnimationSlideScope {
+/** Returns the animation scope, optionally matching the configured presentation viewport plus margin. */
+export function getAnimationSlideScope(
+  slide: SlideDeckSlide,
+  config?: Pick<SlideshowConfig, "printSlideWidth" | "printSlideHeight" | "maxZoom">,
+  viewportDimensions?: { width: number; height: number },
+): AnimationSlideScope {
+  if (!config) {
+    return {
+      rect: slide.rect,
+      ownerElementId: slide.kind === "frame" ? slide.frameId : slide.pathId,
+    };
+  }
+  const configuredViewport = getNavigationRect(
+    slide.rect,
+    { width: config.printSlideWidth, height: config.printSlideHeight },
+    config.maxZoom,
+  );
+  const liveViewport = viewportDimensions
+    ? getNavigationRect(slide.rect, viewportDimensions, config.maxZoom)
+    : configuredViewport;
+  const left = Math.min(configuredViewport.left, liveViewport.left);
+  const top = Math.min(configuredViewport.top, liveViewport.top);
+  const right = Math.max(configuredViewport.right, liveViewport.right);
+  const bottom = Math.max(configuredViewport.bottom, liveViewport.bottom);
+  const width = Math.max(right - left, Number.EPSILON);
+  const height = Math.max(bottom - top, Number.EPSILON);
+  const marginX = width * ANIMATION_ELIGIBILITY_MARGIN_RATIO;
+  const marginY = height * ANIMATION_ELIGIBILITY_MARGIN_RATIO;
   return {
-    rect: slide.rect,
+    rect: {
+      x1: left - marginX,
+      y1: top - marginY,
+      x2: right + marginX,
+      y2: bottom + marginY,
+    },
+    legacyRect: slide.rect,
     ownerElementId: slide.kind === "frame" ? slide.frameId : slide.pathId,
   };
 }
@@ -179,15 +244,27 @@ function resolveAnimationScope(
   };
 }
 
-function elementOverlapsScope(element: ExcalidrawElement, scope: AnimationSlideScope): boolean {
-  return element.id !== scope.ownerElementId && rectsOverlap(getElementRect(element), rectFromSlideRect(scope.rect));
+function elementOverlapsScope(
+  element: ExcalidrawElement,
+  scope: AnimationSlideScope,
+  useViewportScope = false,
+): boolean {
+  const rect = useViewportScope ? scope.rect : (scope.legacyRect ?? scope.rect);
+  return element.id !== scope.ownerElementId && rectsOverlap(getElementRect(element), rectFromSlideRect(rect));
 }
 
 function getElementById(
   elements: readonly ExcalidrawElement[],
   id: string,
 ): ExcalidrawElement | undefined {
-  return elements.find((element) => element.id === id);
+  return getAnimationElementContext(elements).byId.get(id);
+}
+
+function getGroupMembers(
+  elements: readonly ExcalidrawElement[],
+  groupId: string,
+): readonly ExcalidrawElement[] {
+  return getAnimationElementContext(elements).groupMembers.get(groupId) ?? [];
 }
 
 function canonicalElementTargetId(
@@ -228,10 +305,11 @@ function visualUnitOverlapsScope(
   element: ExcalidrawElement,
   scope: AnimationSlideScope,
   elements: readonly ExcalidrawElement[],
+  useViewportScope = false,
 ): boolean {
   return expandBoundVisualUnit([element.id], elements).some((id) => {
     const candidate = getElementById(elements, id);
-    return candidate ? elementOverlapsScope(candidate, scope) : false;
+    return candidate ? elementOverlapsScope(candidate, scope, useViewportScope) : false;
   });
 }
 
@@ -245,16 +323,20 @@ export function resolveAnimationTargetElementIds(
   if (!scope) return [];
   const baseIds = new Set<string>();
   for (const target of targets) {
+    const useViewportScope = target.scope === "viewport";
     if (target.type === "element") {
       const element = getElementById(elements, target.id);
-      if (element && visualUnitOverlapsScope(element, scope, elements)) {
+      if (element && visualUnitOverlapsScope(element, scope, elements, useViewportScope)) {
         baseIds.add(canonicalElementTargetId(element, elements));
       }
       continue;
     }
-    for (const element of elements) {
+    for (const element of getGroupMembers(elements, target.id)) {
       const shape = asAnimationShape(element);
-      if (shape.groupIds?.includes(target.id) && elementOverlapsScope(element, scope)) {
+      if (
+        shape.groupIds?.includes(target.id) &&
+        elementOverlapsScope(element, scope, useViewportScope)
+      ) {
         baseIds.add(element.id);
       }
     }
@@ -267,9 +349,9 @@ function animationTargetExists(
   elements: readonly ExcalidrawElement[],
 ): boolean {
   if (target.type === "element") {
-    return elements.some((element) => element.id === target.id);
+    return getElementById(elements, target.id) !== undefined;
   }
-  return elements.some((element) => asAnimationShape(element).groupIds?.includes(target.id));
+  return getGroupMembers(elements, target.id).length > 0;
 }
 
 /**
@@ -305,16 +387,23 @@ export function captureAnimationTargets(
     .map(([groupId]) => groupId);
 
   for (const groupId of selectedGroups) {
-    const members = elements.filter((element) => asAnimationShape(element).groupIds?.includes(groupId));
-    const inFrame = members.filter((element) => elementOverlapsScope(element, scope));
+    const members = getGroupMembers(elements, groupId);
+    const inViewport = members.filter((element) => elementOverlapsScope(element, scope, true));
     const selectedOutside = members.some(
-      (element) => selectedElementIds[element.id] && !elementOverlapsScope(element, scope),
+      (element) => selectedElementIds[element.id] && !elementOverlapsScope(element, scope, true),
     );
-    if (inFrame.length > 0) {
+    if (inViewport.length > 0) {
       const key = `group:${groupId}`;
       if (!seen.has(key)) {
         seen.add(key);
-        targets.push({ type: "group", id: groupId });
+        const needsViewportScope = inViewport.some(
+          (element) => !elementOverlapsScope(element, scope),
+        );
+        targets.push({
+          type: "group",
+          id: groupId,
+          ...(needsViewportScope ? { scope: "viewport" as const } : {}),
+        });
       }
     }
     if (selectedOutside) ignoredSelectionCount += 1;
@@ -324,7 +413,7 @@ export function captureAnimationTargets(
     if (!selectedElementIds[element.id] || element.id === scope.ownerElementId) continue;
     const shape = asAnimationShape(element);
     if (selectedGroups.some((groupId) => shape.groupIds?.includes(groupId))) continue;
-    if (!visualUnitOverlapsScope(element, scope, elements)) {
+    if (!visualUnitOverlapsScope(element, scope, elements, true)) {
       ignoredSelectionCount += 1;
       continue;
     }
@@ -332,7 +421,13 @@ export function captureAnimationTargets(
     const key = `element:${id}`;
     if (!seen.has(key)) {
       seen.add(key);
-      targets.push({ type: "element", id });
+      targets.push({
+        type: "element",
+        id,
+        ...(!visualUnitOverlapsScope(element, scope, elements)
+          ? { scope: "viewport" as const }
+          : {}),
+      });
     }
   }
 
@@ -359,9 +454,16 @@ export function removeAnimationTargetConflicts(
   incomingTargets: readonly AnimationTarget[],
   elements: readonly ExcalidrawElement[],
   editedStepId?: string,
+  incomingEffect?: AnimationStep["effect"],
 ): AnimationStep[] {
   return steps.flatMap((step) => {
     if (step.id === editedStepId) return [structuredClone(step)];
+    if (
+      incomingEffect !== undefined &&
+      isExitAnimationEffect(step.effect) !== isExitAnimationEffect(incomingEffect)
+    ) {
+      return [structuredClone(step)];
+    }
     const targets = step.targets.filter(
       (target) => !incomingTargets.some((incoming) => targetsOverlap(slideScope, target, incoming, elements)),
     );
@@ -386,8 +488,9 @@ function resolveRuntimeSteps(
   for (let index = resolved.length - 1; index >= 0; index -= 1) {
     const current = resolved[index];
     if (!current) continue;
-    current.elementIds = current.elementIds.filter((id) => !claimedByLaterStep.has(id));
-    for (const id of current.elementIds) claimedByLaterStep.add(id);
+    const phase = isExitAnimationEffect(current.step.effect) ? "exit" : "enter";
+    current.elementIds = current.elementIds.filter((id) => !claimedByLaterStep.has(`${phase}:${id}`));
+    for (const id of current.elementIds) claimedByLaterStep.add(`${phase}:${id}`);
   }
   return resolved.filter((step) => step.elementIds.length > 0);
 }
@@ -399,10 +502,12 @@ export class AnimationRuntime {
   private readonly hostView: ScriptExcalidrawView;
   private readonly ownerWindow: Window;
   private readonly onStateChange: ((state: AnimationRuntimeState) => void) | undefined;
+  private readonly config: AnimationRuntimeOptions["config"];
   private active: ActiveAnimationSlide | null = null;
   private timer = 0;
   private generation = 0;
   private overlays = new Set<HTMLElement>();
+  private readonly overlayMarkupCache = new Map<string, string>();
   private buildQueue: Promise<void> = Promise.resolve();
 
   public constructor(options: AnimationRuntimeOptions) {
@@ -410,6 +515,7 @@ export class AnimationRuntime {
     this.api = options.api;
     this.hostView = options.hostView;
     this.ownerWindow = options.hostView.ownerWindow;
+    this.config = options.config;
     this.onStateChange = options.onStateChange;
   }
 
@@ -436,7 +542,12 @@ export class AnimationRuntime {
   ): Promise<void> {
     await this.leaveSlide();
     const elements = this.api.getSceneElements() as readonly ExcalidrawElement[];
-    const scope = getAnimationSlideScope(slide);
+    const appState = this.config ? this.api.getAppState() : null;
+    const scope = getAnimationSlideScope(
+      slide,
+      this.config,
+      appState ? { width: appState.width, height: appState.height } : undefined,
+    );
     const steps = resolveRuntimeSteps(scope, slide.animationSteps, elements);
     const allIds = new Set(steps.flatMap((step) => step.elementIds));
     const originals = new Map<string, ExcalidrawElement>();
@@ -451,7 +562,7 @@ export class AnimationRuntime {
     };
     const generation = this.generation;
     try {
-      if (!fullyBuilt) this.applyBuildState();
+      this.applyBuildState();
       this.emitState();
       if (startTimedSteps) this.schedulePendingTimedStep();
     } catch (error) {
@@ -538,11 +649,20 @@ export class AnimationRuntime {
     }
   }
 
+  /** Drops transient animation state without touching the current scene. */
+  public abandonActiveSlide(): void {
+    this.invalidateAsyncWork();
+    this.active = null;
+    this.overlayMarkupCache.clear();
+    this.emitState();
+  }
+
   /** Restores every animation target to its final/original visibility and invalidates callbacks. */
   public async finishActiveSlide(): Promise<void> {
     this.invalidateAsyncWork();
     if (this.active) this.restoreOriginalOpacities();
     this.active = null;
+    this.overlayMarkupCache.clear();
     this.emitState();
   }
 
@@ -587,7 +707,8 @@ export class AnimationRuntime {
     if (!active) return task();
     const completedSteps = active.completedSteps;
     this.invalidateAsyncWork();
-    this.restoreOriginalOpacities();
+    active.completedSteps = active.steps.length;
+    this.applyBuildState();
     try {
       return await task();
     } finally {
@@ -622,12 +743,26 @@ export class AnimationRuntime {
   private applyBuildState(): void {
     const active = this.active;
     if (!active) return;
-    const visibleIds = new Set(
-      active.steps.slice(0, active.completedSteps).flatMap((resolved) => resolved.elementIds),
-    );
+    const hiddenIds = new Set<string>();
+    const initialized = new Set<string>();
+    for (const resolved of active.steps) {
+      const exits = isExitAnimationEffect(resolved.step.effect);
+      for (const id of resolved.elementIds) {
+        if (initialized.has(id)) continue;
+        initialized.add(id);
+        if (!exits) hiddenIds.add(id);
+      }
+    }
+    for (const resolved of active.steps.slice(0, active.completedSteps)) {
+      const exits = isExitAnimationEffect(resolved.step.effect);
+      for (const id of resolved.elementIds) {
+        if (exits) hiddenIds.add(id);
+        else hiddenIds.delete(id);
+      }
+    }
     const opacities = new Map<string, number>();
     for (const [id, original] of active.originals) {
-      opacities.set(id, visibleIds.has(id) ? getOpacity(original) : 0);
+      opacities.set(id, hiddenIds.has(id) ? 0 : getOpacity(original));
     }
     this.applyOpacities(opacities);
   }
@@ -643,10 +778,14 @@ export class AnimationRuntime {
   private applyOpacities(opacities: ReadonlyMap<string, number>): void {
     if (opacities.size === 0) return;
     const current = this.api.getSceneElements() as readonly ExcalidrawElement[];
+    let changed = false;
     const elements = current.map((element) => {
       const opacity = opacities.get(element.id);
-      return opacity === undefined ? element : ({ ...element, opacity } as ExcalidrawElement);
+      if (opacity === undefined || getOpacity(element) === opacity) return element;
+      changed = true;
+      return { ...element, opacity } as ExcalidrawElement;
     });
+    if (!changed) return;
     this.api.updateScene({ elements, captureUpdate: "NEVER" });
   }
 
@@ -655,12 +794,13 @@ export class AnimationRuntime {
     reverse: boolean,
     generation: number,
   ): Promise<void> {
-    const { step, elementIds } = resolved;
-    if (step.effect === "appear") {
-      this.applyResolvedOpacity(resolved, reverse ? 0 : null);
+    const { step } = resolved;
+    const endsHidden = isExitAnimationEffect(step.effect) !== reverse;
+    if (step.effect === "appear" || step.effect === "disappear") {
+      this.applyResolvedOpacity(resolved, endsHidden ? 0 : null);
       return;
     }
-    if (step.effect === "fade") {
+    if (step.effect === "fade" || step.effect === "fade-out") {
       await this.animateFade(resolved, reverse, generation);
       return;
     }
@@ -685,6 +825,7 @@ export class AnimationRuntime {
   ): Promise<void> {
     const active = this.active;
     if (!active) return;
+    const endsHidden = isExitAnimationEffect(resolved.step.effect) !== reverse;
     const duration = resolved.step.durationMs ?? 350;
     const started = this.ownerWindow.performance.now();
     while (generation === this.generation) {
@@ -695,7 +836,7 @@ export class AnimationRuntime {
         const original = active.originals.get(id);
         if (!original) continue;
         const originalOpacity = getOpacity(original);
-        opacities.set(id, reverse ? originalOpacity * (1 - progress) : originalOpacity * progress);
+        opacities.set(id, originalOpacity * (endsHidden ? 1 - progress : progress));
       }
       this.applyOpacities(opacities);
       if (progress >= 1) break;
@@ -715,19 +856,25 @@ export class AnimationRuntime {
     }
     this.overlays.add(overlay);
     const duration = resolved.step.durationMs ?? 350;
+    const endsHidden = isExitAnimationEffect(resolved.step.effect) !== reverse;
     const motion = this.getOverlayMotion(resolved.step, overlay);
     overlay.style.transition = "none";
     overlay.style.opacity = "1";
-    overlay.style.transform = reverse ? motion.end : motion.start;
-    if (reverse) this.applyResolvedOpacity(resolved, 0);
+    overlay.style.transform = endsHidden ? motion.end : motion.start;
+    this.applyResolvedOpacity(resolved, 0);
     await this.nextFrame(generation);
     await this.nextFrame(generation);
     if (generation !== this.generation) return;
     overlay.style.transition = `transform ${duration}ms ease, opacity ${duration}ms ease`;
-    overlay.style.transform = reverse ? motion.start : motion.end;
-    if (reverse && resolved.step.effect === "zoom") overlay.style.opacity = "0";
+    overlay.style.transform = endsHidden ? motion.start : motion.end;
+    if (
+      endsHidden &&
+      (resolved.step.effect === "zoom" || resolved.step.effect === "zoom-out")
+    ) {
+      overlay.style.opacity = "0";
+    }
     await this.wait(duration + 24, generation);
-    if (!reverse && generation === this.generation) this.applyResolvedOpacity(resolved, null);
+    if (generation === this.generation) this.applyResolvedOpacity(resolved, endsHidden ? 0 : null);
     overlay.remove();
     this.overlays.delete(overlay);
   }
@@ -736,7 +883,9 @@ export class AnimationRuntime {
     step: AnimationStep,
     overlay: HTMLElement,
   ): { start: string; end: string } {
-    if (step.effect === "zoom") return { start: "scale(0.05)", end: "scale(1)" };
+    if (step.effect === "zoom" || step.effect === "zoom-out") {
+      return { start: "scale(0.05)", end: "scale(1)" };
+    }
     const rect = overlay.getBoundingClientRect();
     const appState = this.api.getAppState();
     const horizontal = Math.max(rect.width, appState.width * 0.2, 80);
@@ -760,20 +909,26 @@ export class AnimationRuntime {
       .filter((element): element is ExcalidrawElement => Boolean(element));
     if (originals.length === 0) return null;
     this.ea.setView(this.hostView);
-    const svg = await this.ea.createViewSVG({
-      withBackground: false,
-      theme: this.api.getAppState().theme,
-      frameRendering: { enabled: false, name: false, outline: false, clip: false },
-      padding: 0,
-      selectedOnly: false,
-      skipInliningFonts: false,
-      embedScene: false,
-      elementsOverride: originals,
-    });
+    const state = this.api.getAppState();
+    const overlayCacheKey = `${state.theme}|${elementIds.join(",")}`;
+    let svgMarkup = this.overlayMarkupCache.get(overlayCacheKey);
+    if (!svgMarkup) {
+      const svg = await this.ea.createViewSVG({
+        withBackground: false,
+        theme: state.theme,
+        frameRendering: { enabled: false, name: false, outline: false, clip: false },
+        padding: 0,
+        selectedOnly: false,
+        skipInliningFonts: false,
+        embedScene: false,
+        elementsOverride: originals,
+      });
+      svgMarkup = svg.outerHTML;
+      this.overlayMarkupCache.set(overlayCacheKey, svgMarkup);
+    }
     const excalidraw = this.hostView.contentEl.querySelector<HTMLElement>(".excalidraw");
     if (!excalidraw) return null;
     const bounds = this.ea.getBoundingBox(originals);
-    const state = this.api.getAppState();
     const hostRect = excalidraw.getBoundingClientRect();
     const placement = getAnimationOverlayPlacement(bounds, state, {
       left: hostRect.left + excalidraw.clientLeft,
@@ -789,7 +944,7 @@ export class AnimationRuntime {
     overlay.style.width = `${placement.width}px`;
     overlay.style.height = `${placement.height}px`;
     overlay.style.transformOrigin = "center center";
-    overlay.innerHTML = svg.outerHTML;
+    overlay.innerHTML = svgMarkup;
     const child = overlay.firstElementChild as SVGSVGElement | null;
     if (child) {
       child.setAttribute("width", "100%");

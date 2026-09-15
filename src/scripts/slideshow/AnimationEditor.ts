@@ -24,8 +24,10 @@ import type {
   AnimationStep,
   AnimationTarget,
   AnimationTrigger,
+  SlideshowConfig,
   SlideshowIcons,
 } from "./types";
+import { isExitAnimationEffect, isInstantAnimationEffect } from "./types";
 
 export interface AnimationEditorOptions {
   ea: ExcalidrawAutomate;
@@ -33,13 +35,14 @@ export interface AnimationEditorOptions {
   hostView: ScriptExcalidrawView;
   container: HTMLElement;
   slide: SlideDeckSlide;
+  config: SlideshowConfig;
   icons: SlideshowIcons;
   t: SlideshowTranslator;
-  onSaved(): void;
+  onSaved(steps: readonly AnimationStep[]): void;
 }
 
 function targetKey(target: AnimationTarget): string {
-  return `${target.type}:${target.id}`;
+  return `${target.type}:${target.id}:${target.scope ?? "slide"}`;
 }
 
 function sameTargets(left: readonly AnimationTarget[], right: readonly AnimationTarget[]): boolean {
@@ -82,13 +85,16 @@ export class AnimationEditor {
   private recycleTimer = 0;
   private pendingRecycleElements: readonly ExcalidrawElement[] | null = null;
   private readonly previewRuntime: AnimationRuntime;
+  private readonly drawingFile: ScriptExcalidrawView["file"];
 
   public constructor(private readonly options: AnimationEditorOptions) {
     this.steps = options.slide.animationSteps.map((step) => structuredClone(step));
+    this.drawingFile = options.hostView.file;
     this.previewRuntime = new AnimationRuntime({
       ea: options.ea,
       api: options.api,
       hostView: options.hostView,
+      config: options.config,
     });
   }
 
@@ -150,6 +156,10 @@ export class AnimationEditor {
       ["fade", t("animationEffectFade")],
       ["slide", t("animationEffectSlide")],
       ["zoom", t("animationEffectZoom")],
+      ["disappear", t("animationEffectDisappear")],
+      ["fade-out", t("animationEffectFadeOut")],
+      ["slide-out", t("animationEffectSlideOut")],
+      ["zoom-out", t("animationEffectZoomOut")],
     ], this.effect, (value) => {
       this.effect = value;
       this.render();
@@ -172,21 +182,29 @@ export class AnimationEditor {
         }),
       );
     }
-    if (this.effect !== "appear") {
+    if (!isInstantAnimationEffect(this.effect)) {
       form.appendChild(
         this.numberField(doc, t("animationDurationMs"), this.durationMs, 0, (value) => {
           this.durationMs = value;
         }),
       );
     }
-    if (this.effect === "slide") {
+    if (this.effect === "slide" || this.effect === "slide-out") {
+      const directionOptions: Array<[AnimationDirection, string]> = isExitAnimationEffect(this.effect)
+        ? [
+            ["left", t("animationDirectionOutLeft")],
+            ["right", t("animationDirectionOutRight")],
+            ["up", t("animationDirectionOutUp")],
+            ["down", t("animationDirectionOutDown")],
+          ]
+        : [
+            ["left", t("animationDirectionLeft")],
+            ["right", t("animationDirectionRight")],
+            ["up", t("animationDirectionUp")],
+            ["down", t("animationDirectionDown")],
+          ];
       form.appendChild(
-        this.createSelect<AnimationDirection>(doc, t("animationDirection"), [
-          ["left", t("animationDirectionLeft")],
-          ["right", t("animationDirectionRight")],
-          ["up", t("animationDirectionUp")],
-          ["down", t("animationDirectionDown")],
-        ], this.direction, (value) => {
+        this.createSelect<AnimationDirection>(doc, t("animationDirection"), directionOptions, this.direction, (value) => {
           this.direction = value;
         }),
       );
@@ -213,9 +231,7 @@ export class AnimationEditor {
       cancelButton.type = "button";
       cancelButton.textContent = t("newAnimationStep");
       cancelButton.addEventListener("click", () => {
-        this.selectedStepId = null;
-        this.targets = [];
-        this.resetFormDefaults();
+        this.startNewStep();
         this.render();
       });
       formActions.appendChild(cancelButton);
@@ -253,9 +269,15 @@ export class AnimationEditor {
     elements: readonly ExcalidrawElement[],
     appState: Pick<AppState, "selectedElementIds" | "selectedGroupIds">,
   ): void {
-    if (this.destroyed || Date.now() < this.ignoreSelectionUntil) return;
+    if (
+      this.destroyed ||
+      !this.isCurrentDrawing() ||
+      Date.now() < this.ignoreSelectionUntil
+    ) {
+      return;
+    }
     const captured = captureAnimationTargets(
-      getAnimationSlideScope(this.options.slide),
+      this.getSlideScope(),
       elements,
       appState.selectedElementIds,
       appState.selectedGroupIds,
@@ -278,11 +300,12 @@ export class AnimationEditor {
     if (this.recycleTimer) this.options.hostView.ownerWindow.clearTimeout(this.recycleTimer);
     this.recycleTimer = 0;
     this.pendingRecycleElements = null;
-    await this.previewRuntime.leaveSlide();
+    if (this.isCurrentDrawing()) await this.previewRuntime.leaveSlide();
+    else this.previewRuntime.abandonActiveSlide();
   }
 
   private scheduleMissingTargetRecycle(elements: readonly ExcalidrawElement[]): void {
-    if (this.destroyed) return;
+    if (this.destroyed || !this.isCurrentDrawing()) return;
     this.pendingRecycleElements = elements;
     const ownerWindow = this.options.hostView.ownerWindow;
     if (this.recycleTimer) ownerWindow.clearTimeout(this.recycleTimer);
@@ -293,7 +316,7 @@ export class AnimationEditor {
   }
 
   private async recycleMissingTargets(): Promise<void> {
-    if (this.destroyed) return;
+    if (this.destroyed || !this.isCurrentDrawing()) return;
     const elements = this.pendingRecycleElements ?? this.options.ea.getViewElements();
     this.pendingRecycleElements = null;
     if (this.saving) {
@@ -307,6 +330,7 @@ export class AnimationEditor {
     this.saving = true;
     try {
       await this.saveAnimationSteps(steps);
+      if (!this.isCurrentDrawing()) return;
       this.steps = steps;
       if (this.selectedStepId) {
         const selectedStep = steps.find((step) => step.id === this.selectedStepId);
@@ -318,7 +342,7 @@ export class AnimationEditor {
           this.resetFormDefaults();
         }
       }
-      this.options.onSaved();
+      this.options.onSaved(this.steps);
     } catch (error) {
       console.error("Slideshow stale animation cleanup failed", error);
       new Notice(this.options.t("animationSaveFailed"));
@@ -364,7 +388,7 @@ export class AnimationEditor {
     );
     actions.appendChild(
       this.iconButton(doc, icons.play, t("previewAnimationStep"), false, () => {
-        void this.previewRuntime.previewStep(getAnimationSlideScope(this.options.slide), step);
+        void this.previewRuntime.previewStep(this.getSlideScope(), step);
       }),
     );
     actions.appendChild(
@@ -408,7 +432,7 @@ export class AnimationEditor {
     this.direction = step.direction ?? "left";
     this.ignoredSelectionCount = 0;
     const ids = resolveAnimationTargetElementIds(
-      getAnimationSlideScope(this.options.slide),
+      this.getSlideScope(),
       step.targets,
       this.options.ea.getViewElements(),
     );
@@ -421,18 +445,19 @@ export class AnimationEditor {
   }
 
   private async saveCurrentStep(): Promise<void> {
-    if (this.saving || this.targets.length === 0) return;
+    if (this.saving || this.targets.length === 0 || !this.isCurrentDrawing()) return;
     this.saving = true;
     this.render();
     try {
       const elements = this.options.ea.getViewElements();
       const selectedId = this.selectedStepId;
       let steps = removeAnimationTargetConflicts(
-        getAnimationSlideScope(this.options.slide),
+        this.getSlideScope(),
         this.steps,
         this.targets,
         elements,
         selectedId ?? undefined,
+        this.effect,
       );
       const step = this.buildFormStep(selectedId ?? uniqueStepId(steps));
       if (selectedId) {
@@ -443,10 +468,11 @@ export class AnimationEditor {
         steps.push(step);
       }
       await this.saveAnimationSteps(steps);
+      if (!this.isCurrentDrawing()) return;
       this.steps = steps;
       this.selectedStepId = step.id;
       this.targets = step.targets.map((target) => structuredClone(target));
-      this.options.onSaved();
+      this.options.onSaved(this.steps);
     } catch (error) {
       console.error("Slideshow animation metadata save failed", error);
       new Notice(this.options.t("animationSaveFailed"));
@@ -476,11 +502,13 @@ export class AnimationEditor {
   }
 
   private async persistSteps(steps: AnimationStep[]): Promise<void> {
+    if (!this.isCurrentDrawing()) return;
     this.saving = true;
     try {
       await this.saveAnimationSteps(steps);
+      if (!this.isCurrentDrawing()) return;
       this.steps = steps;
-      this.options.onSaved();
+      this.options.onSaved(this.steps);
     } catch (error) {
       console.error("Slideshow animation sequence save failed", error);
       new Notice(this.options.t("animationSaveFailed"));
@@ -491,14 +519,15 @@ export class AnimationEditor {
   }
 
   private async previewCurrentStep(): Promise<void> {
-    if (this.targets.length === 0) return;
+    if (this.targets.length === 0 || !this.isCurrentDrawing()) return;
     await this.previewRuntime.previewStep(
-      getAnimationSlideScope(this.options.slide),
+      this.getSlideScope(),
       this.buildFormStep(this.selectedStepId ?? "preview"),
     );
   }
 
   private saveAnimationSteps(steps: readonly AnimationStep[]): Promise<void> {
+    if (!this.isCurrentDrawing()) return Promise.resolve();
     const { slide, ea } = this.options;
     return slide.kind === "frame"
       ? saveFrameAnimationSteps(ea, slide.frameId, steps)
@@ -513,9 +542,26 @@ export class AnimationEditor {
       trigger: this.trigger,
     };
     if (this.trigger === "after-delay") step.delayMs = this.delayMs;
-    if (this.effect !== "appear") step.durationMs = this.durationMs;
-    if (this.effect === "slide") step.direction = this.direction;
+    if (!isInstantAnimationEffect(this.effect)) step.durationMs = this.durationMs;
+    if (this.effect === "slide" || this.effect === "slide-out") step.direction = this.direction;
     return step;
+  }
+
+  private startNewStep(): void {
+    this.selectedStepId = null;
+    this.resetFormDefaults();
+  }
+
+  private getSlideScope() {
+    const appState = this.options.api.getAppState();
+    return getAnimationSlideScope(this.options.slide, this.options.config, {
+      width: appState.width,
+      height: appState.height,
+    });
+  }
+
+  private isCurrentDrawing(): boolean {
+    return this.options.hostView.file === this.drawingFile;
   }
 
   private resetFormDefaults(): void {
@@ -546,6 +592,14 @@ export class AnimationEditor {
         return t("animationEffectSlide");
       case "zoom":
         return t("animationEffectZoom");
+      case "disappear":
+        return t("animationEffectDisappear");
+      case "fade-out":
+        return t("animationEffectFadeOut");
+      case "slide-out":
+        return t("animationEffectSlideOut");
+      case "zoom-out":
+        return t("animationEffectZoomOut");
       default:
         return t("animationEffectAppear");
     }

@@ -127,6 +127,20 @@ function getDeckFingerprint(resolved: ResolvedSlideDeck | null): string {
   });
 }
 
+function getSidepanelFingerprint(
+  ea: ExcalidrawAutomate,
+  choices: SlideDeckChoices,
+  presentationSourceKey: PresentationSourceKey | null,
+  appState: ReturnType<ExcalidrawAPI["getAppState"]>,
+): string {
+  const lineFingerprint = choices.lines
+    .map((line) => `${line.key}:${line.name ?? ""}:${getDeckFingerprint(line.resolved)}`)
+    .join("|");
+  const convertibleId = getConvertibleSelectedLine(ea)?.id ?? "none";
+  const declarableFrameId = getDeclarableSelectedFrame(ea)?.id ?? "none";
+  return `${presentationSourceKey ?? "none"}|${getDeckFingerprint(choices.frame)}|${lineFingerprint}|candidate=${convertibleId}|frameCandidate=${declarableFrameId}|${appState.theme}|${appState.viewBackgroundColor}|${getSceneVisualFingerprint(ea.getViewElements())}`;
+}
+
 /** Chooses the sorter source from stable panel state; canvas selection never changes it. */
 export function chooseSidepanelPresentationSourceKey(
   choices: SlideDeckChoices,
@@ -373,12 +387,14 @@ export class SlideshowSidepanel {
   private ownerWindow: Window;
   private lastFingerprint = "";
   private pendingRefresh = false;
+  private sorterMutationDepth = 0;
   private sceneSelectionSignature: string | null = null;
   private pendingSceneSlideId: string | null = null;
   private closed = false;
   private bindGeneration = 0;
   private activeLeafChangeRef: EventRef | null = null;
   private boundView: ScriptExcalidrawView | null;
+  private boundDrawingFile: ScriptExcalidrawView["file"] | null = null;
   private requestedSlideId: string | null = null;
   private animationEditor: AnimationEditor | null = null;
   private animationEditingSlideId: string | null = null;
@@ -395,6 +411,7 @@ export class SlideshowSidepanel {
   private settingsWriteQueue: Promise<void> = Promise.resolve();
   private removeDisplayChangeListener: (() => void) | null = null;
   private displayRefreshTimer = 0;
+  private previewOnceScheduled = false;
   private sorterThumbnailMaxWidth: number;
 
   public constructor(private readonly options: SlideshowSidepanelOptions) {
@@ -412,6 +429,48 @@ export class SlideshowSidepanel {
   /** Returns the drawing currently edited by this sidepanel. */
   public getBoundView(): ScriptExcalidrawView | null {
     return this.boundView;
+  }
+
+  private isSidepanelFocused(): boolean {
+    const sidepanelLeaf = this.options.ea.getSidepanelLeaf();
+    const { tab } = this.options;
+    const activeElement = tab.contentEl.ownerDocument.activeElement;
+    const hasDomFocus = Boolean(activeElement && tab.contentEl.contains?.(activeElement));
+    return Boolean(
+      sidepanelLeaf &&
+        (app.workspace.activeLeaf === sidepanelLeaf || hasDomFocus) &&
+        tab.isVisible() &&
+        tab.isActiveTab(),
+    );
+  }
+
+  private syncPreviewFocusState(): void {
+    const focused = this.isSidepanelFocused();
+    this.sorter?.setPreviewRenderingEnabled(focused);
+    if (!focused) {
+      this.previewService?.cancelPending();
+      return;
+    }
+    if (this.pendingRefresh) {
+      void this.refresh(true);
+      return;
+    }
+    this.sorter?.refreshPreviews();
+  }
+
+  /** Loads the currently visible thumbnails once without enabling background refreshes. */
+  public refreshPreviewsOnce(): void {
+    if (this.closed || this.previewOnceScheduled) return;
+    this.previewOnceScheduled = true;
+    const run = (): void => {
+      this.previewOnceScheduled = false;
+      if (!this.closed) this.sorter?.refreshPreviewsOnce();
+    };
+    if (typeof this.ownerWindow.requestAnimationFrame === "function") {
+      this.ownerWindow.requestAnimationFrame(() => run());
+    } else {
+      this.ownerWindow.setTimeout(run, 0);
+    }
   }
 
   /** Focuses and reveals the slide requested by an element action after the tab is visible. */
@@ -437,21 +496,27 @@ export class SlideshowSidepanel {
       else this.preferredPresentationType = "line";
     }
     if (preferredSlideId) this.requestedSlideId = preferredSlideId;
-    if (view === this.boundView) {
+    const drawingChanged = view === this.boundView && view.file !== this.boundDrawingFile;
+    if (view === this.boundView && !drawingChanged) {
       this.options.ea.setView(view);
       this.lastFingerprint = "";
       await this.refresh(true);
       return;
     }
     const generation = ++this.bindGeneration;
-    await this.applyViewBinding(view, generation);
+    await this.applyViewBinding(view, generation, drawingChanged);
   }
 
   /** Installs lifecycle hooks, workspace focus tracking, and scene-change tracking. */
   public initialize(): void {
     const { ea, tab } = this.options;
-    tab.onOpen = () => void this.refresh(true);
-    tab.onFocus = (view) => this.bindView(view);
+    tab.onOpen = () => {
+      void this.refresh(true).then(() => this.refreshPreviewsOnce());
+    };
+    tab.onFocus = (view) => {
+      this.bindView(view);
+      this.ownerWindow.setTimeout(() => this.syncPreviewFocusState(), 0);
+    };
     tab.onWindowMigrated = (win) => {
       if (this.displayRefreshTimer) this.ownerWindow.clearTimeout(this.displayRefreshTimer);
       this.displayRefreshTimer = 0;
@@ -494,7 +559,12 @@ export class SlideshowSidepanel {
     this.activeLeafChangeRef = app.workspace.on(
       "active-leaf-change",
       (leaf: WorkspaceLeaf | null) => {
-        if (this.closed || leaf === ea.getSidepanelLeaf()) return;
+        if (this.closed) return;
+        if (leaf === ea.getSidepanelLeaf()) {
+          this.syncPreviewFocusState();
+          return;
+        }
+        this.syncPreviewFocusState();
         if (leaf && ea.isExcalidrawView(leaf.view)) {
           this.bindView(leaf.view as unknown as ScriptExcalidrawView);
           return;
@@ -517,6 +587,14 @@ export class SlideshowSidepanel {
       triggerWhenInvisible: false,
       callback: (elements, appState, _files, view) => {
         if (!this.boundView || view !== this.boundView) return;
+        if (view.file !== this.boundDrawingFile) {
+          this.bindView(view);
+          return;
+        }
+        if (this.sorterMutationDepth > 0) {
+          this.pendingRefresh = true;
+          return;
+        }
         if (this.sorter?.isEditingNotes()) {
           this.pendingRefresh = true;
           return;
@@ -542,27 +620,40 @@ export class SlideshowSidepanel {
 
   private bindView(view: ScriptExcalidrawView | null): void {
     if (this.closed) return;
-    if (view === this.boundView) {
+    const drawingChanged =
+      view !== null && view === this.boundView && view.file !== this.boundDrawingFile;
+    if (view === this.boundView && !drawingChanged) {
       if (view) void this.refresh();
       else this.renderUnavailable();
       return;
     }
     const generation = ++this.bindGeneration;
-    void this.applyViewBinding(view, generation);
+    void this.applyViewBinding(view, generation, drawingChanged);
   }
 
   private async applyViewBinding(
     view: ScriptExcalidrawView | null,
     generation: number,
+    discardUnsaved = false,
   ): Promise<void> {
     const previousSorter = this.sorter;
-    await previousSorter?.flushNotes();
+    const previousEditor = this.animationEditor;
+    if (discardUnsaved) {
+      previousSorter?.destroy();
+      if (this.sorter === previousSorter) this.sorter = null;
+      this.animationEditor = null;
+      this.animationEditingSlideId = null;
+      await previousEditor?.destroy();
+    } else {
+      await previousSorter?.flushNotes();
+      if (this.closed || generation !== this.bindGeneration) return;
+      previousSorter?.destroy();
+      if (this.sorter === previousSorter) this.sorter = null;
+      await previousEditor?.destroy();
+      if (this.animationEditor === previousEditor) this.animationEditor = null;
+      this.animationEditingSlideId = null;
+    }
     if (this.closed || generation !== this.bindGeneration) return;
-    previousSorter?.destroy();
-    if (this.sorter === previousSorter) this.sorter = null;
-    await this.animationEditor?.destroy();
-    this.animationEditor = null;
-    this.animationEditingSlideId = null;
     this.previewService?.clear();
     this.previewService = null;
     this.resolved = null;
@@ -578,6 +669,7 @@ export class SlideshowSidepanel {
     this.pendingSceneSlideId = null;
     this.lastFingerprint = "";
     this.boundView = view;
+    this.boundDrawingFile = view?.file ?? null;
     this.options.ea.setView(view);
     this.options.ea.clear();
     if (!view) {
@@ -690,7 +782,18 @@ export class SlideshowSidepanel {
       this.renderUnavailable();
       return;
     }
+    if (view.file !== this.boundDrawingFile) {
+      const generation = ++this.bindGeneration;
+      await this.applyViewBinding(view, generation, true);
+      return;
+    }
     if (this.sorter?.isEditingNotes()) {
+      this.pendingRefresh = true;
+      return;
+    }
+    const previewFocused = this.isSidepanelFocused();
+    this.sorter?.setPreviewRenderingEnabled(previewFocused);
+    if (!force && !previewFocused && !this.animationEditor) {
       this.pendingRefresh = true;
       return;
     }
@@ -714,12 +817,12 @@ export class SlideshowSidepanel {
       this.presentationSourceByDrawing.set(drawingKey, presentationSourceKey);
     const resolved = resolvePresentationSource(choices, presentationSourceKey);
     const appState = api.getAppState();
-    const lineFingerprint = choices.lines
-      .map((line) => `${line.key}:${line.name ?? ""}:${getDeckFingerprint(line.resolved)}`)
-      .join("|");
-    const convertibleId = getConvertibleSelectedLine(ea)?.id ?? "none";
-    const declarableFrameId = getDeclarableSelectedFrame(ea)?.id ?? "none";
-    const compositeFingerprint = `${presentationSourceKey ?? "none"}|${getDeckFingerprint(choices.frame)}|${lineFingerprint}|candidate=${convertibleId}|frameCandidate=${declarableFrameId}|${appState.theme}|${appState.viewBackgroundColor}|${getSceneVisualFingerprint(ea.getViewElements())}`;
+    const compositeFingerprint = getSidepanelFingerprint(
+      ea,
+      choices,
+      presentationSourceKey,
+      appState,
+    );
     if (!force && compositeFingerprint === this.lastFingerprint) return;
 
     const requestedSlideId = this.requestedSlideId;
@@ -820,7 +923,8 @@ export class SlideshowSidepanel {
 
     const printButton = doc.createElement("button");
     printButton.type = "button";
-    printButton.className = "slideshow-sidepanel__icon-button";
+    printButton.className =
+      "slideshow-sidepanel__icon-button slideshow-sidepanel__print-button";
     const printLabel = t("printPdf", {
       width: this.options.config.printSlideWidth,
       height: this.options.config.printSlideHeight,
@@ -1036,6 +1140,7 @@ export class SlideshowSidepanel {
     const activeSourceLabel =
       sourceOptions.find((option) => option.key === this.presentationSourceKey)?.label ??
       (deck.kind === "frame" ? t("frameDeck") : t("linePresentationDefaultName"));
+    summary.dataset.sourceLabel = activeSourceLabel;
     summary.textContent = `${activeSourceLabel} · ${t("visibleSlideCount", { visible: deck.visibleSlides.length, total: deck.slides.length })}`;
 
     const thumbnailSizeControl = doc.createElement("label");
@@ -1097,6 +1202,7 @@ export class SlideshowSidepanel {
       t,
       reorderEnabled,
       animationEditingSlideId: this.animationEditingSlideId,
+      previewRenderingEnabled: this.isSidepanelFocused(),
       callbacks: {
         move: (fromIndex, toIndex) => this.moveSlide(fromIndex, toIndex),
         toggleInclusion: (slide, excluded) => this.toggleInclusion(slide, excluded),
@@ -1721,8 +1827,55 @@ export class SlideshowSidepanel {
     }
   }
 
+  private updateDeckSummaryAndAvailability(): void {
+    const deck = this.resolved?.deck;
+    if (!deck) return;
+    const summary =
+      this.options.tab.contentEl.querySelector<HTMLElement>(".slideshow-sidepanel__summary");
+    if (summary) {
+      const sourceLabel = summary.dataset.sourceLabel ?? "";
+      summary.textContent = `${sourceLabel} · ${this.options.t("visibleSlideCount", {
+        visible: deck.visibleSlides.length,
+        total: deck.slides.length,
+      })}`;
+    }
+    const disabled = deck.visibleSlides.length === 0;
+    const startButton =
+      this.options.tab.contentEl.querySelector<HTMLButtonElement>(
+        ".slideshow-sidepanel__launch-main",
+      );
+    const printButton =
+      this.options.tab.contentEl.querySelector<HTMLButtonElement>(
+        ".slideshow-sidepanel__print-button",
+      );
+    if (startButton) startButton.disabled = disabled;
+    if (printButton) printButton.disabled = disabled;
+  }
+
+  private updateLastFingerprintFromCurrentState(): void {
+    const view = this.boundView;
+    if (!view || view.file !== this.boundDrawingFile) {
+      this.lastFingerprint = "";
+      return;
+    }
+    if (this.options.ea.targetView !== view) this.options.ea.setView(view);
+    const api = this.options.ea.getExcalidrawAPI();
+    if (!api) {
+      this.lastFingerprint = "";
+      return;
+    }
+    this.lastFingerprint = getSidepanelFingerprint(
+      this.options.ea,
+      this.choices,
+      this.presentationSourceKey,
+      api.getAppState(),
+    );
+    this.pendingRefresh = false;
+  }
+
   private async moveSlide(fromIndex: number, toIndex: number): Promise<void> {
     if (!this.resolved) return;
+    this.sorterMutationDepth += 1;
     try {
       await this.sorter?.flushNotes();
       if (this.resolved.deck.kind === "frame") {
@@ -1730,8 +1883,8 @@ export class SlideshowSidepanel {
       } else if (this.resolved.pathElement) {
         await reorderLineSlides(this.options.ea, this.resolved.pathElement.id, fromIndex, toIndex);
       }
-      this.lastFingerprint = "";
-      await this.refresh(true);
+      this.sorter?.applyReorder(fromIndex, toIndex);
+      this.updateLastFingerprintFromCurrentState();
     } catch (error) {
       if (error instanceof Error && error.message === "BOUND_PRESENTATION_PATH") {
         new Notice(this.options.t("lineReorderBound"));
@@ -1739,10 +1892,14 @@ export class SlideshowSidepanel {
         console.error("Slideshow sorter reorder failed", error);
         new Notice(this.options.t("reorderFailed"));
       }
+    } finally {
+      this.sorterMutationDepth = Math.max(this.sorterMutationDepth - 1, 0);
+      if (this.sorterMutationDepth === 0 && this.pendingRefresh) this.scheduleRefresh();
     }
   }
 
   private async toggleInclusion(slide: SlideDeckSlide, excluded: boolean): Promise<void> {
+    this.sorterMutationDepth += 1;
     try {
       await this.sorter?.flushNotes();
       if (slide.kind === "frame") {
@@ -1750,11 +1907,15 @@ export class SlideshowSidepanel {
       } else {
         await setLineSlideExcluded(this.options.ea, slide.pathId, slide.id, excluded);
       }
-      this.lastFingerprint = "";
-      await this.refresh(true);
+      this.sorter?.applyInclusion(slide.id, excluded);
+      this.updateDeckSummaryAndAvailability();
+      this.updateLastFingerprintFromCurrentState();
     } catch (error) {
       console.error("Slideshow inclusion update failed", error);
       new Notice(this.options.t("metadataSaveFailed"));
+    } finally {
+      this.sorterMutationDepth = Math.max(this.sorterMutationDepth - 1, 0);
+      if (this.sorterMutationDepth === 0 && this.pendingRefresh) this.scheduleRefresh();
     }
   }
 
@@ -1857,12 +2018,11 @@ export class SlideshowSidepanel {
       await this.animationEditor?.destroy();
       this.animationEditor = null;
       this.animationEditingSlideId = slide.id;
-      const expandedNotesId = this.sorter?.getExpandedNotesSlideId() ?? null;
-      this.sorter?.destroy();
-      this.sorter = null;
-      const sorter = this.render(slide.id, expandedNotesId);
+      if (this.sorter) this.sorter.setAnimationEditingSlideId(slide.id);
+      else this.render(slide.id, null);
       this.selectAndZoomAnimationSlide(slide);
-      sorter?.scrollToSlide(slide.id, false, "start");
+      this.sorter?.scrollToSlide(slide.id, false, "start");
+      this.refreshPreviewsOnce();
     })();
   }
 
@@ -1879,10 +2039,12 @@ export class SlideshowSidepanel {
       hostView: view,
       container,
       slide,
+      config: this.options.config,
       icons: this.options.icons,
       t: this.options.t,
-      onSaved: () => {
-        this.lastFingerprint = "";
+      onSaved: (steps) => {
+        this.sorter?.updateAnimationSteps(slide.id, steps);
+        this.updateLastFingerprintFromCurrentState();
       },
     });
     this.animationEditor.render();
@@ -1908,8 +2070,9 @@ export class SlideshowSidepanel {
     this.animationEditor = null;
     const slideId = this.animationEditingSlideId;
     this.animationEditingSlideId = null;
-    this.lastFingerprint = "";
-    await this.refresh(true);
+    this.sorter?.setAnimationEditingSlideId(null);
+    this.updateLastFingerprintFromCurrentState();
     if (slideId) this.sorter?.scrollToSlide(slideId);
+    this.refreshPreviewsOnce();
   }
 }

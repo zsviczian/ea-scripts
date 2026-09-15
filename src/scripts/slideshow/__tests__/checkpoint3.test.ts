@@ -1,15 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { AnimationEditor } from "../AnimationEditor";
 import {
   AnimationRuntime,
   captureAnimationTargets,
   elementOverlapsFrame,
   getAnimationOverlayPlacement,
+  getAnimationSlideScope,
   recycleMissingAnimationTargets,
   removeAnimationTargetConflicts,
   resolveAnimationTargetElementIds,
 } from "../AnimationRuntime";
-import { buildLineSlideDeck, getVisibleSlideIndex } from "../SlideDeck";
+import { buildFrameSlideDeck, buildLineSlideDeck, getVisibleSlideIndex } from "../SlideDeck";
 import { resolvePresentationSetup } from "../presentationPath";
 import {
   reorderLineSlides,
@@ -170,6 +172,68 @@ describe("checkpoint 3 animation target resolution", () => {
     });
   });
 
+  it("accepts targets touching the padded configured presentation viewport", () => {
+    const marker = frame();
+    const slide = buildFrameSlideDeck([marker]).slides[0];
+    if (!slide) throw new Error("Expected frame slide.");
+    const scope = getAnimationSlideScope(
+      slide,
+      {
+        printSlideWidth: 1920,
+        printSlideHeight: 1080,
+        maxZoom: 30,
+      },
+      { width: 1000, height: 1000 },
+    );
+    const visibleEdge = element("visible-edge", "rectangle", null, {
+      x: 40,
+      y: -45,
+      width: 20,
+      height: 4,
+    });
+    const marginOnly = element("margin-only", "rectangle", null, {
+      x: 80,
+      y: -69,
+      width: 20,
+      height: 1,
+    });
+    const outside = element("outside-padded-area", "rectangle", null, {
+      x: 120,
+      y: -80,
+      width: 20,
+      height: 4,
+    });
+
+    expect(
+      captureAnimationTargets(
+        scope,
+        [marker, visibleEdge, marginOnly, outside],
+        { "visible-edge": true, "margin-only": true, "outside-padded-area": true },
+        {},
+      ),
+    ).toEqual({
+      targets: [
+        { type: "element", id: "visible-edge", scope: "viewport" },
+        { type: "element", id: "margin-only", scope: "viewport" },
+      ],
+      ignoredSelectionCount: 1,
+    });
+    expect(
+      resolveAnimationTargetElementIds(
+        scope,
+        [{ type: "element", id: "margin-only" }],
+        [marker, marginOnly],
+      ),
+    ).toEqual([]);
+    expect(
+      resolveAnimationTargetElementIds(
+        scope,
+        [{ type: "element", id: "margin-only", scope: "viewport" }],
+        [marker, marginOnly],
+      ),
+    ).toEqual(["margin-only"]);
+  });
+
   it("recycles deleted animation targets and removes steps that become empty", () => {
     const elements = [
       frame(),
@@ -251,9 +315,114 @@ describe("checkpoint 3 animation target resolution", () => {
       ),
     ).toEqual([]);
   });
+
+  it("allows the same target to have one entrance and one exit animation", () => {
+    const elements = [frame(), element("one", "rectangle", null, { x: 20, y: 20 })];
+    const steps: AnimationStep[] = [
+      {
+        id: "enter",
+        targets: [{ type: "element", id: "one" }],
+        effect: "fade",
+        trigger: "advance",
+      },
+      {
+        id: "exit",
+        targets: [{ type: "element", id: "one" }],
+        effect: "fade-out",
+        trigger: "advance",
+      },
+    ];
+    expect(
+      removeAnimationTargetConflicts(
+        "frame",
+        steps,
+        [{ type: "element", id: "one" }],
+        elements,
+        undefined,
+        "zoom-out",
+      ),
+    ).toEqual([steps[0]]);
+  });
 });
 
 describe("checkpoint 3 animation metadata and runtime", () => {
+  it("keeps the current targets selected when starting a new animation step", () => {
+    const targets: AnimationStep["targets"] = [{ type: "element", id: "shape" }];
+    const editor = Object.create(AnimationEditor.prototype) as {
+      selectedStepId: string | null;
+      targets: AnimationStep["targets"];
+      effect: AnimationStep["effect"];
+      trigger: AnimationStep["trigger"];
+      delayMs: number;
+      durationMs: number;
+      direction: "left" | "right" | "up" | "down";
+      startNewStep(): void;
+    };
+    Object.assign(editor, {
+      selectedStepId: "existing",
+      targets,
+      effect: "fade-out",
+      trigger: "after-delay",
+      delayMs: 500,
+      durationMs: 800,
+      direction: "right",
+    });
+
+    editor.startNewStep();
+
+    expect(editor.selectedStepId).toBeNull();
+    expect(editor.targets).toBe(targets);
+    expect(editor.effect).toBe("appear");
+    expect(editor.trigger).toBe("advance");
+  });
+
+  it("accepts exit animation effects without changing the metadata schema version", () => {
+    const data = readFrameSlideshowData({
+      slideshow: {
+        schemaVersion: 2,
+        kind: "frame",
+        order: 0,
+        animation: {
+          steps: [
+            {
+              id: "fade-out",
+              targets: [{ type: "element", id: "shape", scope: "viewport" }],
+              effect: "fade-out",
+              trigger: "advance",
+              durationMs: 250,
+            },
+            {
+              id: "slide-out",
+              targets: [{ type: "element", id: "other" }],
+              effect: "slide-out",
+              trigger: "advance",
+              durationMs: 250,
+              direction: "right",
+            },
+            {
+              id: "zoom-out",
+              targets: [{ type: "element", id: "third" }],
+              effect: "zoom-out",
+              trigger: "advance",
+              durationMs: 250,
+            },
+          ],
+        },
+      },
+    });
+    expect(data?.schemaVersion).toBe(2);
+    expect(data?.animation?.steps.map((step) => step.effect)).toEqual([
+      "fade-out",
+      "slide-out",
+      "zoom-out",
+    ]);
+    expect(data?.animation?.steps[0]?.targets[0]).toEqual({
+      type: "element",
+      id: "shape",
+      scope: "viewport",
+    });
+  });
+
   it("saves frame animation steps while preserving existing slideshow fields", async () => {
     const source = frame() as Mutable<ExcalidrawFrameElement>;
     source.customData = {
@@ -338,6 +507,71 @@ describe("checkpoint 3 animation metadata and runtime", () => {
     expect((elements.find((candidate) => candidate.id === "shape") as { opacity: number }).opacity).toBe(0);
     await runtime.leaveSlide();
     expect((elements.find((candidate) => candidate.id === "shape") as { opacity: number }).opacity).toBe(65);
+  });
+
+  it("supports appear-then-disappear sequences on the same target", async () => {
+    let elements: ExcalidrawElement[] = [
+      frame(),
+      element("shape", "rectangle", "frame", { opacity: 65 }),
+    ];
+    const api = {
+      getSceneElements: () => elements,
+      updateScene: (scene: { elements?: readonly ExcalidrawElement[] }) => {
+        if (scene.elements) elements = [...scene.elements];
+      },
+    } as unknown as ExcalidrawAPI;
+    const ownerWindow = {
+      setTimeout: globalThis.setTimeout.bind(globalThis),
+      clearTimeout: globalThis.clearTimeout.bind(globalThis),
+      requestAnimationFrame: (callback: FrameRequestCallback) =>
+        globalThis.setTimeout(() => callback(Date.now()), 0) as unknown as number,
+      performance: { now: () => Date.now() },
+    } as unknown as Window;
+    const runtime = new AnimationRuntime({
+      ea: {} as ExcalidrawAutomate,
+      api,
+      hostView: { ownerWindow } as ScriptExcalidrawView,
+    });
+    const slide = {
+      id: "frame",
+      kind: "frame",
+      frameId: "frame",
+      title: "Frame",
+      rect: { x1: 0, y1: 0, x2: 100, y2: 100 },
+      excluded: false,
+      order: 0,
+      animationSteps: [
+        {
+          id: "enter",
+          targets: [{ type: "element" as const, id: "shape" }],
+          effect: "appear" as const,
+          trigger: "advance" as const,
+        },
+        {
+          id: "exit",
+          targets: [{ type: "element" as const, id: "shape" }],
+          effect: "disappear" as const,
+          trigger: "advance" as const,
+        },
+      ],
+    } as const;
+
+    await runtime.enterSlide(slide, false, false);
+    expect((elements.find((candidate) => candidate.id === "shape") as { opacity: number }).opacity).toBe(0);
+    expect(await runtime.advance()).toBe(true);
+    expect((elements.find((candidate) => candidate.id === "shape") as { opacity: number }).opacity).toBe(65);
+    expect(await runtime.advance()).toBe(true);
+    expect((elements.find((candidate) => candidate.id === "shape") as { opacity: number }).opacity).toBe(0);
+    expect(await runtime.reverse()).toBe(true);
+    expect((elements.find((candidate) => candidate.id === "shape") as { opacity: number }).opacity).toBe(65);
+    expect(await runtime.reverse()).toBe(true);
+    expect((elements.find((candidate) => candidate.id === "shape") as { opacity: number }).opacity).toBe(0);
+    await runtime.leaveSlide();
+    expect((elements.find((candidate) => candidate.id === "shape") as { opacity: number }).opacity).toBe(65);
+
+    await runtime.enterSlide(slide, true, false);
+    expect((elements.find((candidate) => candidate.id === "shape") as { opacity: number }).opacity).toBe(0);
+    await runtime.leaveSlide();
   });
 
   it("runs after-delay steps sequentially and lets advance consume a pending timed step", async () => {

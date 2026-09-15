@@ -11,9 +11,32 @@ import type { SlideDeck } from "./SlideDeck";
 export type Direction = "fwd" | "bkwd";
 export type PresentationPathType = "line" | "frame";
 export type PresentationSourceKey = "frame" | `line:${string}`;
-export type AnimationEffect = "appear" | "fade" | "slide" | "zoom";
+export type AnimationEffect =
+  | "appear"
+  | "fade"
+  | "slide"
+  | "zoom"
+  | "disappear"
+  | "fade-out"
+  | "slide-out"
+  | "zoom-out";
 export type AnimationTrigger = "advance" | "after-delay";
 export type AnimationDirection = "left" | "right" | "up" | "down";
+
+/** Returns whether an animation step removes its targets from the built slide state. */
+export function isExitAnimationEffect(effect: AnimationEffect): boolean {
+  return (
+    effect === "disappear" ||
+    effect === "fade-out" ||
+    effect === "slide-out" ||
+    effect === "zoom-out"
+  );
+}
+
+/** Returns whether an animation effect has no timed transition. */
+export function isInstantAnimationEffect(effect: AnimationEffect): boolean {
+  return effect === "appear" || effect === "disappear";
+}
 
 export interface SlideshowConfig {
   transitionStepCount: number;
@@ -64,7 +87,9 @@ export interface OriginalPathProperties {
   locked: boolean;
 }
 
-export type AnimationTarget = { type: "element"; id: string } | { type: "group"; id: string };
+export type AnimationTarget =
+  | { type: "element"; id: string; scope?: "viewport" }
+  | { type: "group"; id: string; scope?: "viewport" };
 
 export interface AnimationStep {
   id: string;

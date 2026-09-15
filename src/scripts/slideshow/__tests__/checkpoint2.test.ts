@@ -74,9 +74,11 @@ import { runSlideshow } from "../run";
 import { buildFrameSlideDeck } from "../SlideDeck";
 import {
   getDragAutoScrollVelocity,
+  getDropIndicatorPlacement,
   getDropInsertionIndex,
   getDropInsertionIndexFromRects,
   getDropMoveTarget,
+  isSingleColumnSorterLayout,
   SlideSorter,
 } from "../SlideSorter";
 import {
@@ -1694,6 +1696,107 @@ describe("slideshow checkpoint 2 element actions", () => {
     expect(scrollIntoView).toHaveBeenLastCalledWith({ block: "start" });
   });
 
+  it("allows one explicit thumbnail pass while background preview rendering stays suspended", async () => {
+    const previewHost = {
+      dataset: { slideId: "a" },
+      ownerDocument: {},
+      isConnected: true,
+      firstElementChild: null,
+      replaceChildren: vi.fn(),
+    } as unknown as HTMLElement;
+    const populatedPreviewHost = {
+      dataset: { slideId: "b" },
+      ownerDocument: {},
+      isConnected: true,
+      firstElementChild: {},
+      replaceChildren: vi.fn(),
+    } as unknown as HTMLElement;
+    const createPreview = vi.fn(async () => null);
+    const sorter = new SlideSorter({
+      ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
+      container: {
+        ownerDocument: { defaultView: {} },
+        querySelectorAll: () => [previewHost, populatedPreviewHost],
+      } as unknown as HTMLElement,
+      deck: buildFrameSlideDeck([frame("a", "Alpha"), frame("b", "Bravo")]),
+      previewService: { createPreview } as unknown as SlidePreviewService,
+      icons: {} as never,
+      t: createSlideshowTranslator("en"),
+      reorderEnabled: true,
+      previewRenderingEnabled: false,
+      callbacks: {
+        move: async () => undefined,
+        toggleInclusion: async () => undefined,
+        zoomToSlide: () => undefined,
+        saveNotes: async () => undefined,
+        requestAnimationEditor: () => undefined,
+        editLineSlide: async () => undefined,
+        notesBlurred: () => undefined,
+      },
+    });
+
+    sorter.refreshPreviews();
+    expect(createPreview).not.toHaveBeenCalled();
+
+    sorter.refreshPreviewsOnce();
+    await Promise.resolve();
+    expect(createPreview).toHaveBeenCalledOnce();
+
+    sorter.refreshPreviews();
+    expect(createPreview).toHaveBeenCalledOnce();
+
+    sorter.setPreviewRenderingEnabled(true);
+    sorter.refreshPreviews();
+    await Promise.resolve();
+    expect(createPreview).toHaveBeenCalledTimes(3);
+  });
+
+  it("applies inclusion and reorder changes without rebuilding sorter rows", () => {
+    const deck = buildFrameSlideDeck([frame("a", "Alpha"), frame("b", "Bravo")]);
+    const rowA = { dataset: { slideId: "a" }, querySelector: () => null };
+    const rowB = { dataset: { slideId: "b" }, querySelector: () => null };
+    const appendChild = vi.fn();
+    const insertBefore = vi.fn();
+    const sorter = new SlideSorter({
+      ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
+      container: {
+        ownerDocument: { defaultView: {} },
+        querySelectorAll: () => [rowA, rowB],
+        appendChild,
+        insertBefore,
+      } as unknown as HTMLElement,
+      deck,
+      previewService: {} as SlidePreviewService,
+      icons: {} as never,
+      t: createSlideshowTranslator("en"),
+      reorderEnabled: true,
+      callbacks: {
+        move: async () => undefined,
+        toggleInclusion: async () => undefined,
+        zoomToSlide: () => undefined,
+        saveNotes: async () => undefined,
+        requestAnimationEditor: () => undefined,
+        editLineSlide: async () => undefined,
+        notesBlurred: () => undefined,
+      },
+    });
+    const internals = sorter as unknown as {
+      updateRowInclusion: ReturnType<typeof vi.fn>;
+    };
+    internals.updateRowInclusion = vi.fn();
+
+    sorter.applyInclusion("a", true);
+    expect(deck.slides[0]?.excluded).toBe(true);
+    expect(deck.visibleSlides.map((slide) => slide.id)).toEqual(["b"]);
+    expect(internals.updateRowInclusion).toHaveBeenCalledOnce();
+
+    sorter.applyReorder(0, 1);
+    expect(deck.slides.map((slide) => slide.id)).toEqual(["b", "a"]);
+    expect(appendChild).toHaveBeenCalledOnce();
+    expect(appendChild).toHaveBeenCalledWith(rowA);
+    expect(insertBefore).not.toHaveBeenCalled();
+  });
+
   it("pins sorter selection while a frame animation editor is active", async () => {
     const sorter = new SlideSorter({
       ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
@@ -1722,6 +1825,46 @@ describe("slideshow checkpoint 2 element actions", () => {
     expect(sorter.getSelectedSlideId()).toBe("a");
   });
 
+  it("updates canvas-driven sorter selection without rebuilding thumbnail rows", async () => {
+    const toggleA = vi.fn();
+    const toggleB = vi.fn();
+    const rowA = { dataset: { slideId: "a" }, classList: { toggle: toggleA } };
+    const rowB = { dataset: { slideId: "b" }, classList: { toggle: toggleB } };
+    const container = {
+      ownerDocument: { defaultView: {} },
+      classList: { toggle: vi.fn() },
+      querySelectorAll: vi.fn(() => [rowA, rowB]),
+    } as unknown as HTMLElement;
+    const sorter = new SlideSorter({
+      ea: { DEVICE: { isDesktop: true, isMobile: false } } as ExcalidrawAutomate,
+      container,
+      deck: buildFrameSlideDeck([frame("a", "Alpha"), frame("b", "Bravo")]),
+      previewService: {} as SlidePreviewService,
+      icons: {} as never,
+      t: createSlideshowTranslator("en"),
+      reorderEnabled: true,
+      previewRenderingEnabled: false,
+      callbacks: {
+        move: async () => undefined,
+        toggleInclusion: async () => undefined,
+        zoomToSlide: () => undefined,
+        saveNotes: async () => undefined,
+        requestAnimationEditor: () => undefined,
+        editLineSlide: async () => undefined,
+        notesBlurred: () => undefined,
+      },
+    });
+    const render = vi.spyOn(sorter, "render");
+    vi.spyOn(sorter, "scrollToSlide").mockImplementation(() => undefined);
+
+    await sorter.selectFromScene("b");
+
+    expect(sorter.getSelectedSlideId()).toBe("b");
+    expect(render).not.toHaveBeenCalled();
+    expect(toggleA).toHaveBeenCalledWith("is-selected", false);
+    expect(toggleB).toHaveBeenCalledWith("is-selected", true);
+  });
+
   it("resolves moving insertion gaps and edge autoscroll", () => {
     expect(getDropInsertionIndex([100, 200, 300], 50)).toBe(0);
     expect(getDropInsertionIndex([100, 200, 300], 250)).toBe(2);
@@ -1738,18 +1881,29 @@ describe("slideshow checkpoint 2 element actions", () => {
         20,
       ),
     ).toBe(1);
-    expect(
-      getDropInsertionIndexFromRects(
-        [
-          { left: 0, right: 100, top: 0, bottom: 80 },
-          { left: 110, right: 210, top: 0, bottom: 80 },
-          { left: 0, right: 100, top: 90, bottom: 170 },
-          { left: 110, right: 210, top: 90, bottom: 170 },
-        ],
-        20,
-        120,
-      ),
-    ).toBe(2);
+    const gridRects = [
+      { left: 0, right: 100, top: 0, bottom: 80 },
+      { left: 110, right: 210, top: 0, bottom: 80 },
+      { left: 0, right: 100, top: 90, bottom: 170 },
+      { left: 110, right: 210, top: 90, bottom: 170 },
+    ];
+    expect(getDropInsertionIndexFromRects(gridRects, 20, 120)).toBe(2);
+    expect(getDropIndicatorPlacement(gridRects, 2)).toEqual({
+      beforeIndex: 2,
+      afterIndex: 1,
+      singleColumn: false,
+    });
+
+    const singleColumnRects = [
+      { left: 0, right: 200, top: 0, bottom: 80 },
+      { left: 0, right: 200, top: 90, bottom: 170 },
+    ];
+    expect(isSingleColumnSorterLayout(singleColumnRects)).toBe(true);
+    expect(getDropIndicatorPlacement(singleColumnRects, 1)).toEqual({
+      beforeIndex: 1,
+      afterIndex: null,
+      singleColumn: true,
+    });
 
     expect(getDropMoveTarget(1, 0, 4)).toBe(0);
     expect(getDropMoveTarget(1, 2, 4)).toBeNull();
@@ -2077,6 +2231,59 @@ describe("slideshow checkpoint 2 presenter-note lifecycle", () => {
     expect(forceSave).toHaveBeenCalledOnce();
     expect(forceSave).toHaveBeenCalledWith(true);
     expect(readFrameSlideshowData(elements[0]?.customData)?.notes).toBe("Persist to disk");
+  });
+
+  it("discards stale editor state when the same view opens a different drawing", async () => {
+    const ea = {
+      setView: vi.fn(),
+      clear: vi.fn(),
+    } as unknown as ExcalidrawAutomate;
+    const sidepanel = new SlideshowSidepanel({
+      ea,
+      tab: {
+        contentEl: { ownerDocument: { defaultView: {} } },
+      } as unknown as ScriptSidepanelTab,
+      t: createSlideshowTranslator("en"),
+      icons: {} as never,
+      config: {} as never,
+      startPresentation: async () => undefined,
+      printPresentation: async () => undefined,
+      onClosed: () => undefined,
+    });
+    const refresh = vi.spyOn(sidepanel, "refresh").mockResolvedValue();
+    const flushNotes = vi.fn(async () => undefined);
+    const destroySorter = vi.fn();
+    const destroyEditor = vi.fn(async () => undefined);
+    const view = { file: { path: "New.excalidraw.md" } } as ScriptExcalidrawView;
+    const internals = sidepanel as unknown as {
+      bindGeneration: number;
+      boundView: ScriptExcalidrawView | null;
+      boundDrawingFile: ScriptExcalidrawView["file"] | null;
+      sorter: { flushNotes(): Promise<void>; destroy(): void } | null;
+      animationEditor: { destroy(): Promise<void> } | null;
+      animationEditingSlideId: string | null;
+      applyViewBinding(
+        view: ScriptExcalidrawView,
+        generation: number,
+        discardUnsaved: boolean,
+      ): Promise<void>;
+    };
+    internals.bindGeneration = 1;
+    internals.boundView = view;
+    internals.boundDrawingFile = { path: "Old.excalidraw.md" } as ScriptExcalidrawView["file"];
+    internals.sorter = { flushNotes, destroy: destroySorter };
+    internals.animationEditor = { destroy: destroyEditor };
+    internals.animationEditingSlideId = "old-slide";
+
+    await internals.applyViewBinding(view, 1, true);
+
+    expect(flushNotes).not.toHaveBeenCalled();
+    expect(destroySorter).toHaveBeenCalledOnce();
+    expect(destroyEditor).toHaveBeenCalledOnce();
+    expect(internals.boundDrawingFile).toBe(view.file);
+    expect(internals.animationEditor).toBeNull();
+    expect(internals.animationEditingSlideId).toBeNull();
+    expect(refresh).toHaveBeenCalledWith(true);
   });
 
   it("manually inserts printable repeated keys when the host already prevented their default", () => {
