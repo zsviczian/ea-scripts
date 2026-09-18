@@ -19,8 +19,8 @@
     "new-script": "tsx scripts/new-script.ts",
     "sync-refs": "node scripts/sync-refs.mjs",
     "test:slideshow": "vitest run src/scripts/slideshow/__tests__",
-    "repo:export": "bash scripts/generate-repository-zip.sh",
-    "repo:update": "rsync -av --progress ~/Downloads/update/ ./"
+    "repo:export": "node scripts/generate-repository-zip.mjs",
+    "repo:update": "node scripts/update-repository.mjs"
   },
   "devDependencies": {
     "@typescript-eslint/eslint-plugin": "^8.0.0",
