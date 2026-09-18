@@ -199,7 +199,7 @@ declare global {
       | null;
 
     /** Checks the Obsidian application version, not the Excalidraw plugin version. */
-    verifyMinAppVersion(version: string): boolean;
+    verifyMinimumPluginVersion(version: string): boolean;
     /** Checks the installed Excalidraw plugin version. */
     verifyMinimumPluginVersion(version: string): boolean;
     getExcalidrawAPI(): ExcalidrawAPI | null;

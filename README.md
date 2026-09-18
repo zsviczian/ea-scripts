@@ -160,7 +160,7 @@ locale with `ea.obsidian.moment.locale()`.
 ## Excalidraw Automate API conventions
 
 - Use `verifyMinimumPluginVersion()` for plugin requirements and
-  `verifyMinAppVersion()` only for Obsidian application requirements.
+  `verifyMinimumPluginVersion()` only for Obsidian application requirements.
 - Use `ea.setView()` for automatic view selection, `ea.setView(view)` for an
   explicit binding, and `ea.setView(null)` to represent an unbound sidepanel.
 - Branch on `utils.executionSource` when automatic executions should only

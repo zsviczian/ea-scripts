@@ -88,7 +88,7 @@ repository. Do not open a publishing PR against `ea-scripts` or
 - Use ea.getExcalidrawAPI() for scene-level reads/writes.
 - Use window.ExcalidrawLib only when needed for low-level helpers.
 - Use `verifyMinimumPluginVersion()` for the Excalidraw plugin and
-  `verifyMinAppVersion()` only for the Obsidian application version.
+  `verifyMinimumPluginVersion()` only for the Obsidian application version.
 - `ea.setView()` and `ea.setView("auto")` select a sensible default;
   `ea.setView(view)` binds explicitly; `ea.setView(null)` deliberately clears
   `ea.targetView`. Clear the target when a multi-view sidepanel becomes unbound.
