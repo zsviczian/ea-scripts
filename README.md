@@ -73,6 +73,8 @@ Generated scripts start with the script's local `README.md` and a UTC build time
 
 - `slideshow`: the production Slideshow script, organized as typed path,
   controls, lifecycle, and PDF modules
+- `excalidraw-logo-turtle`: a persistent Turtle Logo authoring sidepanel that
+  animates Logo programs directly onto the Excalidraw canvas
 
 ## Recommended workspace layout
 
