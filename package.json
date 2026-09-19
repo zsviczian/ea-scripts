@@ -16,24 +16,24 @@
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run lint && npm test",
     "package": "npm run build && node scripts/package.mjs",
-    "new-script": "tsx scripts/new-script.ts",
+    "new-script": "node --import tsx scripts/new-script.ts",
     "sync-refs": "node scripts/sync-refs.mjs",
     "test:slideshow": "vitest run src/scripts/slideshow/__tests__",
     "repo:export": "node scripts/generate-repository-zip.mjs",
     "repo:update": "node scripts/update-repository.mjs",
     "update-template": "node scripts/update-template.mjs",
+    "update-template:check": "node scripts/update-template.mjs --check",
     "template:manifest": "node scripts/template-manifest.mjs",
     "test:template": "node --test tests/*.test.mjs"
   },
   "devDependencies": {
+    "@zsviczian/excalidraw": "0.18.137",
     "@typescript-eslint/eslint-plugin": "^8.0.0",
     "@typescript-eslint/parser": "^8.0.0",
-    "@zsviczian/excalidraw": "0.18.137",
     "esbuild": "^0.28.2",
     "eslint": "^10.10.0",
     "globals": "^15.0.0",
     "obsidian": "^1.13.1",
-    "obsidian-excalidraw-plugin": "github:zsviczian/obsidian-excalidraw-plugin",
     "prettier": "^3.0.0",
     "tsx": "^4.0.0",
     "typescript": "^5.5.0",
@@ -51,8 +51,9 @@
     "obsidian",
     "excalidraw",
     "excalidraw-automate",
-    "scripts"
+    "script-template"
   ],
-  "author": "",
-  "license": "MIT"
+  "author": "Zsolt Viczián",
+  "license": "MIT",
+  "private": true
 }
