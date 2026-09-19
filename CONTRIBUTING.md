@@ -1,21 +1,15 @@
 # Contributing Guide
 
-This repository is a forkable authoring workspace for ExcalidrawAutomate
-scripts. It is not the publication target for scripts.
-
-Do not open a pull request to `ea-script-template` or `ea-scripts` to publish a
-script. Publish the script in the
-[obsidian-excalidraw-plugin](https://github.com/zsviczian/obsidian-excalidraw-plugin)
-repository instead, following the process below.
+Thank you for wanting to contribute an EA script to the [obsidian-excalidraw-plugin](https://github.com/zsviczian/obsidian-excalidraw-plugin) community!
 
 ---
 
-## Publishing a Script to obsidian-excalidraw-plugin
+## Publishing a script to obsidian-excalidraw-plugin
 
 ### Step 1 - Build and test your script locally
 
 ```bash
-npm run check   # typecheck + lint + all Vitest suites
+npm run check   # typecheck + lint
 npm run build   # produces build/{slug}/{slug}.md and build/{slug}/{slug}.svg
 ```
 
@@ -37,7 +31,7 @@ The build output already includes the script metadata comment and fenced code bl
 Copy it as-is to preserve formatting:
 
 ```bash
-cp build/{slug}/{slug}.md ../obsidian-excalidraw-plugin/ea-scripts/{Your Script Name}.md
+cp "build/{slug}/{slug}.md" "../obsidian-excalidraw-plugin/ea-scripts/{Your Script Name}.md"
 ```
 
 ### Step 3 - Add a preview image
@@ -73,16 +67,12 @@ Update `ea-scripts/directory-info.json` in the same PR:
 - for new scripts: add the script metadata entry
 - for updates: refresh the existing script `mtime` value
 
-### Step 6 - Open a focused PR in obsidian-excalidraw-plugin
+### Step 6 - Open a focused PR
 
 - Title: `feat(scripts): add Your Script Name`
 - Include only the files changed in steps 2-5
 - Keep the PR focused on a single script addition
 - Respond promptly to review comments
-
-The pull request should target the `obsidian-excalidraw-plugin` repository, not
-this authoring workspace. Keep this fork focused on script source and
-fork-specific development rules.
 
 ---
 
@@ -91,10 +81,8 @@ fork-specific development rules.
 Before opening a PR, confirm:
 
 - [ ] `npm run check` passes with no errors
-- [ ] Behavior changes include focused co-located Vitest coverage
 - [ ] Every function has a JSDoc comment
 - [ ] No UI strings are hard-coded inside script logic
-- [ ] English and applicable translated strings live in the script's `lang/` folder
 - [ ] Script tested in Obsidian against the latest Excalidraw plugin version
 - [ ] Preview image follows the naming policy
 
@@ -104,8 +92,15 @@ Before opening a PR, confirm:
 
 ```bash
 npm run new-script -- --name "My Script"    # scaffold src/scripts/{slug}/
-npm run test:watch                          # focused development feedback
 npm run build                               # compile
-npm run check                               # typecheck + lint + all tests
+npm run check                               # typecheck + lint
 npm run package                             # copies build/ -> release/
 ```
+
+## Improving the template
+
+Fork ea-script-template to contribute shared tooling or documentation. Keep
+personal scripts in your own workspace. Refresh the manifest with
+`npm run template:manifest`, then run `npm run test:template`, `npm run check`, and
+`npm run build`. Follow [.template/README.md](.template/README.md) for the plugin
+API generation and downstream update workflow.
