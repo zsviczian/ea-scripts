@@ -1,0 +1,4 @@
+/** @file es.ts @overview Partial locale; English fallback is used for untranslated Canvas Chat strings. */
+import type { TranslationCatalog } from "../../../sharedUtils/i18n";
+import type { CanvasChatTranslationKey } from "./en";
+export const es = {} satisfies TranslationCatalog<CanvasChatTranslationKey>;
