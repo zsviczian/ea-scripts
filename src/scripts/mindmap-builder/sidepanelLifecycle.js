@@ -14,6 +14,7 @@ export async function openMindmapSidepanel(runtimeContext) {
       if (!tab) return;
       runtimeContext.registerStyles();
       tab.onWindowMigrated = (newWin) => {
+        runtimeContext.cancelBranchPaste?.();
         runtimeContext.cancelHotkeyRecording?.();
         runtimeContext.linkSuggester?.close();
         runtimeContext.sidepanelWindow = newWin;
@@ -109,6 +110,7 @@ export async function openMindmapSidepanel(runtimeContext) {
           runtimeContext.ea.clear();
         }
         setupEventListeners(view);
+        runtimeContext.watchPasteMetadata?.();
         runtimeContext.ensureNodeSelected();
         runtimeContext.updateUI();
       };
@@ -164,6 +166,7 @@ export async function openMindmapSidepanel(runtimeContext) {
         }
       };
       tab.onClose = async () => {
+        runtimeContext.disposeBranchPaste?.();
         runtimeContext.cancelHotkeyRecording?.();
         runtimeContext.linkSuggester?.close();
         runtimeContext.disposeKeyboard();

@@ -606,6 +606,12 @@ export async function initializeMindmapBuilder(ea, utils, VERSION, t) {
     get getSettingsRootNode() {
       return getSettingsRootNode;
     },
+    get initializeRootCustomData() {
+      return initializeRootCustomData;
+    },
+    get updateBranchVisibility() {
+      return updateBranchVisibility;
+    },
     get getStrokeWidthForDepth() {
       return getStrokeWidthForDepth;
     },
@@ -968,6 +974,18 @@ export async function initializeMindmapBuilder(ea, utils, VERSION, t) {
     },
     get pasteElementToMap() {
       return pasteElementToMap;
+    },
+    get cancelBranchPaste() {
+      return cancelBranchPaste;
+    },
+    get disposeBranchPaste() {
+      return disposeBranchPaste;
+    },
+    get watchPasteMetadata() {
+      return watchPasteMetadata;
+    },
+    get isBranchPasteBusy() {
+      return isBranchPasteBusy;
     },
     get performAction() {
       return performAction;
@@ -1905,8 +1923,16 @@ export async function initializeMindmapBuilder(ea, utils, VERSION, t) {
   /**
    * Generates a hierarchy of links based on the headings in the target file.
    */
-  const { importOutline, importTextToMap, pasteListToMap, pasteElementToMap } =
-    createMarkdownImport(runtimeContext);
+  const {
+    importOutline,
+    importTextToMap,
+    pasteListToMap,
+    pasteElementToMap,
+    cancelBranchPaste,
+    disposeBranchPaste,
+    watchPasteMetadata,
+    isBranchPasteBusy,
+  } = createMarkdownImport(runtimeContext);
 
   /**
 // Extracts text from a node, handling text elements, images, and embeddables.

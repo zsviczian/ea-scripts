@@ -5,7 +5,17 @@
  */
 
 /** Creates this subsystem against the invocation-owned context. */
+import { parseBranchClipboard } from "./branchClipboard";
+import { createBranchPaste } from "./branchPaste.js";
+
 export function createMarkdownImport(runtimeContext) {
+  const {
+    pasteBranch,
+    cancelBranchPaste,
+    disposeBranchPaste,
+    isBranchPasteBusy,
+    watchPasteMetadata,
+  } = createBranchPaste(runtimeContext);
   /**
    * Generates a hierarchy of links based on the headings in the target file.
    */
@@ -527,23 +537,23 @@ export function createMarkdownImport(runtimeContext) {
    */
   const pasteElementToMap = async () => {
     if (!runtimeContext.isViewSet()) return;
+    if (isBranchPasteBusy()) return;
     const sel = runtimeContext.getMindmapNodeFromSelection();
-    // Standard text-list paste handles root-level initialization better
-    if (!sel) {
-      await pasteListToMap();
-      return;
-    }
     let rawText = "";
     try {
       rawText = await navigator.clipboard.readText();
     } catch (e) {}
-    const excalidrawClipboardPayload = rawText && rawText.includes('"type":"excalidraw/clipboard"');
+    const clipboardPayload = parseBranchClipboard(rawText);
+    if (clipboardPayload && (await pasteBranch(clipboardPayload, sel))) return;
+    // Standard text-list paste handles root-level initialization better.
+    if (!sel) {
+      await pasteListToMap(rawText);
+      return;
+    }
+    const excalidrawClipboardPayload = !!clipboardPayload;
     // Scenario 1: Excalidraw Element JSON (Single Element or Container+Text)
     if (excalidrawClipboardPayload) {
-      let clipboardData;
-      try {
-        clipboardData = JSON.parse(rawText);
-      } catch (e) {}
+      const clipboardData = clipboardPayload;
       if (clipboardData && clipboardData.elements) {
         const els = clipboardData.elements.filter((e) => !e.isDeleted);
         const isSingleElement = els.length === 1 && ["embeddable", "text"].includes(els[0].type);
@@ -706,5 +716,14 @@ export function createMarkdownImport(runtimeContext) {
       new runtimeContext.Notice(runtimeContext.t("NOTICE_PASTE_ABORTED"));
     }
   };
-  return { importOutline, importTextToMap, pasteListToMap, pasteElementToMap };
+  return {
+    importOutline,
+    importTextToMap,
+    pasteListToMap,
+    pasteElementToMap,
+    cancelBranchPaste,
+    disposeBranchPaste,
+    isBranchPasteBusy,
+    watchPasteMetadata,
+  };
 }

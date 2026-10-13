@@ -10,6 +10,7 @@
 | Visual details | `arrows.js`, `boundaries.js`, `decorations.js`, `colors.js`, `folding.js` |
 | Node operations | `nodes.js`, `nodeOrder.js`, `nodeStyles.js`, `nodeEditing.js`, `transactions.js` |
 | Text and Markdown | `textParsing.js`, `markdownImport.js`, `markdownExport.js` |
+| Element-preserving branch paste | `branchClipboard.ts`, `branchPaste.js`, `pasteMetadata.js`, `branchHistory.ts` |
 | Keyboard actions and tasks | `keyboard.js`, `HotkeyRecorder.ts`, `actions.js`, `tasks.js` |
 | Controls and modal classes | `inputUi.js`, `inputControls.js`, `sidepanelControls.js`, `helpUi.js`, `PaletteManagerModal.js`, `LayoutConfigModal.js` |
 | UI lifetime and public API | `styles.js`, `floatingInput.js`, `lifecycle.js`, `sidepanelLifecycle.js`, `publicApi.js` |

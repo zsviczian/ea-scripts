@@ -12,6 +12,9 @@ export const en = {
   NOTICE_NO_LIST: "No valid Markdown list found on clipboard.",
   NOTICE_PASTE_START: "Pasiting, please wait, this can take a while...",
   NOTICE_PASTE_COMPLETE: "Paste complete.",
+  NOTICE_BRANCH_PASTE_INVALID: "Cannot paste this branch: its Mindmap connections are invalid.",
+  NOTICE_BRANCH_PASTE_FAILED:
+    "Branch paste could not finish. Any pasted elements remain in the drawing. Check the drawing before retrying.",
   NOTICE_ACTION_REQUIRES_ARROWS: "This action requires Arrow Keys. Only modifiers can be changed.",
   NOTICE_CONFLICT_WITH_ACTION: 'Conflict with "{action}"',
   NOTICE_OBSIDIAN_HOTKEY_CONFLICT:
@@ -118,7 +121,7 @@ export const en = {
   TITLE_ADD_FOLLOW: "Add and follow",
   TITLE_COPY: "Copy branch as text",
   TITLE_CUT: "Cut branch as text",
-  TITLE_PASTE: "Paste list from clipboard",
+  TITLE_PASTE: "Paste Markdown or a copied Mindmap branch",
   LABEL_ZOOM_LEVEL: "Zoom Level",
   LABEL_GROWTH_STRATEGY: "Growth Strategy",
   LABEL_FILL_SWEEP: "Fill Sweep Angle",
@@ -312,7 +315,7 @@ export const en = {
     "- **Coloring**: First level branches get unique colors (Multicolor mode). Descendants inherit parent's color.\n" +
     "- **Grouping**:\n" +
     '  - Enabling "Group Branches" recursively groups sub-trees from leaves up to the first level.\n' +
-    "- **Copy/Paste**: Export/Import indented Markdown lists.\n" +
+    "- **Copy/Paste**: Builder Copy exports Markdown. To preserve links, images, and grouped notes, use native canvas copy, select the destination parent, then use Builder Paste. With no parent selected, the copied branch becomes an independent map.\n" +
     "\n" +
     "😍 If you find this script helpful, please [buy me a coffee ☕](https://ko-fi.com/zsolt).",
 };

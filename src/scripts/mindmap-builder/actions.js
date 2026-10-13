@@ -5,9 +5,13 @@
  */
 
 /** Creates this subsystem against the invocation-owned context. */
+import { undoPastedBranch } from "./branchHistory";
+
 export function createActions(runtimeContext) {
+  let historyBusy = false;
   const performAction = async (action, event) => {
-    if (!action || !runtimeContext.ea.targetView) return;
+    if (!action || !runtimeContext.ea.targetView || historyBusy) return;
+    if (runtimeContext.isBranchPasteBusy?.()) return;
     switch (action) {
       case runtimeContext.ACTION_CALENDAR:
         await runtimeContext.openCalendarModal();
@@ -225,6 +229,29 @@ export function createActions(runtimeContext) {
       case runtimeContext.ACTION_UNDO:
         if (runtimeContext.ea.targetView) {
           const currentVer = ExcalidrawLib.getSceneVersion(runtimeContext.api().getSceneElements());
+          const transaction = runtimeContext.lastCommittedTransaction;
+          if (transaction?.branchPasteIds && currentVer === transaction.version) {
+            const api = runtimeContext.api();
+            let steps;
+            historyBusy = true;
+            try {
+              steps = await undoPastedBranch(api, transaction.branchPasteIds, () => sleep(0));
+            } finally {
+              historyBusy = false;
+            }
+            if (api.isDestroyed || runtimeContext.api() !== api) {
+              runtimeContext.redoAvailable = null;
+              runtimeContext.lastCommittedTransaction = null;
+              break;
+            }
+            runtimeContext.redoAvailable = {
+              steps: Math.max(0, steps - 1),
+              branchPasteIds: transaction.branchPasteIds,
+              version: ExcalidrawLib.getSceneVersion(api.getSceneElements()),
+            };
+            runtimeContext.lastCommittedTransaction = null;
+            break;
+          }
           if (
             runtimeContext.lastCommittedTransaction &&
             currentVer === runtimeContext.lastCommittedTransaction.version &&
@@ -257,8 +284,21 @@ export function createActions(runtimeContext) {
             currentVer === runtimeContext.redoAvailable.version &&
             runtimeContext.redoAvailable.steps > 0
           ) {
-            for (let i = 0; i <= runtimeContext.redoAvailable.steps; i++) {
-              runtimeContext.api().history.redo();
+            const api = runtimeContext.api();
+            historyBusy = !!runtimeContext.redoAvailable.branchPasteIds;
+            try {
+              for (let i = 0; i <= runtimeContext.redoAvailable.steps; i++) {
+                if (api.isDestroyed || runtimeContext.api() !== api) break;
+                api.history.redo();
+                if (runtimeContext.redoAvailable.branchPasteIds) await sleep(0);
+              }
+            } finally {
+              historyBusy = false;
+            }
+            if (api.isDestroyed || runtimeContext.api() !== api) {
+              runtimeContext.redoAvailable = null;
+              runtimeContext.lastCommittedTransaction = null;
+              break;
             }
             const afterRedoVer = ExcalidrawLib.getSceneVersion(
               runtimeContext.api().getSceneElements(),
@@ -266,6 +306,9 @@ export function createActions(runtimeContext) {
             runtimeContext.lastCommittedTransaction = {
               steps: runtimeContext.redoAvailable.steps,
               version: afterRedoVer,
+              ...(runtimeContext.redoAvailable.branchPasteIds
+                ? { branchPasteIds: runtimeContext.redoAvailable.branchPasteIds }
+                : {}),
             };
             runtimeContext.redoAvailable = null;
           } else {
