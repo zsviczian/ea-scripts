@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { printSlideshowToPdf } from "../printToPdf";
+import { generateSlideshowPdf } from "../printToPdf";
+import { buildFrameSlideDeck } from "../SlideDeck";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -16,6 +17,13 @@ describe("slideshow bounded exports", () => {
       },
     );
     const exportOptions: ViewSvgOptions[] = [];
+    vi.stubGlobal("createFragment", () => ({
+      createSvg: (_tag: string, info: { attr: Record<string, string> }) => ({
+        attributes: info.attr,
+        createSvg: () => undefined,
+        appendChild: () => undefined,
+      }),
+    }));
     const pages: Array<{ attributes: Record<string, string> }> = [];
     const createPDF = vi.fn(async () => undefined);
     const ea = {
@@ -27,6 +35,7 @@ describe("slideshow bounded exports", () => {
           setAttribute(name: string, value: string) {
             this.attributes[name] = value;
           },
+          setCssStyles(): void {},
         };
         pages.push(page);
         return page as unknown as SVGSVGElement;
@@ -41,20 +50,39 @@ describe("slideshow bounded exports", () => {
         viewBackgroundColor: "#ffffff",
       }),
     } as unknown as ExcalidrawAPI;
+    ea.getExcalidrawAPI = () => api;
 
-    await printSlideshowToPdf({
-      event: { shiftKey: false } as MouseEvent,
-      ea,
-      api,
-      slides: [
-        { x1: 0, y1: 0, x2: 1920, y2: 1080 },
-        { x1: 1920, y1: 0, x2: 3840, y2: 1080 },
-      ],
-      printSlideWidth: 1920,
-      printSlideHeight: 1080,
-      maxZoom: 1,
-      t: ((key: string) => key) as never,
-    });
+    const deck = buildFrameSlideDeck([
+      { id: "a", name: "A", x: 0, y: 0, width: 1920, height: 1080 },
+      { id: "b", name: "B", x: 1920, y: 0, width: 1920, height: 1080 },
+    ]);
+    await generateSlideshowPdf(
+      {
+        event: { shiftKey: false } as MouseEvent,
+        ea,
+        api,
+        choices: {
+          frame: { deck, pathElement: null, frames: [] },
+          lines: [],
+          line: null,
+          defaultSourceKey: "frame",
+          defaultType: "frame",
+        },
+        sourceKey: "frame",
+        printSlideWidth: 1920,
+        printSlideHeight: 1080,
+        maxZoom: 1,
+        t: ((key: string) => key) as never,
+      },
+      {
+        sourceKey: "frame",
+        layout: "slides",
+        visibleOnly: true,
+        margin: "none",
+        width: 1920,
+        height: 1080,
+      },
+    );
 
     expect(exportOptions).toHaveLength(2);
     expect(exportOptions.map((options) => options.exportArea)).toEqual([
@@ -64,8 +92,8 @@ describe("slideshow bounded exports", () => {
     expect(exportOptions.every((options) => options.elementsOverride === undefined)).toBe(true);
     expect(createPDF).toHaveBeenCalledOnce();
     expect(pages.map((page) => page.attributes)).toEqual([
-      { width: "1920", height: "1080" },
-      { width: "1920", height: "1080" },
+      { width: "1920", height: "1080", x: "0", y: "0" },
+      { width: "1920", height: "1080", x: "0", y: "0" },
     ]);
   });
 });

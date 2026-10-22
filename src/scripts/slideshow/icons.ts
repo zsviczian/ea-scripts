@@ -24,6 +24,7 @@ export function getSlideshowIcons(ea: ExcalidrawAutomate): SlideshowIcons {
     laserOn: iconMarkup(ea, "lucide-hand"),
     laserOff: iconMarkup(ea, "lucide-wand"),
     printer: iconMarkup(ea, "lucide-printer"),
+    fileDown: iconMarkup(ea, "lucide-file-down"),
     refocus: iconMarkup(ea, "lucide-scan-eye"),
     gripVertical: iconMarkup(ea, "lucide-grip-vertical"),
     chevronUp: iconMarkup(ea, "lucide-chevron-up"),

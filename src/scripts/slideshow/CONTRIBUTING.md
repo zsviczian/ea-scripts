@@ -19,7 +19,11 @@
 - `presentationState.ts`: pure authoritative presenter-state construction shared with the presentation controller.
 - `SlideSorter.ts`: rows, drag/drop, keyboard controls, frame/line inclusion, notes, and animation entry UI.
 - `SlidePreviewService.ts`: lazy, byte-budgeted, area-bounded PNG preview generation.
-- `printToPdf.ts`: page-local SVG generation from canonical visible slide rectangles.
+- `PrintDialog.ts`: slideshow selection, handout layout, inclusion, and page dimensions.
+- `printToPdf.ts` / `printLayout.ts`: area-bounded SVG export and paginated notes handouts.
+- `exportMarkdown.ts`: frame headings, named embeds, notes, and new-note creation.
+- `presentationViewport.ts`: layout/API resize synchronization before the first slide.
+- `presentationSources.ts`: shared deck labels for sidepanel and print setup.
 - `styles.ts`: sidepanel/sorter CSS.
 - `types.ts`: slideshow domain contracts and host-facing types.
 

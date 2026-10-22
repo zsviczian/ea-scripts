@@ -48,7 +48,7 @@ A drawing can contain one frame presentation plus any number of independent line
 - When multiple sources exist, the presentation selector lists `Frames` plus every named line presentation independently. The selected source is persisted per drawing and becomes the manual-launch default whenever no frame or line/arrow is selected on the canvas. A selected frame or line/arrow overrides that default for the invocation.
 - Frames without slideshow metadata retain alphabetical ordering.
 - The first sorter mutation writes explicit normalized `order` metadata; after that, frame renames do not change presentation order.
-- Excluded frame and line slides remain visible and editable in the sorter, but are omitted from presentation and PDF output.
+- Excluded frame and line slides remain visible and editable in the sorter. Presentations omit them; PDF setup lets you choose visible slides or all slides.
 
 ## Slide sorter
 
@@ -107,7 +107,7 @@ The sidepanel also includes a small support link to [Ko-fi](https://ko-fi.com/zs
 
 ## Presentation launch, displays, and PDF behavior
 
-The sidepanel has one compact **Play** button. Launch behavior is configured independently through dropdowns instead of overloading the play action: **Start / Resume / Current**, **Fullscreen / Windowed**, and **Slides only / With Notes**. If multiple presentation sources exist, a separate presentation selector is shown. Changing a dropdown never starts the presentation; pressing Play uses the currently selected combination. These choices are persisted in script settings. The launch/display controls live in a collapsible **Presentation settings** section so the sorter can use most of the panel height. Windowed launches hide the entire Excalidraw sidepanel before presentation so the deck receives the full workspace width.
+The sidepanel has one compact **Play** button. Launch behavior is configured independently through dropdowns instead of overloading the play action: **Start / Resume / Current**, **Fullscreen / Windowed**, and **Slides only / With Notes**. If multiple presentation sources exist, a separate presentation selector is shown. Changing a dropdown never starts the presentation; pressing Play uses the currently selected combination. These choices are persisted in script settings. The launch/display controls live in a collapsible **Presentation settings** section so the sorter can use most of the panel height. Launches hide the docked Excalidraw sidepanel and wait for both the drawing layout and Excalidraw viewport dimensions to settle before framing the first slide. A sidepanel in a separate popout stays open.
 
 On desktop, display selectors are shown only when **With Notes** is selected. The default keeps the presentation on the current/primary display and chooses another display for presenter notes when available. Presentation and notes display selections are persisted in script settings under a stable local device key, allowing different machines that share the script settings to keep independent monitor choices.
 
@@ -117,7 +117,26 @@ Display handling remains best-effort because Obsidian does not expose a first-cl
 On Obsidian Mobile, presentations always use fullscreen mode, presenter view is unavailable, and the docked mobile navbar is hidden for the duration of the presentation. The presentation toolbar is centered and uses a compact slide picker on narrow screens.
 
 
-Presentation navigation, the toolbar slide picker, and PDF export consume the canonical visible deck. Frame order and exclusions therefore match the sorter. The presentation slide picker labels entries as `Title (current/total)`. Starting from the sidepanel returns focus to the drawing leaf before keyboard handlers are installed, so arrow-key navigation is immediately active. PDF pages use the final fully built scene state: all animation targets are restored to their original opacity and no animation overlays are included.
+Presentation navigation and the toolbar slide picker consume the canonical visible deck. The presentation slide picker labels entries as `Title (current/total)`. Starting from the sidepanel returns focus to the drawing leaf before keyboard handlers are installed, so arrow-key navigation is immediately active. PDF pages use the final fully built scene state: all animation targets are restored to their original opacity and no animation overlays are included.
+
+## PDF printing and handouts
+
+Select **Print slideshow to PDF** in the sidepanel or presentation toolbar to open print setup. Choose any available frame or named line/arrow slideshow; the current deck is selected initially. Printing preserves the sorter's slide order.
+
+- Choose slides only, one slide with notes below it, or two/three slides with notes beside each slide per page.
+- **Print only visible slides** is on initially. Turn it off to include excluded slides, including decks whose slides are all excluded.
+- Choose the configured slide size, **A4**, **Letter**, **16:9**, or **Custom**, then select **Landscape** or **Portrait**. Width and height are editable in pixels (96 pixels per inch), from 320 to 14400 pixels. Holding Shift while opening setup starts with the current viewport dimensions.
+- Slide-only pages frame the drawing using the chosen page aspect ratio. Handout thumbnails retain the configured presentation aspect ratio within the selected paper size.
+- **Margins** offers **None** (default, edge-to-edge slides), **Minimal** (10 px), and **Normal** (60 px). Margins apply to slides and handouts without adding a second inset in the PDF exporter.
+- Handout notes print as plain text, including any Markdown syntax. Long notes continue in another slot with the slide repeated, so no notes are clipped.
+
+PDF creation uses Excalidraw's existing desktop PDF export and its normal save dialog.
+
+## Export frame slides to Markdown
+
+For frame decks, select the **Export frame slides to Markdown** file-down button beside Print. Enter a filename to create a note in the drawing's folder and open it in a new tab. Existing notes are never overwritten; cancelling creates nothing.
+
+The note includes every frame slide in sorter order, including excluded slides. Each section contains the frame title, an embed such as `![[Folder/Drawing.excalidraw.md#^frame=Opening]]`, and the slide's original Markdown notes. Duplicate, unnamed, or unlinkable frame names use the frame ID in the same `#^frame=` syntax to keep the reference unambiguous. Line/arrow decks do not offer Markdown export.
 
 ## Keyboard shortcuts and modifier keys during presentation
 

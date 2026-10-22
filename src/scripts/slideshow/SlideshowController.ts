@@ -21,6 +21,8 @@ import { PresenterViewController } from "./PresenterViewController";
 import { buildPresentationState } from "./presentationState";
 import type { SlideshowTranslator } from "./lang";
 import { printSlideshowToPdf } from "./printToPdf";
+import { waitForPresentationViewport } from "./presentationViewport";
+import { resolveSlideDeckChoices } from "./presentationPath";
 import {
   getAbsoluteLinePoints,
   upgradeLineSlideshowData,
@@ -154,6 +156,8 @@ export class SlideshowController {
     if (this.shouldStartFullscreen) await this.gotoFullscreen(false);
     else this.controls?.resetPosition(false);
     if (this.setup.pathType === "line") await this.togglePathVisibility(this.setup.isHidden);
+    await waitForPresentationViewport(this.hostView, this.api);
+    this.controls?.resetPosition(false);
     this.stateEmissionPauseDepth += 1;
     try {
       await this.enterSlide(this.slide, false);
@@ -753,13 +757,19 @@ export class SlideshowController {
         event,
         ea: this.ea,
         api: this.api,
-        slides: this.setup.slides,
+        choices: resolveSlideDeckChoices(this.ea),
+        sourceKey: this.setup.sourceKey,
         printSlideWidth: this.config.printSlideWidth,
         printSlideHeight: this.config.printSlideHeight,
         maxZoom: this.config.maxZoom,
         t: this.t,
       });
-    if (this.animationRuntime) await this.animationRuntime.withFinalState(task);
-    else await task();
+    try {
+      if (this.animationRuntime) await this.animationRuntime.withFinalState(task);
+      else await task();
+    } catch (error) {
+      console.error("Slideshow PDF export failed", error);
+      new this.ea.obsidian.Notice(this.t("printFailed"));
+    }
   }
 }

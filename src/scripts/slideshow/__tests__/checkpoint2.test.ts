@@ -2365,6 +2365,7 @@ describe("slideshow checkpoint 2 presenter-note lifecycle", () => {
       config: {} as never,
       startPresentation: async () => undefined,
       printPresentation: async () => undefined,
+      exportMarkdown: async () => undefined,
       onClosed: () => undefined,
     });
     const internals = sidepanel as unknown as {
@@ -2400,6 +2401,7 @@ describe("slideshow checkpoint 2 presenter-note lifecycle", () => {
       config: {} as never,
       startPresentation: async () => undefined,
       printPresentation: async () => undefined,
+      exportMarkdown: async () => undefined,
       onClosed: () => undefined,
     });
     const refresh = vi.spyOn(sidepanel, "refresh").mockResolvedValue();

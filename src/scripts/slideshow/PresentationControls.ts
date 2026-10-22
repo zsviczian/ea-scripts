@@ -64,8 +64,6 @@ export class PresentationControls {
       slideTitles,
       shouldOfferPathVisibility,
       isPathHidden,
-      printSlideWidth,
-      printSlideHeight,
       ea,
       callbacks,
       icons,
@@ -279,7 +277,7 @@ export class PresentationControls {
             {
               attr: {
                 style: "margin-right: calc(var(--default-button-size)*0.25);",
-                "aria-label": t("printPdf", { width: printSlideWidth, height: printSlideHeight }),
+                "aria-label": t("printDialogTitle"),
               },
             },
             (button) => {

@@ -22,6 +22,7 @@ import {
 import { SlideshowController } from "./SlideshowController";
 import { SlideshowSidepanel } from "./SlideshowSidepanel";
 import { printSlideshowToPdf } from "./printToPdf";
+import { exportSlideshowMarkdown } from "./exportMarkdown";
 import { sleepInWindow } from "../../sharedUtils/windowTiming";
 import {
   createLinePresentation,
@@ -297,7 +298,7 @@ export async function printSlideshowPresentation(
       : presentationSource === "frame"
         ? choices.frame
         : resolvePresentationSource(choices, presentationSource);
-  if (!resolved || resolved.deck.visibleSlides.length === 0) {
+  if (!resolved) {
     new Notice(t("allSlidesExcluded"));
     return;
   }
@@ -305,7 +306,8 @@ export async function printSlideshowPresentation(
     event,
     ea,
     api,
-    slides: resolved.deck.visibleSlides.map((slide) => slide.rect),
+    choices,
+    sourceKey: presentationSource === "line" ? choices.lines[0]!.key : presentationSource,
     printSlideWidth: config.printSlideWidth,
     printSlideHeight: config.printSlideHeight,
     maxZoom: config.maxZoom,
@@ -371,6 +373,15 @@ export async function openSlideshowSidepanel(
       if (!boundContext) return;
       Object.assign(boundContext.config, context.config);
       await printSlideshowPresentation(boundContext, presentationSourceKey, event);
+    },
+    exportMarkdown: async () => {
+      const boundView = sidepanel.getBoundView();
+      if (!boundView) return;
+      const boundContext = getSlideshowViewContext(boundView);
+      if (!boundContext) return;
+      boundContext.ea.setView(boundView);
+      const deck = resolveSlideDeckChoices(boundContext.ea).frame?.deck;
+      if (deck) await exportSlideshowMarkdown(boundContext, deck);
     },
   });
   const handle = {

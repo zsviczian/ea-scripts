@@ -60,6 +60,7 @@ export interface SlideshowIcons {
   laserOn: string;
   laserOff: string;
   printer: string;
+  fileDown: string;
   refocus: string;
   gripVertical: string;
   chevronUp: string;

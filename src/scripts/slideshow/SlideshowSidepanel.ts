@@ -70,6 +70,8 @@ import {
   type SlideshowWindowMode,
 } from "./slideshowSettings";
 import { openSlideshowQuickGuideModal } from "./slideshowQuickGuide";
+import { getPresentationSourceLabels } from "./presentationSources";
+export { getPresentationSourceLabels } from "./presentationSources";
 import { SLIDESHOW_SIDEPANEL_STYLES } from "./styles";
 import {
   getSlideshowProgress,
@@ -107,6 +109,7 @@ export interface SlideshowSidepanelOptions {
     options: SidepanelPresentationLaunchOptions,
   ): Promise<void>;
   printPresentation(presentationSource: PresentationSourceKey, event: MouseEvent): Promise<void>;
+  exportMarkdown(): Promise<void>;
   onClosed(): void;
 }
 
@@ -215,30 +218,6 @@ export function getDeclarableSelectedFrame(ea: ExcalidrawAutomate): ExcalidrawFr
     .getViewElements()
     .some((element) => isFrameElement(element) && hasFrameSlideshowDeclaration(element.customData));
   return alreadyDeclared ? null : selected;
-}
-
-/** Creates disambiguated presentation labels without changing stored presentation names. */
-export function getPresentationSourceLabels(
-  choices: SlideDeckChoices,
-  frameLabel: string,
-  defaultLineLabel: string,
-): Array<{ key: PresentationSourceKey; label: string }> {
-  const result: Array<{ key: PresentationSourceKey; label: string }> = [];
-  if (choices.frame) result.push({ key: "frame", label: choices.frame.deck.name?.trim() || frameLabel });
-  const bases = choices.lines.map((line) => line.name?.trim() || defaultLineLabel);
-  const totals = new Map<string, number>();
-  for (const base of bases) totals.set(base, (totals.get(base) ?? 0) + 1);
-  const seen = new Map<string, number>();
-  choices.lines.forEach((line, index) => {
-    const base = bases[index] ?? defaultLineLabel;
-    const ordinal = (seen.get(base) ?? 0) + 1;
-    seen.set(base, ordinal);
-    result.push({
-      key: line.key,
-      label: (totals.get(base) ?? 0) > 1 ? `${base} (${ordinal})` : base,
-    });
-  });
-  return result;
 }
 
 function getLineSourceByKey(
@@ -1088,17 +1067,25 @@ export class SlideshowSidepanel {
     printButton.type = "button";
     printButton.className =
       "slideshow-sidepanel__icon-button slideshow-sidepanel__print-button";
-    const printLabel = t("printPdf", {
-      width: this.options.config.printSlideWidth,
-      height: this.options.config.printSlideHeight,
-    });
+    const printLabel = t("printDialogTitle");
     printButton.setAttribute("aria-label", printLabel);
     printButton.innerHTML = icons.printer;
-    printButton.disabled = !this.resolved || noVisibleSlides;
+    printButton.disabled = !this.resolved;
     header.appendChild(printButton);
     printButton.addEventListener("click", (event) => {
       void this.printPresentation(event);
     });
+
+    if (this.resolved?.deck.kind === "frame") {
+      const exportButton = header.createEl("button", {
+        cls: "slideshow-sidepanel__icon-button slideshow-sidepanel__export-markdown",
+        attr: { type: "button", "aria-label": t("exportMarkdown") },
+      });
+      exportButton.innerHTML = icons.fileDown;
+      exportButton.addEventListener("click", () => {
+        void this.exportMarkdown();
+      });
+    }
 
     const contextAction = this.createHeaderContextAction(doc);
     if (contextAction) header.appendChild(contextAction);
@@ -1580,15 +1567,31 @@ export class SlideshowSidepanel {
         : {}),
     };
 
-    if (!startFullscreen) await this.prepareWindowedPresentation(view);
+    await this.prepareWindowedPresentation(view);
     await this.options.startPresentation(presentationSourceKey, launchOptions);
   }
 
   private async printPresentation(event: MouseEvent): Promise<void> {
-    await this.sorter?.flushNotes();
-    if (this.animationEditor) await this.closeAnimationEditor();
-    if (this.presentationSourceKey) {
-      await this.options.printPresentation(this.presentationSourceKey, event);
+    try {
+      await this.sorter?.flushNotes();
+      if (this.animationEditor) await this.closeAnimationEditor();
+      if (this.presentationSourceKey) {
+        await this.options.printPresentation(this.presentationSourceKey, event);
+      }
+    } catch (error) {
+      console.error("Slideshow PDF export failed", error);
+      new this.options.ea.obsidian.Notice(this.options.t("printFailed"));
+    }
+  }
+
+  private async exportMarkdown(): Promise<void> {
+    try {
+      await this.sorter?.flushNotes();
+      if (this.animationEditor) await this.closeAnimationEditor();
+      await this.options.exportMarkdown();
+    } catch (error) {
+      console.error("Slideshow Markdown export failed", error);
+      new this.options.ea.obsidian.Notice(this.options.t("exportMarkdownFailed"));
     }
   }
 
@@ -1971,7 +1974,7 @@ export class SlideshowSidepanel {
         ".slideshow-sidepanel__print-button",
       );
     if (startButton) startButton.disabled = disabled;
-    if (printButton) printButton.disabled = disabled;
+    if (printButton) printButton.disabled = false;
   }
 
   private updateLastFingerprintFromCurrentState(): void {
