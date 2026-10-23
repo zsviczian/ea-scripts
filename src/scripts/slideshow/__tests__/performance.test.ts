@@ -92,8 +92,8 @@ describe("slideshow bounded exports", () => {
     expect(exportOptions.every((options) => options.elementsOverride === undefined)).toBe(true);
     expect(createPDF).toHaveBeenCalledOnce();
     expect(pages.map((page) => page.attributes)).toEqual([
-      { width: "1920", height: "1080", x: "0", y: "0" },
-      { width: "1920", height: "1080", x: "0", y: "0" },
+      { width: "1920", height: "1080", x: "0", y: "0", preserveAspectRatio: "xMidYMid meet" },
+      { width: "1920", height: "1080", x: "0", y: "0", preserveAspectRatio: "xMidYMid meet" },
     ]);
   });
 });

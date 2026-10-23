@@ -1,4 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { renderPrintNotes } from "../MarkdownPrintNotes";
+vi.mock("../MarkdownPrintNotes", async (original) => ({
+  ...(await original<typeof import("../MarkdownPrintNotes")>()),
+  renderPrintNotes: vi.fn(),
+}));
 import { buildFrameSlideDeck, buildLineSlideDeck } from "../SlideDeck";
 import {
   buildSlideshowMarkdown,
@@ -56,6 +61,7 @@ function printFixture(): {
   createPDF: ReturnType<typeof vi.fn>;
   exports: ViewSvgOptions[];
 } {
+  vi.mocked(renderPrintNotes).mockResolvedValue([new Svg("div") as never]);
   vi.stubGlobal(
     "Notice",
     class {
@@ -121,7 +127,7 @@ function printFixture(): {
     exports,
     options: {
       ea: {
-        targetView: { file: { basename: "deck" } },
+        targetView: { file: { basename: "deck", path: "deck.md" }, ownerDocument: {} },
         createPDF,
         obsidian: { Notice: vi.fn() },
         createViewSVG: async (options: ViewSvgOptions) => {
@@ -206,15 +212,35 @@ describe("slideshow print output", () => {
       );
     },
   );
-  it("uses the selected page ratio for slide framing and includes excluded slides only on request", async () => {
+  it("clips each slide to its own rectangle on portrait paper and includes excluded slides only on request", async () => {
     const { options, exports, createPDF } = printFixture();
     await generateSlideshowPdf(options, settings);
     expect(exports).toHaveLength(1);
-    expect(exports[0]!.exportArea!.width / exports[0]!.exportArea!.height).toBeCloseTo(816 / 1056);
+    expect(exports[0]!.exportArea).toEqual({ x: 0, y: 0, width: 1920, height: 1080 });
     await generateSlideshowPdf(options, { ...settings, visibleOnly: false });
     expect(exports).toHaveLength(3);
     expect(createPDF.mock.calls[1]![0].SVG).toHaveLength(2);
     expect(createPDF.mock.calls[1]![0].pageProps.dimensions).toEqual({ width: 816, height: 1056 });
+  });
+  it.each(["light", "dark"] as const)(
+    "exports the selected %s print theme without changing the scene",
+    async (theme) => {
+      const { options, exports, createPDF } = printFixture();
+      options.api.getAppState = () =>
+        ({ theme: theme === "dark" ? "light" : "dark", viewBackgroundColor: "white" }) as never;
+      await generateSlideshowPdf(options, { ...settings, theme });
+      expect(exports[0]!.theme).toBe(theme);
+      expect(createPDF.mock.calls[0]![0].pageProps.backgroundColor).toBe(
+        theme === "dark" ? "#121212" : "white",
+      );
+      expect(options.api.getAppState().theme).not.toBe(theme);
+    },
+  );
+  it("defaults printing to the current scene theme", async () => {
+    const { options, exports } = printFixture();
+    options.api.getAppState = () => ({ theme: "dark", viewBackgroundColor: "white" }) as never;
+    await generateSlideshowPdf(options, settings);
+    expect(exports[0]!.theme).toBe("dark");
   });
   it("prints the chosen line deck instead of the default frame deck", async () => {
     const { options, exports } = printFixture();
@@ -233,23 +259,51 @@ describe("slideshow print output", () => {
     expect(createPDF).toHaveBeenCalledOnce();
   });
   it.each(["notes", "handout-2", "handout-3"] as const)(
-    "paginates %s without losing the end of long notes",
+    "assembles %s from rendered HTML continuations, repeating intact slides",
     async (layout) => {
       const { options, createPDF } = printFixture();
-      options.choices.frame!.deck.slides[0]!.notes = `${"A note line\n".repeat(180)}LAST NOTE <&>`;
-      await generateSlideshowPdf(options, { ...settings, layout, visibleOnly: false });
+      const chunks = ["Opening formatted notes", "Middle", "LAST NOTE <&>"].map((text) => {
+        const chunk = new Svg("div");
+        chunk.textContent = text;
+        return chunk;
+      });
+      vi.mocked(renderPrintNotes).mockResolvedValueOnce(chunks as never);
+      await generateSlideshowPdf(options, { ...settings, layout });
+      expect(renderPrintNotes).toHaveBeenLastCalledWith(
+        options.ea,
+        "Hello <script> & notes",
+        "deck.md",
+        getHandoutBoxes({ ...settings, layout }).notes,
+        {},
+        "light",
+      );
       const pages = createPDF.mock.calls[0]![0].SVG as Svg[];
-      expect(pages.length).toBeGreaterThan(1);
-      const text = pages.flatMap((page) => page.children.filter((child) => child.tag === "text"));
-      expect(text.some((node) => node.textContent === "LAST NOTE <&>")).toBe(true);
-      expect(text.some((node) => node.textContent.includes("(continued)"))).toBe(true);
-      expect(text.some((node) => node.textContent.includes("Hidden notes"))).toBe(true);
-      for (const page of pages)
-        for (const node of page.children.filter((child) => child.tag === "text")) {
-          expect(Number(node.attributes.y)).toBeLessThan(settings.height);
-        }
+      const html = pages.flatMap((page) =>
+        page.children.filter((child) => child.tag === "foreignObject"),
+      );
+      expect(html).toHaveLength(3);
+      expect(html.map((node) => node.children[0]!.textContent)).toEqual(
+        chunks.map((node) => node.textContent),
+      );
+      expect(
+        pages.flatMap((page) => page.children.filter((child) => child.tag === "svg")),
+      ).toHaveLength(3);
+      expect(
+        pages
+          .flatMap((page) => page.children)
+          .some((node) => node.textContent.includes("(continued)")),
+      ).toBe(true);
     },
   );
+  it("applies output page ranges after assembly without duplicating overlapping selections", async () => {
+    const { options, createPDF } = printFixture();
+    await generateSlideshowPdf(options, { ...settings, visibleOnly: false, pageRanges: "2;2-" });
+    expect(createPDF.mock.calls[0]![0].SVG).toHaveLength(1);
+    const { options: noPages, createPDF: unused } = printFixture();
+    await generateSlideshowPdf(noPages, { ...settings, pageRanges: "9-" });
+    expect(unused).not.toHaveBeenCalled();
+    expect(noPages.ea.obsidian.Notice).toHaveBeenCalledWith(t("printNoPages"));
+  });
   it("keeps notes and thumbnails inside each row at the smallest supported size", () => {
     for (const layout of ["notes", "handout-2", "handout-3"] as const) {
       const boxes = getHandoutBoxes({ ...settings, width: 320, height: 320, layout });

@@ -97,7 +97,7 @@ On desktop, presenter view runs in a script-owned Obsidian popout. The presenter
 
 `SlidePreviewService` calculates each slide's configured `printSlideWidth` × `printSlideHeight` navigation rectangle and exports only elements intersecting that viewport. Sorter and presenter previews are bounded-resolution PNG blobs rather than full-scene SVG clones, so off-slide embedded images are not repeated in every thumbnail. Sorter previews are requested lazily with `IntersectionObserver` and rendered through a serialized queue. A byte-budgeted LRU cache owns object URLs and revokes them on eviction or drawing changes. Slideshow metadata-only changes do not invalidate visual previews.
 
-PDF pages use the same area-selection and exact viewport anchoring through `ea.createViewSVG({ exportArea })`, but remain vector SVGs. Each page is self-contained and includes only image files referenced by elements intersecting that page instead of retaining the complete drawing behind a changed `viewBox`.
+PDF slides use area selection clipped to each slide's own rectangle through `ea.createViewSVG({ exportArea })`, but remain vector SVGs. Each page is self-contained and includes only image files referenced by elements intersecting that page instead of retaining the complete drawing behind a changed `viewBox`.
 
 ## Slideshow settings
 
@@ -121,14 +121,17 @@ Presentation navigation and the toolbar slide picker consume the canonical visib
 
 ## PDF printing and handouts
 
-Select **Print slideshow to PDF** in the sidepanel or presentation toolbar to open print setup. Choose any available frame or named line/arrow slideshow; the current deck is selected initially. Printing preserves the sorter's slide order.
+Select **Print slideshow to PDF** in the sidepanel or presentation toolbar to open floating print setup. Choose any available frame or named line/arrow slideshow; the current deck is selected initially. Printing preserves the sorter's slide order.
 
+- **Print theme** offers **Light** and **Dark** for slides and handouts. Each time setup opens, it defaults to the drawing's current scene theme.
 - Choose slides only, one slide with notes below it, or two/three slides with notes beside each slide per page.
-- **Print only visible slides** is on initially. Turn it off to include excluded slides, including decks whose slides are all excluded.
+- The **Print only visible slides** toggle is on by default. Turn it off to include excluded slides, including decks whose slides are all excluded.
 - Choose the configured slide size, **A4**, **Letter**, **16:9**, or **Custom**, then select **Landscape** or **Portrait**. Width and height are editable in pixels (96 pixels per inch), from 320 to 14400 pixels. Holding Shift while opening setup starts with the current viewport dimensions.
-- Slide-only pages frame the drawing using the chosen page aspect ratio. Handout thumbnails retain the configured presentation aspect ratio within the selected paper size.
+- Each slide is clipped to its own rectangle and fitted intact inside its page or handout slot. Changing paper aspect ratio never pulls neighboring slides into the printout or splits a slide across pages. Handout slots retain the configured presentation aspect ratio.
 - **Margins** offers **None** (default, edge-to-edge slides), **Minimal** (10 px), and **Normal** (60 px). Margins apply to slides and handouts without adding a second inset in the PDF exporter.
-- Handout notes print as plain text, including any Markdown syntax. Long notes continue in another slot with the slide repeated, so no notes are clipped.
+- Notes use Obsidian's Markdown renderer, preserving headings, emphasis, links, lists, tables, and code as formatted HTML. Long notes continue in another slot with the slide repeated.
+- **Page ranges** accepts output-page selections such as `1-3;5;9-`; leave it blank for all pages. Ranges count final pages, including notes continuation pages, and preserve their original order.
+- Confirmed print preferences (layout, visibility, page size, orientation/dimensions, margins, and page ranges) are saved in script settings and restored the next time print setup opens. The slideshow source initially follows the current drawing.
 
 PDF creation uses Excalidraw's existing desktop PDF export and its normal save dialog.
 

@@ -20,7 +20,9 @@
 - `SlideSorter.ts`: rows, drag/drop, keyboard controls, frame/line inclusion, notes, and animation entry UI.
 - `SlidePreviewService.ts`: lazy, byte-budgeted, area-bounded PNG preview generation.
 - `PrintDialog.ts`: slideshow selection, handout layout, inclusion, and page dimensions.
-- `printToPdf.ts` / `printLayout.ts`: area-bounded SVG export and paginated notes handouts.
+- `printToPdf.ts` / `printLayout.ts`: slide-clipped SVG export and paginated notes handouts.
+- `MarkdownPrintNotes.ts`: Obsidian Markdown rendering, measured HTML pagination, and XHTML notes in native PDF pages.
+- `printPreferences.ts` / `printRanges.ts`: validated print preferences and one-based output-page selection.
 - `exportMarkdown.ts`: frame headings, named embeds, notes, and new-note creation.
 - `presentationViewport.ts`: layout/API resize synchronization before the first slide.
 - `presentationSources.ts`: shared deck labels for sidepanel and print setup.

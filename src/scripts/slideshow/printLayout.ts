@@ -1,10 +1,13 @@
 import type { PresentationSourceKey } from "./types";
 
 export type HandoutLayout = "slides" | "notes" | "handout-2" | "handout-3";
+export type PrintTheme = "light" | "dark";
 export type PrintMargin = "none" | "minimal" | "normal";
 
 export interface SlideshowPrintSettings {
   sourceKey: PresentationSourceKey;
+  pageRanges?: string;
+  theme?: PrintTheme;
   layout: HandoutLayout;
   visibleOnly: boolean;
   margin: PrintMargin;
@@ -98,4 +101,15 @@ export function wrapPrintText(
     result.push(line);
   }
   return result;
+}
+
+/** Keeps handout paper, titles, and rendered notes legible in either print theme. */
+export function getPrintColors(theme: PrintTheme): {
+  background: string;
+  foreground: string;
+  border: string;
+} {
+  return theme === "dark"
+    ? { background: "#121212", foreground: "#e0e0e0", border: "#666666" }
+    : { background: "#ffffff", foreground: "#202020", border: "#aaaaaa" };
 }
