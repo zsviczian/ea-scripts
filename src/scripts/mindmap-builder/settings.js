@@ -4,6 +4,15 @@
  * Context accessors retain live per-invocation state; no plugin/view singleton is introduced.
  */
 
+/** Resolves persisted or drawing-owned names without selecting an absent dropdown option. */
+export function resolvePresetName(presets, name) {
+  if (typeof name !== "string" || !Object.prototype.hasOwnProperty.call(presets, name)) {
+    return "Default";
+  }
+  const preset = presets[name];
+  return preset && typeof preset === "object" && !Array.isArray(preset) ? name : "Default";
+}
+
 /** Creates this subsystem against the invocation-owned context. */
 export function createSettings(runtimeContext) {
   const getZoom = (level) => {
@@ -36,8 +45,9 @@ export function createSettings(runtimeContext) {
   };
 
   const setVal = (key, value, hidden = false) => {
+    const existing = runtimeContext.ea.getScriptSettings()?.[key];
     const def = runtimeContext.ea.getScriptSettingValue(key, { value, hidden });
-    const isChanging = def.value !== value || def.hidden !== hidden;
+    const isChanging = !existing || def.value !== value || def.hidden !== hidden;
     def.value = value;
     if (hidden) def.hidden = true;
     runtimeContext.ea.setScriptSettingValue(key, def);
@@ -191,25 +201,38 @@ export function createSettings(runtimeContext) {
     applyPresetToGlobals(presetName);
     await updateRootNodeCustomData(
       {
+        ...extractConfigFromGlobals(),
         presetName,
-        growthMode: runtimeContext.currentModalGrowthMode,
-        arrowType: runtimeContext.arrowType,
-        fontsizeScale: runtimeContext.fontsizeScale,
-        multicolor: runtimeContext.multicolor,
-        boxChildren: runtimeContext.boxChildren,
-        roundedCorners: runtimeContext.roundedCorners,
-        maxWrapWidth: runtimeContext.maxWidth,
-        isSolidArrow: runtimeContext.isSolidArrow,
-        centerText: runtimeContext.centerText,
-        fillSweep: runtimeContext.fillSweep,
-        branchScale: runtimeContext.branchScale,
-        baseStrokeWidth: runtimeContext.baseStrokeWidth,
-        layoutSettings: JSON.parse(JSON.stringify(runtimeContext.layoutSettings)),
       },
       sel,
     );
     await runtimeContext.refreshMapLayout(sel);
     runtimeContext.updateUI();
+  };
+
+  /** Restores the selected preset once, after global settings load and before creating any roots. */
+  const initializePresets = () => {
+    if (
+      !runtimeContext.mapPresets || typeof runtimeContext.mapPresets !== "object"
+      || Array.isArray(runtimeContext.mapPresets)
+    ) {
+      runtimeContext.mapPresets = {};
+      runtimeContext.dirty = true;
+    }
+    if (
+      !Object.prototype.hasOwnProperty.call(runtimeContext.mapPresets, "Default")
+      || !runtimeContext.mapPresets.Default || typeof runtimeContext.mapPresets.Default !== "object"
+      || Array.isArray(runtimeContext.mapPresets.Default)
+    ) {
+      runtimeContext.mapPresets.Default = extractConfigFromGlobals();
+      runtimeContext.dirty = true;
+    }
+    setVal(runtimeContext.K_PRESETS, runtimeContext.mapPresets, true);
+    runtimeContext.activePresetName = resolvePresetName(
+      runtimeContext.mapPresets, runtimeContext.activePresetName,
+    );
+    setVal(runtimeContext.K_ACTIVE_PRESET, runtimeContext.activePresetName);
+    applyPresetToGlobals(runtimeContext.activePresetName);
   };
 
   /**
@@ -224,7 +247,9 @@ export function createSettings(runtimeContext) {
     Object.keys(runtimeContext.mapPresets).forEach((k) =>
       runtimeContext.presetDropdown.addOption(k, k),
     );
-    runtimeContext.presetDropdown.setValue(runtimeContext.activePresetName);
+    runtimeContext.presetDropdown.setValue(
+      resolvePresetName(runtimeContext.mapPresets, runtimeContext.activePresetName),
+    );
   };
 
   /**
@@ -459,6 +484,7 @@ export function createSettings(runtimeContext) {
     diffMapConfig,
     applyPresetToGlobals,
     applyPresetToMap,
+    initializePresets,
     refreshPresetDropdown,
     calculateStrokeWidth,
     getStrokeWidthForDepth,

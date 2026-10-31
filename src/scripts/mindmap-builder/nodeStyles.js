@@ -3,6 +3,7 @@
  * @overview node Styles implementation extracted from Mindmap Builder.
  * Context accessors retain live per-invocation state; no plugin/view singleton is introduced.
  */
+import { fitTextContainer } from "./textContainers";
 
 /** Creates this subsystem against the invocation-owned context. */
 export function createNodeStyles(runtimeContext) {
@@ -234,6 +235,17 @@ export function createNodeStyles(runtimeContext) {
         },
       ];
       rect.groupIds = sel.groupIds ? [...sel.groupIds] : [];
+      const settingsRoot = runtimeContext.getSettingsRootNode(sel, allElements);
+      const config = runtimeContext.getRootConfigForNode(settingsRoot);
+      fitTextContainer({
+        container: rect,
+        textElement: textEl,
+        renderedText: textEl.originalText,
+        maxWidth: config.maxWrapWidth,
+        padding: config.layoutSettings.CONTAINER_PADDING,
+        preserveCenter: true,
+        lib: ExcalidrawLib,
+      });
     }
     runtimeContext.ea
       .getElements()

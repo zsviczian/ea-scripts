@@ -3,6 +3,7 @@
  * @overview node Editing implementation extracted from Mindmap Builder.
  * Context accessors retain live per-invocation state; no plugin/view singleton is introduced.
  */
+import { fitTextContainer } from "./textContainers";
 
 /** Creates this subsystem against the invocation-owned context. */
 export function createNodeEditing(runtimeContext) {
@@ -178,6 +179,17 @@ export function createNodeEditing(runtimeContext) {
           newTextElement.width = finalWidth;
           newTextElement.height = finalHeight;
         }
+        if (containerToUpdate) {
+          fitTextContainer({
+            container: containerToUpdate,
+            textElement: newTextElement,
+            renderedText,
+            maxWidth: runtimeContext.maxWidth,
+            padding: runtimeContext.layoutSettings.CONTAINER_PADDING,
+            preserveCenter: true,
+            lib: ExcalidrawLib,
+          });
+        }
       }
       const newNode = runtimeContext.ea.getElement(newNodeId);
       // Scale decorations before deleting the old visual node
@@ -333,26 +345,40 @@ export function createNodeEditing(runtimeContext) {
         // Refresh family/size in case global settings changed, though this is optional
         runtimeContext.ea.style.fontFamily = eaEl.fontFamily;
         runtimeContext.ea.style.fontSize = eaEl.fontSize;
-        const metrics = runtimeContext.ea.measureText(renderedText);
-        const shouldWrap = metrics.width > runtimeContext.maxWidth;
-        if (!shouldWrap) {
-          eaEl.autoResize = true;
-          eaEl.width = Math.ceil(metrics.width);
-          eaEl.height = metrics.height;
-          eaEl.text = renderedText;
+        const textContainer = all.find((el) => el.id === eaEl.containerId);
+        if (textContainer && ["rectangle", "ellipse", "diamond"].includes(textContainer.type)) {
+          runtimeContext.ea.copyViewElementsToEAforEditing([textContainer]);
+          const settingsRoot = runtimeContext.getSettingsRootNode(textContainer, all);
+          const config = runtimeContext.getRootConfigForNode(settingsRoot);
+          fitTextContainer({
+            container: runtimeContext.ea.getElement(textContainer.id),
+            textElement: eaEl,
+            renderedText,
+            maxWidth: config.maxWrapWidth,
+            padding: config.layoutSettings.CONTAINER_PADDING,
+            preserveCenter: true,
+            lib: ExcalidrawLib,
+          });
         } else {
-          eaEl.autoResize = false;
-          const res = await runtimeContext.getAdjustedMaxWidth(textInput, runtimeContext.maxWidth);
-          eaEl.width = res.width;
-          eaEl.height = res.height;
-          eaEl.text = res.wrappedText;
+          const metrics = runtimeContext.ea.measureText(renderedText);
+          const shouldWrap = metrics.width > runtimeContext.maxWidth;
+          if (!shouldWrap) {
+            eaEl.autoResize = true;
+            eaEl.width = Math.ceil(metrics.width);
+            eaEl.height = metrics.height;
+            eaEl.text = renderedText;
+          } else {
+            eaEl.autoResize = false;
+            const res = await runtimeContext.getAdjustedMaxWidth(textInput, runtimeContext.maxWidth);
+            eaEl.width = res.width;
+            eaEl.height = res.height;
+            eaEl.text = res.wrappedText;
+          }
         }
         runtimeContext.ea.refreshTextElementSize(eaEl.id);
       }
       // 3. Save Changes
-      const hierarchyNode = targetNode.containerId
-        ? all.find((el) => el.id === targetNode.containerId)
-        : textEl;
+      const hierarchyNode = textEl ? visualNode : null;
       await runtimeContext.addElementsToView({
         captureUpdate:
           !hierarchyNode || runtimeContext.autoLayoutDisabled ? "IMMEDIATELY" : "EVENTUALLY",

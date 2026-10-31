@@ -9,7 +9,7 @@ export function createTextParsing(runtimeContext) {
   //special trim function that returns trimmed text, including trimming a bullet point of the bullet
   const trimText = (text) => {
     if (!text) return text;
-    return text.match(/^(?:[ \t]*[-\*][ \t])?(?:[ \t]*)(.*?)[ \t]*$/)[1];
+    return text.match(/^(?:[ \t]*[-\*][ \t])?(?:[ \t]*)([\s\S]*?)[ \t]*$/)[1];
   };
 
   const parseText = async (text) => {

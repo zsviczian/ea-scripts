@@ -3,6 +3,7 @@
  * @overview nodes implementation extracted from Mindmap Builder.
  * Context accessors retain live per-invocation state; no plugin/view singleton is introduced.
  */
+import { fitTextContainer } from "./textContainers";
 
 /** Creates this subsystem against the invocation-owned context. */
 export function createNodes(runtimeContext) {
@@ -62,6 +63,8 @@ export function createNodes(runtimeContext) {
       fillSweep: runtimeContext.fillSweep,
       branchScale: runtimeContext.branchScale,
       baseStrokeWidth: runtimeContext.baseStrokeWidth,
+      customPalette: JSON.parse(JSON.stringify(runtimeContext.customPalette
+        || { enabled: false, random: false, colors: [] })),
       layoutSettings: JSON.parse(JSON.stringify(runtimeContext.layoutSettings)),
     });
   };
@@ -74,6 +77,7 @@ export function createNodes(runtimeContext) {
     batchModeParent = null,
     pos = null,
     ontology = null,
+    nodeShape = null,
   ) => {
     if (!runtimeContext.isViewSet()) return;
     if (!text || text.trim() === "") return;
@@ -196,7 +200,10 @@ export function createNodes(runtimeContext) {
           }
         : null;
     const effectiveMaxWrap = rootCfgForAdd?.maxWrapWidth ?? runtimeContext.maxWidth;
-    let curMaxW = depth === 0 ? Math.max(400, effectiveMaxWrap) : effectiveMaxWrap;
+    const maxTextWidth = depth === 0 ? Math.max(400, effectiveMaxWrap) : effectiveMaxWrap;
+    const containerPadding = rootCfgForAdd?.layoutSettings?.CONTAINER_PADDING
+      ?? runtimeContext.layoutSettings.CONTAINER_PADDING;
+    let curMaxW = maxTextWidth;
     let renderedText = text;
     let metrics = {
       w: 0,
@@ -251,19 +258,30 @@ export function createNodes(runtimeContext) {
           0,
           text,
           {
-            box: "rectangle",
+            box: nodeShape ?? "rectangle",
+            boxPadding: containerPadding,
             textAlign: "center",
             textVerticalAlign: "middle",
             // Use a distinct color representation so the frame can be recolored separately from text
             boxStrokeColor: runtimeContext.ea
               .getCM(runtimeContext.ea.style.strokeColor)
               .stringRGB(),
-            width: shouldWrap ? curMaxW : undefined,
-            height: shouldWrap ? curMaxH : undefined,
+            // An explicit width prevents EA's rectangular box shortcut from
+            // wrapping/shrinking an ellipse or diamond before we size it.
+            width: shouldWrap ? curMaxW : Math.ceil(metrics.width),
+            height: curMaxH,
             autoResize: !shouldWrap,
           },
           preGenTextId,
         );
+        fitTextContainer({
+          container: runtimeContext.ea.getElement(newNodeId),
+          textElement: runtimeContext.ea.getElement(preGenTextId),
+          renderedText,
+          maxWidth: maxTextWidth,
+          padding: containerPadding,
+          lib: ExcalidrawLib,
+        });
         runtimeContext.ea.style.backgroundColor = "transparent";
       }
       initializeRootCustomData(newNodeId);
@@ -398,6 +416,7 @@ export function createNodes(runtimeContext) {
           : side === 1
             ? "left"
             : "right";
+      const boxShape = nodeShape ?? (effectiveBoxChildren ? "rectangle" : false);
       if (imageInfo?.isImagePath) {
         newNodeId = await addImage({
           pathOrFile: imageInfo.path,
@@ -442,15 +461,26 @@ export function createNodes(runtimeContext) {
           py,
           text,
           {
-            box: effectiveBoxChildren ? "rectangle" : false,
+            box: boxShape,
+            boxPadding: containerPadding,
             textAlign,
             textVerticalAlign: "middle",
-            width: shouldWrap ? curMaxW : undefined,
-            height: shouldWrap ? curMaxH : undefined,
+            width: shouldWrap ? curMaxW : boxShape ? Math.ceil(metrics.width) : undefined,
+            height: boxShape || shouldWrap ? curMaxH : undefined,
             autoResize: !shouldWrap,
           },
           preGenTextId,
         );
+        if (boxShape) {
+          fitTextContainer({
+            container: runtimeContext.ea.getElement(newNodeId),
+            textElement: runtimeContext.ea.getElement(preGenTextId),
+            renderedText,
+            maxWidth: maxTextWidth,
+            padding: containerPadding,
+            lib: ExcalidrawLib,
+          });
+        }
       }
       if (depth === 1) {
         runtimeContext.ea.addAppendUpdateCustomData(newNodeId, {

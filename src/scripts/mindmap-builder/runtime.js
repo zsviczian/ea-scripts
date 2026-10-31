@@ -16,6 +16,7 @@ import { createFirstLevelLayout } from "./firstLevelLayout.js";
 import { createLayout } from "./layout.js";
 import { createNodes } from "./nodes.js";
 import { createMarkdownExport } from "./markdownExport.js";
+import { createMermaidExport } from "./mermaidExport.js";
 import { createMarkdownImport } from "./markdownImport.js";
 import { createNodeOrder } from "./nodeOrder.js";
 import { createNodeStyles } from "./nodeStyles.js";
@@ -347,6 +348,15 @@ export async function initializeMindmapBuilder(ea, utils, VERSION, t) {
     },
     get copyMapAsText() {
       return copyMapAsText;
+    },
+    get copyMapAsMermaid() {
+      return copyMapAsMermaid;
+    },
+    get copyMermaidBtn() {
+      return copyMermaidBtn;
+    },
+    set copyMermaidBtn(value) {
+      copyMermaidBtn = value;
     },
     get currentModalGrowthMode() {
       return currentModalGrowthMode;
@@ -1433,6 +1443,7 @@ export async function initializeMindmapBuilder(ea, utils, VERSION, t) {
     diffMapConfig,
     applyPresetToGlobals,
     applyPresetToMap,
+    initializePresets,
     refreshPresetDropdown,
     calculateStrokeWidth,
     getStrokeWidthForDepth,
@@ -1575,18 +1586,8 @@ export async function initializeMindmapBuilder(ea, utils, VERSION, t) {
     hidden: true,
   });
 
-  // Safeguard against corrupted or undefined settings
-  if (!mapPresets || typeof mapPresets !== "object") {
-    mapPresets = {};
-  }
-
   let activePresetName = getVal(K_ACTIVE_PRESET, "Default");
-
-  // Make sure Default is always available
-  if (!mapPresets["Default"]) {
-    mapPresets["Default"] = extractConfigFromGlobals();
-    setVal(K_PRESETS, mapPresets, true);
-  }
+  initializePresets();
 
   /**
    * Normalizes a map configuration object, supplying standard defaults for any missing properties.
@@ -1681,7 +1682,7 @@ export async function initializeMindmapBuilder(ea, utils, VERSION, t) {
    *    - removes keys not in DEFAULT
    **/
 
-  dirty = updateUserHotkeys();
+  dirty = updateUserHotkeys() || dirty;
 
   // Merge defaults in case new actions were added in an update
   if (userHotkeys.length !== DEFAULT_HOTKEYS.length) {
@@ -1943,6 +1944,7 @@ export async function initializeMindmapBuilder(ea, utils, VERSION, t) {
 // Now supports extracting Submaps into separate ## Headings referenced by ![[#Links]]
 **/
   const { copyMapAsText } = createMarkdownExport(runtimeContext);
+  const { copyMapAsMermaid } = createMermaidExport(runtimeContext);
 
   /**
 // Core logic to parse a list string and add nodes to the map.
@@ -2086,7 +2088,7 @@ export async function initializeMindmapBuilder(ea, utils, VERSION, t) {
   let branchScaleDropdown, baseWidthSlider;
   let colorToggle, widthSlider, centerToggle;
   let fillSweepToggleSetting, fillSweepToggle;
-  let pinBtn, refreshBtn, cutBtn, copyBtn, boxBtn, dockBtn, editBtn;
+  let pinBtn, refreshBtn, cutBtn, copyBtn, copyMermaidBtn, boxBtn, dockBtn, editBtn;
   let toggleGroupBtn, zoomBtn, focusBtn, boundaryBtn, calendarBtn;
   let submapRootBtn;
   let foldBtnL0, foldBtnL1, foldBtnAll;

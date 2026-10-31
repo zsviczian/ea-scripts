@@ -23,6 +23,14 @@ export function createSidepanelControls(runtimeContext) {
     runtimeContext.bodyContainer = contentEl.createDiv();
     runtimeContext.bodyContainer.style.width = "100%";
     runtimeContext.bodyContainer.createEl("hr");
+    new runtimeContext.ea.obsidian.Setting(runtimeContext.bodyContainer)
+      .setName(runtimeContext.t("LABEL_COPY_MERMAID"))
+      .setDesc(runtimeContext.t("DESC_COPY_MERMAID"))
+      .addButton((button) => {
+        runtimeContext.copyMermaidBtn = button;
+        button.setButtonText(runtimeContext.t("BUTTON_COPY_MERMAID"))
+          .onClick(async () => { await runtimeContext.copyMapAsMermaid(); });
+      });
     // --- Map Preset Manager UI ---
     const presetSetting = new runtimeContext.ea.obsidian.Setting(runtimeContext.bodyContainer)
       .setName(runtimeContext.t("PRESET_LABEL"))

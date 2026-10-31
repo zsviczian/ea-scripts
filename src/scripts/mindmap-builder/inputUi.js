@@ -3,6 +3,7 @@
  * @overview input Ui implementation extracted from Mindmap Builder.
  * Context accessors retain live per-invocation state; no plugin/view singleton is introduced.
  */
+import { resolvePresetName } from "./settings.js";
 
 /** Creates this subsystem against the invocation-owned context. */
 export function createInputUi(runtimeContext) {
@@ -61,6 +62,7 @@ export function createInputUi(runtimeContext) {
     setButtonDisabled(runtimeContext.pinBtn, true);
     setButtonDisabled(runtimeContext.refreshBtn, true);
     setButtonDisabled(runtimeContext.copyBtn, true);
+    runtimeContext.copyMermaidBtn?.setDisabled(true);
     setButtonDisabled(runtimeContext.cutBtn, true);
     setButtonDisabled(runtimeContext.importOutlineBtn, true);
     setButtonDisabled(runtimeContext.boxBtn, true);
@@ -216,6 +218,7 @@ export function createInputUi(runtimeContext) {
       setButtonDisabled(runtimeContext.boundaryBtn, isMasterRootSelected);
       setButtonDisabled(runtimeContext.cutBtn, isMasterRootSelected);
       setButtonDisabled(runtimeContext.copyBtn, false);
+      runtimeContext.copyMermaidBtn?.setDisabled(false);
       setButtonDisabled(runtimeContext.importOutlineBtn, !isLinkedFile);
       if (runtimeContext.refreshBtn) {
         setButtonDisabled(runtimeContext.refreshBtn, cd.autoLayoutDisabled === true);
@@ -244,12 +247,12 @@ export function createInputUi(runtimeContext) {
     // --- Preset Detection & UI Warning Logic ---
     const mapPresetName = cd?.presetName;
     if (isMapSelected) {
-      runtimeContext.activePresetName = mapPresetName || "Default";
+      runtimeContext.activePresetName = resolvePresetName(runtimeContext.mapPresets, mapPresetName);
       runtimeContext.setVal(runtimeContext.K_ACTIVE_PRESET, runtimeContext.activePresetName);
     } else {
-      runtimeContext.activePresetName = runtimeContext.getVal(
-        runtimeContext.K_ACTIVE_PRESET,
-        "Default",
+      runtimeContext.activePresetName = resolvePresetName(
+        runtimeContext.mapPresets,
+        runtimeContext.getVal(runtimeContext.K_ACTIVE_PRESET, "Default"),
       );
     }
     if (runtimeContext.presetDropdown) {
