@@ -7,6 +7,7 @@
 /** Creates this subsystem against the invocation-owned context. */
 import { parseBranchClipboard } from "./branchClipboard";
 import { createBranchPaste } from "./branchPaste.js";
+import { getMermaidMindmapBody, parseMermaidMindmap } from "./mermaid";
 
 export function createMarkdownImport(runtimeContext) {
   const {
@@ -77,6 +78,13 @@ export function createMarkdownImport(runtimeContext) {
   const importTextToMap = async (rawText) => {
     if (!runtimeContext.isViewSet()) return;
     if (!rawText) return;
+    let mermaid;
+    try {
+      mermaid = parseMermaidMindmap(rawText);
+    } catch {
+      new runtimeContext.Notice(runtimeContext.t("NOTICE_MERMAID_INVALID"));
+      return;
+    }
     let sel = runtimeContext.getMindmapNodeFromSelection();
     let currentParent;
     // Filter out empty lines AND divider lines
@@ -91,7 +99,7 @@ export function createMarkdownImport(runtimeContext) {
     const crossLinkRegex = /(?:\(([^):]+)::\s*)?\[\[#\^([a-zA-Z0-9]{8})\|\*\]\](?:\))?/g;
     const ontologyRegex = /^(.+?)::\s*(.*)$/;
     const submapRefRegex = /^!\[\[#([^\]]+)\]\]$/; // Matches ![[#Submap Name]]
-    if (lines.length === 1) {
+    if (!mermaid && lines.length === 1) {
       let text = lines[0];
       const listMatch = text.match(/^(\s*)(?:-|\*|\d+\.)\s+(.*)$/);
       if (listMatch) {
@@ -138,11 +146,19 @@ export function createMarkdownImport(runtimeContext) {
         return;
       }
     }
-    let parsed = [];
+    let parsed = mermaid?.map((node) => ({
+      ...node,
+      hasBoundary: false,
+      blockRef: null,
+      outgoingRefs: [],
+      ontology: null,
+      isSubmapDef: false,
+      isSubmapRef: false,
+    })) ?? [];
     let rootTextFromHeader = null;
     const isHeader = (l) => l.match(/^#+\s/);
     const isListItem = (l) => l.match(/^(\s*)(?:-|\*|\d+\.)\s+(.*)$/);
-    if (!isHeader(lines[0]) && !isListItem(lines[0])) {
+    if (!mermaid && !isHeader(lines[0]) && !isListItem(lines[0])) {
       new runtimeContext.Notice(runtimeContext.t("NOTICE_PASTE_ABORTED"));
       return;
     }
@@ -152,7 +168,7 @@ export function createMarkdownImport(runtimeContext) {
     // Maps for crosslink & submap reconstruction
     const blockRefToNodeId = new Map(); // ^12345678 -> newNodeId
     const nodeToOutgoingRefs = new Map(); // newNodeId -> [{ref: string, label: string}, ...]
-    lines.forEach((line, index) => {
+    if (!mermaid) lines.forEach((line, index) => {
       let text = "";
       let indent = 0;
       let isSubmapDef = false;
@@ -308,6 +324,7 @@ export function createMarkdownImport(runtimeContext) {
           null,
           null,
           rootItem.ontology,
+          rootItem.shape,
         );
         processRootMeta(rootItem, currentParent.id);
         // Safely extract the root item from the array so it isn't rendered twice
@@ -392,6 +409,7 @@ export function createMarkdownImport(runtimeContext) {
         parentNode,
         null,
         item.ontology,
+        item.shape,
       );
       // Process Metadata
       if (item.blockRef) blockRefToNodeId.set(item.blockRef, newNode.id);
@@ -545,6 +563,11 @@ export function createMarkdownImport(runtimeContext) {
     } catch (e) {}
     const clipboardPayload = parseBranchClipboard(rawText);
     if (clipboardPayload && (await pasteBranch(clipboardPayload, sel))) return;
+    // Prefer detected Mermaid text over an accompanying clipboard image/preview.
+    if (getMermaidMindmapBody(rawText) !== null) {
+      await importTextToMap(rawText);
+      return;
+    }
     // Standard text-list paste handles root-level initialization better.
     if (!sel) {
       await pasteListToMap(rawText);

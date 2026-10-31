@@ -2,6 +2,12 @@ import type { TranslationCatalog } from "../../../sharedUtils/i18n";
 import type { MindmapTranslationKey } from "./en";
 
 export const zhCn = {
+  NOTICE_MERMAID_COPIED: "已复制为 Mermaid 思维导图。",
+  NOTICE_MERMAID_INVALID: "无法粘贴此 Mermaid 思维导图。请使用单个根节点，并缩进子节点。",
+  LABEL_COPY_MERMAID: "Mermaid 思维导图",
+  DESC_COPY_MERMAID: "将所选分支及其子节点复制为 Mermaid 代码块。",
+  BUTTON_COPY_MERMAID: "复制为 Mermaid",
+  MERMAID_EMPTY_NODE: "无标题节点",
   // Notices
   NOTICE_SELECT_NODE_TO_COPY: "请选择要复制的节点。",
   NOTICE_MAP_CUT: "导图已剪切到剪贴板。",

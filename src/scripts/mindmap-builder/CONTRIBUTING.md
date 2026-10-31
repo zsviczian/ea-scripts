@@ -8,8 +8,8 @@
 | Scene structure and selection | `graph.js`, `selection.js`, `grouping.js` |
 | Layout | `layoutMetrics.js`, `horizontalLayout.js`, `verticalLayout.js`, `firstLevelLayout.js`, `layout.js` |
 | Visual details | `arrows.js`, `boundaries.js`, `decorations.js`, `colors.js`, `folding.js` |
-| Node operations | `nodes.js`, `nodeOrder.js`, `nodeStyles.js`, `nodeEditing.js`, `transactions.js` |
-| Text and Markdown | `textParsing.js`, `markdownImport.js`, `markdownExport.js` |
+| Node operations | `nodes.js`, `textContainers.ts`, `nodeOrder.js`, `nodeStyles.js`, `nodeEditing.js`, `transactions.js` |
+| Text, Markdown, and Mermaid | `textParsing.js`, `markdownImport.js`, `markdownExport.js`, `mermaid.ts`, `mermaidExport.js` |
 | Element-preserving branch paste | `branchClipboard.ts`, `branchPaste.js`, `pasteMetadata.js`, `branchHistory.ts` |
 | Keyboard actions and tasks | `keyboard.js`, `HotkeyRecorder.ts`, `actions.js`, `tasks.js` |
 | Controls and modal classes | `inputUi.js`, `inputControls.js`, `sidepanelControls.js`, `helpUi.js`, `PaletteManagerModal.js`, `LayoutConfigModal.js` |

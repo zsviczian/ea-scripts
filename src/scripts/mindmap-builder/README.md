@@ -8,6 +8,20 @@ To reuse a branch with its links, images, and grouped notes, select the complete
 
 Pasted branches retain their styles, folds, pinned nodes, and nested submap settings. Copied whole maps become submaps when attached. Auto-layout remains disabled where you disabled it. Builder's input Undo/Redo groups a completed branch paste; the canvas Undo/Redo controls follow native paste, attachment, and layout history steps.
 
+Builder **Paste** also accepts Mermaid mindmaps, either as plain text starting with `mindmap` or inside a `mermaid` code block. With a node selected, the imported root becomes its child; otherwise it creates a new map. For example:
+
+```mermaid
+mindmap
+  root((Project))
+    research[Research]
+      question{{Open question}}
+    Next steps
+```
+
+Supported shape labels are `[rectangle]`, `(ellipse)` / `((ellipse))`, and `{diamond}` / `{{diamond}}`, with optional node IDs. Ordinary Markdown paste keeps `[[wiki links]]` and `[alias](link)` intact. Within Mermaid, standalone links also remain links; `[text]` denotes a rectangle. Unshaped nodes follow Builder's current box settings. Comments and standalone icon/class annotations are ignored; Mermaid styling, configuration blocks, and multiline Markdown strings are outside this limited import format. Use `<br/>` for label line breaks.
+
+Select a node and use **Copy as Mermaid** in the sidepanel to copy its branch as a fenced Mermaid code block, including folded children and nested submaps. The floating toolbar and **Alt/Option+C** keep their existing Markdown copy behavior. Export includes hierarchy, labels, and supported node shapes; crosslinks, arrow labels, boundaries, and layout settings are omitted. Images and embeds are represented by their text references. Ellipses export as Mermaid circles `((text))`, and diamonds as Mermaid hexagons `{{text}}`, since Mermaid mindmaps have no diamond shape.
+
 > [!Tip]
 > Become a MindMap Builder Pro with the official [MindMap Builder course](https://www.visual-thinking-workshop.com/mindmap)!
 
