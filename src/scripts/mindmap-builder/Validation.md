@@ -1,5 +1,15 @@
 # Migration validation — 2026-10-13
 
+## Floating input visibility — 2026-11-01
+
+The `v26.11.01` floating input follows the exact drawing API's live view mode. It hides on a non-drawing leaf or in view mode and returns in edit mode without changing the docking preference. Rebinding and closing retire the mode subscription. The shipped Mermaid behavior is preserved.
+
+Focused Mindmap Builder Vitest passed 106 tests in 15 files; all script builds passed. Targeted lint passed for the typed bootstrap/declaration/test changes. Workspace typechecking still reports exactly the same 363 diagnostics as clean base `08ea7b5` with identical dependencies; broad lint/test backlog remains separate.
+
+A native macOS probe ran the actual script runtime and floating modal in the disposable `kplex-test-small` vault on Obsidian 1.15.0 with its existing Excalidraw 2.28.1 companion. It passed initial undocked display, hide in view mode, restore in edit mode, hide on a Markdown tab, restore on returning to the drawing, and a second view-mode toggle. The probe substituted only the help renderer to avoid network access; mode handling, lifecycle and floating controls used the current source. It restored settings/workspace and removed the owned script instance, leaves and fixtures. [Native receipt](floating-visibility-2026-11-01.native.json) records the compiled probe hash and cleanup result.
+
+This establishes live DOM/mode behavior in the main window, without a physical-input or paint claim. Popout migration, Windows and physical mobile remain separate platform gates.
+
 ## Mermaid clipboard checkpoint — 2026-10-31
 
 Mermaid paste accepts a complete fenced code block or plain `mindmap` outline. The sidepanel has a separate **Copy as Mermaid** button; floating controls, Markdown copy, and the existing copy hotkey retain their behavior. Shape interpretation is confined to Mermaid input. Ellipse/circle and diamond/hexagon mappings are documented in the README.

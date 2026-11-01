@@ -1,0 +1,18 @@
+{
+  "status": "passed",
+  "sourceHash": "4cf8540f2ea47e270fdd9efd652c1ce1e152c6a5f888d138b74545b341eb48c6",
+  "offlineHelpStub": true,
+  "limits": "Actual toolbar DOM and mode changes; no physical touch or paint claim.",
+  "result": {
+    "cases": [
+      "initial-undocked-visible",
+      "view-mode-hidden",
+      "edit-mode-restored",
+      "non-drawing-hidden",
+      "return-to-drawing-restored",
+      "second-mode-toggle-hidden"
+    ],
+    "version": "2.28.1"
+  },
+  "cleanup": "passed"
+}
