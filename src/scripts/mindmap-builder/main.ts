@@ -4,7 +4,7 @@
  */
 import { reportMindmapLaunchError, runMindmapBuilder } from "./run";
 
-const VERSION = "v26.10.13";
+const VERSION = "v26.11.01";
 
 void runMindmapBuilder(ea, utils, VERSION).catch((error: unknown) => {
   reportMindmapLaunchError(ea, error);

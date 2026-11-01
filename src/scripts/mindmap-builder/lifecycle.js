@@ -23,6 +23,8 @@ export function createLifecycle(runtimeContext) {
    */
   const removeEventListeners = () => {
     removeKeydownHandlers();
+    window.MindmapBuilder?.removeFloatingVisibilityListener?.();
+    if (window.MindmapBuilder) delete window.MindmapBuilder.removeFloatingVisibilityListener;
     try {
       window.MindmapBuilder?.popObsidianHotkeyScope?.();
     } catch (e) {

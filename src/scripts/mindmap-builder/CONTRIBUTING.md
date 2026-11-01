@@ -13,7 +13,7 @@
 | Element-preserving branch paste | `branchClipboard.ts`, `branchPaste.js`, `pasteMetadata.js`, `branchHistory.ts` |
 | Keyboard actions and tasks | `keyboard.js`, `HotkeyRecorder.ts`, `actions.js`, `tasks.js` |
 | Controls and modal classes | `inputUi.js`, `inputControls.js`, `sidepanelControls.js`, `helpUi.js`, `PaletteManagerModal.js`, `LayoutConfigModal.js` |
-| UI lifetime and public API | `styles.js`, `floatingInput.js`, `lifecycle.js`, `sidepanelLifecycle.js`, `publicApi.js` |
+| UI lifetime and public API | `styles.js`, `floatingInput.js`, `floatingVisibility.js`, `lifecycle.js`, `sidepanelLifecycle.js`, `publicApi.js` |
 
 Factories bind each subsystem to one invocation-owned context. The context uses explicit getters and setters into the original closure, so changing a settings object, selection, transaction state, input control, or owning window remains visible to every subsystem. Do not destructure mutable context properties into snapshots. The modal factories bind their classes to the invocation's `ea.FloatingModal` base and translator. Imports do not access Obsidian globals, construct UI, or register listeners. A separately tested close guard in `keyboard.js` stops delayed callbacks after their host sidepanel is detached, preventing a null-tab exception and preventing obsolete callbacks from popping a newer runtime's hotkey scope.
 

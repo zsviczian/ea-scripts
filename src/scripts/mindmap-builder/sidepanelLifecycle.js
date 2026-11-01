@@ -1,3 +1,5 @@
+import { updateFloatingVisibility, watchFloatingVisibility } from "./floatingVisibility.js";
+
 /**
  * @file sidepanelLifecycle.js
  * @overview sidepanel Lifecycle implementation extracted from Mindmap Builder.
@@ -84,6 +86,8 @@ export async function openMindmapSidepanel(runtimeContext) {
       };
       const setupEventListeners = (view) => {
         if (!view || !view.ownerWindow) return;
+        window.MindmapBuilder?.removeFloatingVisibilityListener?.();
+        window.MindmapBuilder.removeFloatingVisibilityListener = watchFloatingVisibility(runtimeContext, view);
         window.MindmapBuilder?.removePointerDownHandler?.();
         const win = view.ownerWindow;
         win.addEventListener("pointerdown", runtimeContext.handleCanvasPointerDown);
@@ -118,8 +122,8 @@ export async function openMindmapSidepanel(runtimeContext) {
       const onActiveLeafChange = (leaf) => {
         if (runtimeContext.cancelHotkeyRecording) runtimeContext.cancelHotkeyRecording();
         if (
-          runtimeContext.ea.targetView !== leaf.view &&
-          runtimeContext.ea.isExcalidrawView(leaf.view)
+          runtimeContext.ea.targetView !== leaf?.view &&
+          runtimeContext.ea.isExcalidrawView(leaf?.view)
         ) {
           runtimeContext.mostRecentlySelectedNodeID = null;
           if (runtimeContext.ea.targetView)
@@ -129,6 +133,7 @@ export async function openMindmapSidepanel(runtimeContext) {
           setupEventListeners(leaf.view);
         }
         runtimeContext.registerObsidianHotkeyOverrides();
+        updateFloatingVisibility(runtimeContext);
         if (!runtimeContext.isUndocked || !runtimeContext.floatingInputModal || !leaf) {
           return;
         }
@@ -136,7 +141,7 @@ export async function openMindmapSidepanel(runtimeContext) {
           runtimeContext.ensureNodeSelected();
           runtimeContext.updateUI();
           const { modalEl } = runtimeContext.floatingInputModal;
-          if (runtimeContext.isExcaliBrainView()) {
+          if (runtimeContext.isExcaliBrainView() || runtimeContext.ea.getExcalidrawAPI()?.getAppState()?.viewModeEnabled) {
             modalEl.style.display = "none";
           } else {
             if (modalEl.style.display === "none") {

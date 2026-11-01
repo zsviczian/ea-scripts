@@ -1,3 +1,5 @@
+import { updateFloatingVisibility } from "./floatingVisibility.js";
+
 /**
  * @file floatingInput.js
  * @overview floating Input implementation extracted from Mindmap Builder.
@@ -79,9 +81,7 @@ export function createFloatingInput(runtimeContext) {
         modalEl.style.width = "fit-content";
         modalEl.style.height = "auto";
         modalEl.style.maxHeight = runtimeContext.FLOAT_MODAL_MAX_HEIGHT;
-        if (runtimeContext.isExcaliBrainView()) {
-          modalEl.style.display = "none";
-        }
+        updateFloatingVisibility(runtimeContext);
         const container = runtimeContext.floatingInputModal.contentEl.createDiv();
         runtimeContext.renderInput(container, true);
         // Setup Drag Handle
