@@ -124,7 +124,7 @@ export class FixtureEA {
     y: number,
     raw: string,
     formatting: Record<string, unknown>,
-    id: string,
+    id: string = this.generateElementId(),
   ): string {
     const metrics = this.measureText(raw);
     const padding = Number(formatting.boxPadding ?? 30);
@@ -171,6 +171,7 @@ export class FixtureEA {
 export function nodeHost(options: { padding?: number; boxChildren?: boolean } = {}): {
   ea: FixtureEA;
   nodes: ReturnType<typeof createNodes>;
+  context: Record<string, unknown>;
 } {
   const ea = new FixtureEA();
   vi.stubGlobal("ExcalidrawLib", lib);
@@ -202,5 +203,5 @@ export function nodeHost(options: { padding?: number; boxChildren?: boolean } = 
     boxChildren: options.boxChildren ?? false,
     layoutSettings: { CONTAINER_PADDING: options.padding ?? 10 },
   };
-  return { ea, nodes: createNodes(ctx) };
+  return { ea, nodes: createNodes(ctx), context: ctx };
 }

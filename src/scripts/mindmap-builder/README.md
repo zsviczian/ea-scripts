@@ -6,6 +6,8 @@ Mind Map Builder turns the Obsidian Excalidraw canvas into a keyboard-driven bra
 
 The floating input hides in Excalidraw view mode and returns when you switch back to editing. Switching to another kind of tab also hides it without changing your docking preference.
 
+Enter a complete equation such as `$$x=5$$` as a node to render it as a LaTeX image. Editing the node restores `$$x=5$$` in the input; changing the formula updates the image, and removing the `$$` delimiters converts it to text. Markdown copy preserves the equation syntax. Inline math mixed with other text stays a text node. Rendering uses Excalidraw's LaTeX support (Excalidraw Extras is required by recent plugin versions).
+
 To reuse a branch with its links, images, and grouped notes, select the complete branch on the canvas and use native Excalidraw copy. Select a destination Mindmap node, then use the existing Builder **Paste** button or hotkey. The branch attaches as a child; with no destination selected, it becomes an independent map. Builder **Copy** continues to export Markdown outlines.
 
 A local Markdown image can also be pasted directly with Builder **Paste** (Alt/Option+V), with or without a selected parent. Native paste keeps it editable. The floating input remains available while its embedded Markdown-image editor has focus.

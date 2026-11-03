@@ -16,6 +16,18 @@ Preparation rebuilt/froze/hash-verified the selected local fork, plugin and Extr
 
 Remaining platform gates: Windows, physical mobile touch/clipboard, real OS IME and moved-tab migration. Highest risk is focus/window ownership in floating controls and source restoration during undo or save; test those workflows separately on each platform. These are focused script checks, not a complete plugin portable/native regression acceptance claim.
 
+The pre-merge integration with current `main` preserves the newly added LaTeX equation path alongside local Markdown-image creation. Both validation sections remain intact. The combined Mindmap suite passes **142 tests in 19 files**, all six script builds pass, and `npm run check` retains 363 existing TypeScript diagnostics with none in Mindmap Builder. The native receipt above records the Markdown-image implementation before this integration; it does not establish live LaTeX validation.
+
+## LaTeX equation nodes — 2026-11-03
+
+Complete nonempty display-math input such as `$$x=5$$` creates a native EA LaTeX image for roots and children. Editing restores the equation from the drawing's equation registry, with native element metadata as the workbench fallback. Formula changes use the existing image replacement path; removing the delimiters converts the node to text. Replacement retains branch bindings, root preset/palette metadata and position. Rendering failure leaves the existing node and editor input intact. Inline math mixed with text remains ordinary text.
+
+Twenty focused equation tests cover creation, interactive save, image/source round-trip, unchanged edits, text/equation conversion, arrow rewiring, root metadata, rendering failure, ordinary image extraction and vertical/manual layout dimensions. The complete Mindmap Builder suite passes 126 tests in 16 files. All six script builds pass; the copied plugin-repository Markdown matches the built artifact by SHA-256, and script-store validation passes. Focused lint has no errors (the shared text-container fixture retains its existing size/parameter warnings).
+
+`npm run check` remains blocked by the same 363 TypeScript diagnostics as HEAD; an original-source compiler-host comparison found no added or removed diagnostics. Separate workspace tests retain nine failures in Canvas Chat/slideshow, and broad lint reports 27 errors outside the changed files. JavaScript subsystem bodies remain outside TypeScript checking.
+
+No live Obsidian validation was run for this checkpoint. Highest risk is native image registration and history across equation replacement: add/edit root and child equations, change a formula, remove its delimiters, undo/redo, copy/paste Markdown and save/reopen. Check vertical and manual layouts, a main window and a popout separately on Windows/macOS. Physical mobile input and any required Extras service remain separate runtime gates.
+
 ## Floating input visibility — 2026-11-01
 
 The `v26.11.01` floating input follows the exact drawing API's live view mode. It hides on a non-drawing leaf or in view mode and returns in edit mode without changing the docking preference. Rebinding and closing retire the mode subscription. The shipped Mermaid behavior is preserved.

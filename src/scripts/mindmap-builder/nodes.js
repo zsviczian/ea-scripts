@@ -5,6 +5,7 @@
  */
 import { addLocalMarkdownImage } from "./markdownImageNodes.js";
 import { fitTextContainer } from "./textContainers";
+import { parseLatexInput } from "./textParsing.js";
 
 /** Creates this subsystem against the invocation-owned context. */
 export function createNodes(runtimeContext) {
@@ -125,6 +126,7 @@ export function createNodes(runtimeContext) {
       ? { isImagePath: true, path: localMarkdownImage, width: localMarkdownImage.width }
       : runtimeContext.parseImageInput(text);
     const embeddableUrl = localMarkdownImage ? null : runtimeContext.parseEmbeddableInput(text, imageInfo);
+    const latex = localMarkdownImage ? null : parseLatexInput(text);
     const defaultNodeColor = runtimeContext.ea.getCM(st.viewBackgroundColor).invert().stringHEX({
       alpha: false,
     });
@@ -221,7 +223,17 @@ export function createNodes(runtimeContext) {
     };
     let shouldWrap = false;
     let curMaxH = 0;
-    if (!imageInfo?.isImagePath && !imageInfo?.imageFile && !embeddableUrl) {
+    let latexNode = null;
+    if (latex) {
+      runtimeContext.ea.style.strokeColor = parent
+        ? nodeColor
+        : runtimeContext.multicolor ? defaultNodeColor : st.currentItemStrokeColor;
+      newNodeId = await runtimeContext.ea.addLaTex(0, 0, latex);
+      if (!newNodeId) return;
+      latexNode = runtimeContext.ea.getElement(newNodeId);
+      // Placement needs the rendered dimensions, especially for vertical/manual layouts.
+      metrics = { width: latexNode.width, height: latexNode.height };
+    } else if (!imageInfo?.isImagePath && !imageInfo?.imageFile && !embeddableUrl) {
       renderedText = (await runtimeContext.parseText(text)) ?? text;
       metrics = runtimeContext.ea.measureText(renderedText);
       shouldWrap = metrics.width > curMaxW;
@@ -236,7 +248,9 @@ export function createNodes(runtimeContext) {
       runtimeContext.ea.style.strokeColor = runtimeContext.multicolor
         ? defaultNodeColor
         : st.currentItemStrokeColor;
-      if (imageInfo?.isImagePath) {
+      if (latexNode) {
+        newNodeId = latexNode.id;
+      } else if (imageInfo?.isImagePath) {
         newNodeId = await addImage({
           pathOrFile: imageInfo.path,
           width: imageInfo.width,
@@ -427,7 +441,11 @@ export function createNodes(runtimeContext) {
             ? "left"
             : "right";
       const boxShape = nodeShape ?? (effectiveBoxChildren ? "rectangle" : false);
-      if (imageInfo?.isImagePath) {
+      if (latexNode) {
+        newNodeId = latexNode.id;
+        latexNode.x = side === -1 && !runtimeContext.autoLayoutDisabled ? px - latexNode.width : px;
+        latexNode.y = py;
+      } else if (imageInfo?.isImagePath) {
         newNodeId = await addImage({
           pathOrFile: imageInfo.path,
           width: imageInfo.width,
@@ -584,7 +602,7 @@ export function createNodes(runtimeContext) {
     if (isBatchMode) {
       return runtimeContext.ea.getElement(newNodeId);
     }
-    const hasImage = !!imageInfo?.imageFile || imageInfo?.isImagePath;
+    const hasImage = !!latex || !!imageInfo?.imageFile || imageInfo?.isImagePath;
     await runtimeContext.addElementsToView({
       repositionToCursor: !parent,
       save: hasImage,
