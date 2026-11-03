@@ -3,6 +3,8 @@ import type { MindmapTranslationKey } from "./en";
 
 // English fallback until this catalog has maintained translations.
 export const fr = {
+  NOTICE_MARKDOWN_IMAGE_INVALID: "Impossible d’importer ou d’exporter cette annexe d’images Markdown. Vérifiez les blocs sources et leurs références.",
+  NOTICE_MARKDOWN_IMAGE_MISSING: "La source de l’image Markdown est indisponible. Rien n’a été copié ni coupé.",
   NOTICE_MERMAID_COPIED: "Copié sous forme de carte mentale Mermaid.",
   NOTICE_MERMAID_INVALID:
     "Impossible de coller cette carte mentale Mermaid. Utilisez une seule racine et indentez ses enfants.",

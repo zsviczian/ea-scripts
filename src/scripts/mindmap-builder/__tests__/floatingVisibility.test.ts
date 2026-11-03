@@ -26,3 +26,42 @@ it("hides and restores an undocked toolbar on live view-mode changes, retaining 
   expect(context.floatingInputModal.modalEl.style.display).toBe("");
   dispose(); expect(unsubscribe).toHaveBeenCalledOnce();
 });
+
+it("keeps floating input visible for the sidepanel's embedded Markdown-image editor only", () => {
+  const view = { getViewType: () => "excalidraw" };
+  const editorContainer = {
+    matches: (selector: string): boolean => selector === ".excalidraw-markdown-fragment-view",
+  };
+  const unrelatedContainer = { matches: () => false };
+  const workspace = {
+    activeLeaf: { view: { getViewType: () => "markdown", containerEl: editorContainer } },
+  };
+  const context = {
+    isUndocked: true,
+    floatingInputModal: { modalEl: { style: { display: "none" } } },
+    isExcaliBrainView: () => false,
+    ea: {
+      targetView: view,
+      plugin: { app: { workspace } },
+      isExcalidrawView: (candidate: unknown) => candidate === view,
+      getSidepanelLeaf: () => ({
+        view: { containerEl: { contains: (el: unknown) => el === editorContainer } },
+      }),
+      getExcalidrawAPI: () => ({
+        getAppState: () => ({ viewModeEnabled: false }),
+        onChange: () => vi.fn(),
+      }),
+    },
+  };
+  updateFloatingVisibility(context);
+  expect(context.floatingInputModal.modalEl.style.display).toBe("");
+  updateFloatingVisibility(context, view, { viewModeEnabled: true });
+  expect(context.floatingInputModal.modalEl.style.display).toBe("none");
+  workspace.activeLeaf.view.containerEl = unrelatedContainer;
+  updateFloatingVisibility(context);
+  expect(context.floatingInputModal.modalEl.style.display).toBe("none");
+  workspace.activeLeaf.view.containerEl = editorContainer;
+  context.ea.getSidepanelLeaf = () => ({ view: { containerEl: { contains: () => false } } });
+  updateFloatingVisibility(context);
+  expect(context.floatingInputModal.modalEl.style.display).toBe("none");
+});

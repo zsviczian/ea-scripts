@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createBranchPaste } from "../branchPaste.js";
+import { createMarkdownImport } from "../markdownImport.js";
 import type { BranchElement, BranchClipboard } from "../branchClipboard";
 
 type Listener = (elements: BranchElement[]) => void;
@@ -402,3 +403,66 @@ it("recovers references from an old invocation's native Undo snapshot when Build
   reopened.disposeBranchPaste();
   expect(h.listeners.size).toBe(0);
 });
+
+it("attaches an untagged local Markdown image and preserves its editable metadata and file ID", async () => {
+  const h = host();
+  const image = {
+    ...node("markdown", ""),
+    type: "image",
+    fileId: "markdown-source",
+    customData: { markdownImage: { schemaVersion: 1, source: "local", render: { width: 400 } } },
+  };
+  const data: BranchClipboard = {
+    type: "excalidraw/clipboard",
+    elements: [image],
+    files: { "markdown-source": { dataURL: "data:image/svg+xml;base64,AA==" } },
+  };
+  const before = structuredClone(data);
+  const controller = createBranchPaste(h.ctx);
+  expect(await controller.pasteBranch(data, h.parent)).toBe(true);
+  expect(h.scene().find((e) => e.id === "new-markdown")).toMatchObject({
+    type: "image",
+    fileId: "markdown-source",
+    customData: { ...image.customData, mindmapOrder: 1 },
+  });
+  expect(h.scene().find((e) => e.id.startsWith("connection"))).toMatchObject({
+    startBinding: { elementId: "parent" },
+    endBinding: { elementId: "new-markdown" },
+  });
+  expect(data).toEqual(before);
+  controller.disposeBranchPaste();
+});
+
+it.each([true, false])(
+  "dispatches a standalone Markdown image through native paste (parent=%s)",
+  async (attach) => {
+    const h = host();
+    const image = {
+      ...node("markdown", ""),
+      type: "image",
+      fileId: "markdown-source",
+      customData: { markdownImage: { schemaVersion: 1, source: "local" } },
+    };
+    const read = vi.fn();
+    vi.stubGlobal("navigator", {
+      clipboard: {
+        readText: async () => JSON.stringify({ type: "excalidraw/clipboard", elements: [image] }),
+        read,
+      },
+    });
+    const importer = createMarkdownImport({
+      ...h.ctx,
+      getMindmapNodeFromSelection: () => (attach ? h.parent : null),
+    });
+    await importer.pasteElementToMap();
+    expect(h.scene().find((e) => e.id === "new-markdown")).toMatchObject({
+      type: "image",
+      fileId: "markdown-source",
+      customData: { markdownImage: image.customData.markdownImage },
+    });
+    expect(h.scene().filter((e) => e.id.startsWith("connection"))).toHaveLength(attach ? 1 : 0);
+    expect(read).not.toHaveBeenCalled();
+    expect(h.notices).toEqual(["NOTICE_PASTE_COMPLETE"]);
+    importer.disposeBranchPaste();
+  },
+);

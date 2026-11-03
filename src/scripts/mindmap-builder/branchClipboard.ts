@@ -2,6 +2,8 @@
  * @overview Read-only clipboard graph validation and Mindmap reference remapping.
  */
 
+import { isLocalMarkdownImage } from "./markdownImages";
+
 /** Structural fields used here; Excalidraw retains every other element property. */
 export interface BranchElement {
   id: string;
@@ -98,7 +100,9 @@ export function analyzeBranchClipboard(payload: BranchClipboard): BranchAnalysis
   };
   const nodes = new Map<string, BranchElement>();
   elements.forEach((e) => {
-    if (isTaggedNode(e)) nodes.set(e.id, e);
+    // A standalone local Markdown image has no vault path for the text importer.
+    // Native paste retains its image data even before it joins a Builder map.
+    if (isTaggedNode(e) || (elements.length === 1 && isLocalMarkdownImage(e))) nodes.set(e.id, e);
   });
   const incoming = new Map<string, string>();
   const excluded = new Set<string>();

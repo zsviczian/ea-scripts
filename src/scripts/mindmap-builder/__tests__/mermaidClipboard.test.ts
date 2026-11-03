@@ -25,6 +25,7 @@ type AddNode = (
   pos: unknown,
   ontology: unknown,
   shape: string | null,
+  markdownImage?: import("../markdownImages").LocalMarkdownImage,
 ) => Promise<TestNode>;
 
 interface TestHost {
@@ -209,4 +210,94 @@ it("exports unlabeled nodes with a fallback so the Mermaid hierarchy stays compl
   await h.ctx.addNode("", false, false, null, null, null, null, null);
   const text = await createMermaidExport(h.ctx).copyMapAsMermaid();
   expect(parseMermaidMindmap(text!)?.[0]?.text).toBe("MERMAID_EMPTY_NODE");
+});
+
+it("exports a portable image appendix and reimports the source under the same hierarchy", async () => {
+  const h = host(true);
+  await h.ctx.addNode("Root", false, false, null, null, null, null, null);
+  const image = await h.ctx.addNode("", false, false, null, h.scene[0]!, null, null, "image");
+  image.width = 240;
+  image.customData.markdownImage = { source: "local", render: { width: 480 } };
+  await h.ctx.addNode("Image child", false, false, null, image, null, null, null);
+  const markdown = "# Inner heading\n\n- inner list\n\n```js\nconst x = 1;\n```\n";
+  const ctx = {
+    ...h.ctx,
+    ea: {
+      ...(h.ctx.ea as object),
+      targetView: { excalidrawData: { getMarkdownImage: () => ({ markdown }) } },
+    },
+  };
+  await createMarkdownExport(ctx).copyMapAsText();
+  const [text] = h.clipboard.writeText.mock.calls[0]! as [string];
+  expect(text).toContain("# Root\n- ![[#^markdown-image=node-1|240]]\n  - Image child\n");
+  expect(text).toContain(`<!-- excalidraw-markdown-image:node-1 -->\n\n${  markdown}`);
+  const destination = host();
+  await createMarkdownImport(destination.ctx).importTextToMap(text);
+  expect(destination.scene.map(({ text, parent }) => ({ text, parent }))).toEqual([
+    { text: "Root", parent: null },
+    { text: "![[#^markdown-image=node-1|240]]", parent: "node-0" },
+    { text: "Image child", parent: "node-1" },
+  ]);
+  expect(destination.ctx.addNode.mock.calls[1]?.[8]).toEqual({
+    markdown,
+    render: { width: 480 },
+    width: 240,
+  });
+});
+
+it("leaves the clipboard and scene intact if a local image source is unavailable", async () => {
+  const h = host(true);
+  const image = await h.ctx.addNode("", false, false, null, null, null, null, "image");
+  image.customData.markdownImage = { source: "local" };
+  const deleteViewElements = vi.fn();
+  const ctx = {
+    ...h.ctx,
+    ea: {
+      ...(h.ctx.ea as object),
+      deleteViewElements,
+      targetView: { excalidrawData: { getMarkdownImage: () => undefined } },
+    },
+  };
+  await createMarkdownExport(ctx).copyMapAsText(true);
+  expect(deleteViewElements).not.toHaveBeenCalled();
+  expect(h.clipboard.writeText).not.toHaveBeenCalled();
+  expect(h.notices).toEqual(["NOTICE_MARKDOWN_IMAGE_MISSING"]);
+});
+
+it("reimports a single-image heading and rejects incomplete appendices before scene writes", async () => {
+  const h = host(true);
+  const image = await h.ctx.addNode("", false, false, null, null, null, null, "image");
+  image.customData.markdownImage = { source: "local" };
+  await createMarkdownExport({
+    ...h.ctx,
+    ea: {
+      ...(h.ctx.ea as object),
+      targetView: { excalidrawData: { getMarkdownImage: () => ({ markdown: "Source" }) } },
+    },
+  }).copyMapAsText();
+  const [text] = h.clipboard.writeText.mock.calls[0]! as [string];
+  const destination = host();
+  const importer = createMarkdownImport(destination.ctx);
+  await importer.importTextToMap(text);
+  expect(destination.ctx.addNode.mock.calls[0]?.[8]).toEqual({ markdown: "Source", width: 100 });
+  destination.ctx.addNode.mockClear();
+  await importer.importTextToMap("# Root\n- ![[#^markdown-image=missing|300]]");
+  expect(destination.ctx.addNode).not.toHaveBeenCalled();
+  expect(destination.notices).toContain("NOTICE_MARKDOWN_IMAGE_INVALID");
+});
+
+it("puts the portable source on the clipboard before cutting a local image with inline submap children", async () => {
+  const h = host(true);
+  const image = await h.ctx.addNode("", false, false, null, null, null, null, "image");
+  image.customData = { markdownImage: { source: "local" }, isAdditionalRoot: true };
+  await h.ctx.addNode("Child", false, false, null, image, null, null, null);
+  const deleteViewElements = vi.fn();
+  await createMarkdownExport({ ...h.ctx, ea: { ...(h.ctx.ea as object), deleteViewElements,
+    targetView: { excalidrawData: { getMarkdownImage: () => ({ markdown: "Portable source" }) } },
+  } }).copyMapAsText(true);
+  const [text] = h.clipboard.writeText.mock.calls[0]! as [string];
+  expect(text).toContain("# ![[#^markdown-image=node-0|100]]\n- Child\n");
+  expect(text).toContain("\n\nPortable source\n\n<!-- /excalidraw-markdown-image:node-0 -->");
+  expect(deleteViewElements).toHaveBeenCalled();
+  expect(h.clipboard.writeText.mock.invocationCallOrder[0]).toBeLessThan(deleteViewElements.mock.invocationCallOrder[0]!);
 });

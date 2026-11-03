@@ -141,13 +141,6 @@ export async function openMindmapSidepanel(runtimeContext) {
           runtimeContext.ensureNodeSelected();
           runtimeContext.updateUI();
           const { modalEl } = runtimeContext.floatingInputModal;
-          if (runtimeContext.isExcaliBrainView() || runtimeContext.ea.getExcalidrawAPI()?.getAppState()?.viewModeEnabled) {
-            modalEl.style.display = "none";
-          } else {
-            if (modalEl.style.display === "none") {
-              modalEl.style.display = "";
-            }
-          }
           if (
             runtimeContext.ea.targetView &&
             modalEl.ownerDocument !== runtimeContext.ea.targetView.ownerDocument
@@ -162,12 +155,6 @@ export async function openMindmapSidepanel(runtimeContext) {
           const { x, y } = runtimeContext.ea.targetView.contentEl.getBoundingClientRect();
           modalEl.style.top = `${y + 5}px`;
           modalEl.style.left = `${x + 5}px`;
-        } else {
-          if (leaf.view?.getViewType() === "excalidraw-sidepanel") return;
-          const { modalEl } = runtimeContext.floatingInputModal;
-          if (modalEl.style.display !== "none") {
-            modalEl.style.display = "none";
-          }
         }
       };
       tab.onClose = async () => {
