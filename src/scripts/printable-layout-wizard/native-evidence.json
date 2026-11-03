@@ -1,0 +1,95 @@
+{
+  "status": "passed",
+  "platform": "darwin",
+  "scriptHash": "e1a305103823e3aa211c4bb273f86b0b698649a691950b491d84cc20f114f4d5",
+  "artifacts": {
+    "sourceHashes": {
+      "main.js": "ef24d7d28e4a175e0dcba4a0bd91e326cdfbc10efea33c0aa111aaf1751145be",
+      "manifest.json": "65ff25a29d920e10a90722d2f5886a2ab1b83233cae6424caa750ecfaacad42f",
+      "styles.css": "db70c66cec3cc3eefde5d5d99edb78abdc2fb392c488d22ad1c9fc9dfbbbb52c"
+    },
+    "installedHashes": {
+      "main.js": "ef24d7d28e4a175e0dcba4a0bd91e326cdfbc10efea33c0aa111aaf1751145be",
+      "manifest.json": "65ff25a29d920e10a90722d2f5886a2ab1b83233cae6424caa750ecfaacad42f",
+      "styles.css": "db70c66cec3cc3eefde5d5d99edb78abdc2fb392c488d22ad1c9fc9dfbbbb52c"
+    },
+    "version": "2.29.1"
+  },
+  "scenarios": [
+    {
+      "id": "plugin-load",
+      "status": "passed",
+      "assertions": [
+        "commands registered",
+        "drawing/font/export runtime available",
+        "host protocol 4"
+      ]
+    },
+    {
+      "id": "drawing-main-window",
+      "status": "passed",
+      "assertions": [
+        "Excalidraw API ready",
+        "wrapper mounted",
+        "owner document matches",
+        "main application document"
+      ]
+    },
+    {
+      "id": "printable-layout-wizard",
+      "status": "passed",
+      "tests": [
+        {
+          "testId": "wizard-frame-controls",
+          "featureIds": [],
+          "status": "passed",
+          "assertions": [
+            "empty-drawing first-frame UI",
+            "locked marker frame defaults",
+            "rotate-next-page resets after use",
+            "adjacent frame position and sequential naming",
+            "actual frame save/reload"
+          ]
+        },
+        {
+          "testId": "wizard-main",
+          "featureIds": [],
+          "status": "passed",
+          "assertions": [
+            "actual Script Engine bootstrap",
+            "main/popout range UI",
+            "six ordered custom-size SVG pages",
+            "invalid range rejected",
+            "empty-page handling",
+            "source scene unchanged",
+            "repeat activation reused dialog",
+            "close restored rendering and removed runtime"
+          ]
+        },
+        {
+          "testId": "wizard-popout",
+          "featureIds": [],
+          "status": "passed",
+          "assertions": [
+            "actual Script Engine bootstrap",
+            "main/popout range UI",
+            "six ordered custom-size SVG pages",
+            "invalid range rejected",
+            "empty-page handling",
+            "source scene unchanged",
+            "repeat activation reused dialog",
+            "close restored rendering and removed runtime"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "javascript-errors",
+      "status": "passed"
+    }
+  ],
+  "cleanup": "passed",
+  "baselineRestored": true,
+  "reportDir": "/Users/zsviczian/GitHub/obsidian-excalidraw-plugin/.test-work/reports/printable-layout-2cabee89-41ee-4e8a-a366-b0ec2215c66a",
+  "boundary": "Actual Script Engine, UI and SVG generation; EA.createPDF submission captured. Native PDF printing and physical mobile touch were not exercised."
+}
