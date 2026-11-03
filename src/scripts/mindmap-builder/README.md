@@ -10,6 +10,10 @@ Enter a complete equation such as `$$x=5$$` as a node to render it as a LaTeX im
 
 To reuse a branch with its links, images, and grouped notes, select the complete branch on the canvas and use native Excalidraw copy. Select a destination Mindmap node, then use the existing Builder **Paste** button or hotkey. The branch attaches as a child; with no destination selected, it becomes an independent map. Builder **Copy** continues to export Markdown outlines.
 
+A local Markdown image can also be pasted directly with Builder **Paste** (Alt/Option+V), with or without a selected parent. Native paste keeps it editable. The floating input remains available while its embedded Markdown-image editor has focus.
+
+Markdown copy keeps local Markdown-image source in an appendix below the outline. A node references it as `![[#^markdown-image=elementId|width]]`; its source is enclosed by `<!-- excalidraw-markdown-image:elementId -->` and `<!-- /excalidraw-markdown-image:elementId -->`, using the same delimiters as drawing files. An optional HTML comment preserves the image's rendering settings. Builder paste separates these blocks from the outline and recreates editable local images with independent source IDs. Copy, cut and paste therefore work without the original drawing. A local image used as a submap exports its children inline; ordinary submaps retain their section export.
+
 Pasted branches retain their styles, folds, pinned nodes, and nested submap settings. Copied whole maps become submaps when attached. Auto-layout remains disabled where you disabled it. Builder's input Undo/Redo groups a completed branch paste; the canvas Undo/Redo controls follow native paste, attachment, and layout history steps.
 
 Builder **Paste** also accepts Mermaid mindmaps, either as plain text starting with `mindmap` or inside a `mermaid` code block. With a node selected, the imported root becomes its child; otherwise it creates a new map. For example:

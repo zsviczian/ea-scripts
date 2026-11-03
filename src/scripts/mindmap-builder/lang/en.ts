@@ -1,4 +1,6 @@
 export const en = {
+  NOTICE_MARKDOWN_IMAGE_INVALID: "Cannot import or export this Markdown-image appendix. Check its source blocks and references.",
+  NOTICE_MARKDOWN_IMAGE_MISSING: "Markdown-image source is unavailable. Nothing was copied or cut.",
   requiresNewerVersion: "Please update the Excalidraw plugin to version {version} or higher.",
   launchFailed: "Mindmap Builder could not start. See the developer console for details.",
   // Notices

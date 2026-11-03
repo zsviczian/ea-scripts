@@ -3,8 +3,14 @@ export function updateFloatingVisibility(context, view = context.ea.targetView, 
   const modal = context.floatingInputModal?.modalEl;
   if (!context.isUndocked || !modal) return;
   const active = context.ea.plugin.app.workspace.activeLeaf?.view;
-  // Focusing the resident sidepanel keeps the last drawing's mode authoritative.
-  const drawingActive = active === view || active?.getViewType() === "excalidraw-sidepanel";
+  // The Markdown-image source editor has its own Markdown leaf inside the
+  // resident sidepanel. It still belongs to the drawing, unlike a Markdown tab.
+  const embeddedEditor = active?.containerEl;
+  const markdownImageEditorActive =
+    embeddedEditor?.matches?.(".excalidraw-markdown-fragment-view") &&
+    context.ea.getSidepanelLeaf?.()?.view?.containerEl?.contains(embeddedEditor);
+  const drawingActive = active === view || active?.getViewType() === "excalidraw-sidepanel" ||
+    markdownImageEditorActive;
   const viewMode = state?.viewModeEnabled ?? context.ea.getExcalidrawAPI()?.getAppState()?.viewModeEnabled;
   const visible = drawingActive && context.ea.isExcalidrawView(view) && !viewMode && !context.isExcaliBrainView();
   modal.style.display = visible ? "" : "none";

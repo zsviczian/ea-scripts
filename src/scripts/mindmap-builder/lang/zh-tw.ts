@@ -2,6 +2,8 @@ import type { TranslationCatalog } from "../../../sharedUtils/i18n";
 import type { MindmapTranslationKey } from "./en";
 
 export const zhTw = {
+  NOTICE_MARKDOWN_IMAGE_INVALID: "無法匯入或匯出此 Markdown 圖像附錄。請檢查來源區塊和參照。",
+  NOTICE_MARKDOWN_IMAGE_MISSING: "Markdown 圖像來源無法使用。未複製或剪下任何內容。",
   NOTICE_MERMAID_COPIED: "已複製為 Mermaid 心智圖。",
   NOTICE_MERMAID_INVALID: "無法貼上此 Mermaid 心智圖。請使用單一根節點，並縮排子節點。",
   LABEL_COPY_MERMAID: "Mermaid 心智圖",

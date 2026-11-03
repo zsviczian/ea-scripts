@@ -1,0 +1,131 @@
+{
+  "date": "2026-11-03",
+  "status": "passed",
+  "platform": "macOS",
+  "obsidian": "1.15.0 (installer 1.14.0)",
+  "vault": "/Users/zsviczian/GitHub/obsidian-excalidraw-plugin/.test-work/vaults/excalidraw-auto-test",
+  "report": "/Users/zsviczian/GitHub/obsidian-excalidraw-plugin/.test-work/reports/mindmap-1793719193534/report.json",
+  "script": {
+    "scriptHash": "9fdb61021332e46ee885555d56d37da91943814f77986143fa1f6bf98e2ca187",
+    "scriptBytes": 661138
+  },
+  "pluginArtifacts": {
+    "main.js": "ef24d7d28e4a175e0dcba4a0bd91e326cdfbc10efea33c0aa111aaf1751145be",
+    "manifest.json": "65ff25a29d920e10a90722d2f5886a2ab1b83233cae6424caa750ecfaacad42f",
+    "styles.css": "db70c66cec3cc3eefde5d5d99edb78abdc2fb392c488d22ad1c9fc9dfbbbb52c"
+  },
+  "cases": [
+    {
+      "id": "plugin-load",
+      "status": "passed",
+      "checks": [
+        "commands registered",
+        "drawing/font/export runtime available",
+        "host protocol 4"
+      ]
+    },
+    {
+      "id": "drawing-main-window",
+      "status": "passed",
+      "checks": [
+        "Excalidraw API ready",
+        "wrapper mounted",
+        "owner document matches",
+        "main application document"
+      ]
+    },
+    {
+      "id": "mindmap-markdown-images-main",
+      "status": "passed",
+      "checks": [
+        "resident host EA found",
+        "{\"ok\":true,\"data\":{\"addedNodeIds\":[\"9YsVa68i\",\"p3UxlJah\",\"DkVik7d1\",\"q6Z0BAJq\",\"6SFN8Z2b\"],\"rootId\":\"9YsVa68i\"}}",
+        "appendix creates actual local image",
+        "exact source registered",
+        "exported display width and rendered height",
+        "rendered SVG registered",
+        "source headings and lists excluded from map hierarchy",
+        "child attached to image",
+        "{\"exported\":{\"ok\":true,\"data\":{\"markdown\":\"# Map\\n- ![[#^markdown-image=DkVik7d1|260]]\\n\\t- Image child\\n- Sibling\\n\\n<!-- mindmap-markdown-image-render:DkVik7d1 {\\\"width\\\":500,\\\"paddingBottom\\\":10,\\\"fontFamily\\\":\\\"Cascadia\\\",\\\"fontColor\\\":\\\"Black\\\",\\\"border\\\":{\\\"enabled\\\":false,\\\"color\\\":\\\"Black\\\"},\\\"css\\\":\\\"\\\",\\\"transclusion\\\":{\\\"enabled\\\":false,\\\"fontFamily\\\":\\\"Cascadia\\\",\\\"fontColor\\\":\\\"Black\\\",\\\"border\\\":{\\\"enabled\\\":false,\\\"color\\\":\\\"Black\\\"},\\\"css\\\":\\\"\\\"}} -->\\n<!-- excalidraw-markdown-image:DkVik7d1 -->\\n\\n# Inner heading\\n\\n- inner list\\n  - inner child\\n\\n```js\\nconst x = 1;\\n```\\n\\n\\n<!-- /excalidraw-markdown-image:DkVik7d1 -->\\n\"}},\"notices\":[\"Paste complete.\",\"Map copied as markdown.\"],\"sources\":[{\"id\":\"DkVik7d1\",\"fileId\":\"fVh83JyK\",\"source\":{\"markdown\":\"# Inner heading\\n\\n- inner list\\n  - inner child\\n\\n```js\\nconst x = 1;\\n```\\n\"}}]}",
+        "portable export contains exact source",
+        "export independent of source drawing path",
+        "floating input activated",
+        "floating input visible on image selection: {\"mode\":\"main\",\"activeView\":\"excalidraw\",\"activeSame\":true,\"hostSame\":true,\"hostMain\":true,\"popoutModal\":true,\"mainModal\":true,\"display\":\"\",\"hostPath\":\"__excalidraw_cli_smoke_e01d2a25-1126-4012-83fe-ee91ab6848cf.excalidraw.md\"}",
+        "floating input visible while Markdown source focused",
+        "floating input action accepted",
+        "child created from floating input",
+        "{\"ok\":true}",
+        "native Markdown image attached by Builder paste",
+        "{\"ok\":true,\"data\":{\"addedNodeIds\":[\"eZeRKpBo\",\"9XmQWyss\",\"ciojSuIu\",\"vri247nF\",\"88M5bGpI\"],\"rootId\":\"eZeRKpBo\"}}",
+        "appendix reimport uses independent source ID",
+        "reimport exact editable source",
+        "undo removes reimport without removing original image",
+        "redo restores image with editable source",
+        "drawing persisted: {\"status\":\"persisted\",\"requestedRevision\":34,\"currentRevision\":34,\"acknowledgedRevision\":34}",
+        "source and independent image saved to disk",
+        "floating input hidden in view mode",
+        "floating input restored in edit mode",
+        "editable source survives save and reopen"
+      ]
+    },
+    {
+      "id": "mindmap-markdown-images-popout",
+      "status": "passed",
+      "checks": [
+        "resident host EA found",
+        "{\"ok\":true,\"data\":{\"addedNodeIds\":[\"CJ7nBHse\",\"N7WY5Wgb\",\"c3m9tHvL\",\"LBUA20sW\",\"NtiOw5Ta\"],\"rootId\":\"CJ7nBHse\"}}",
+        "appendix creates actual local image",
+        "exact source registered",
+        "exported display width and rendered height",
+        "rendered SVG registered",
+        "source headings and lists excluded from map hierarchy",
+        "child attached to image",
+        "{\"exported\":{\"ok\":true,\"data\":{\"markdown\":\"# Map\\n- ![[#^markdown-image=c3m9tHvL|260]]\\n\\t- Image child\\n- Sibling\\n\\n<!-- mindmap-markdown-image-render:c3m9tHvL {\\\"width\\\":500,\\\"paddingBottom\\\":10,\\\"fontFamily\\\":\\\"Cascadia\\\",\\\"fontColor\\\":\\\"Black\\\",\\\"border\\\":{\\\"enabled\\\":false,\\\"color\\\":\\\"Black\\\"},\\\"css\\\":\\\"\\\",\\\"transclusion\\\":{\\\"enabled\\\":false,\\\"fontFamily\\\":\\\"Cascadia\\\",\\\"fontColor\\\":\\\"Black\\\",\\\"border\\\":{\\\"enabled\\\":false,\\\"color\\\":\\\"Black\\\"},\\\"css\\\":\\\"\\\"}} -->\\n<!-- excalidraw-markdown-image:c3m9tHvL -->\\n\\n# Inner heading\\n\\n- inner list\\n  - inner child\\n\\n```js\\nconst x = 1;\\n```\\n\\n\\n<!-- /excalidraw-markdown-image:c3m9tHvL -->\\n\"}},\"notices\":[],\"sources\":[{\"id\":\"c3m9tHvL\",\"fileId\":\"gXrkJUMC\",\"source\":{\"markdown\":\"# Inner heading\\n\\n- inner list\\n  - inner child\\n\\n```js\\nconst x = 1;\\n```\\n\"}}]}",
+        "portable export contains exact source",
+        "export independent of source drawing path",
+        "floating input activated",
+        "floating input visible on image selection: {\"mode\":\"popout\",\"activeView\":\"excalidraw\",\"activeSame\":true,\"hostSame\":true,\"hostMain\":false,\"popoutModal\":true,\"mainModal\":false,\"display\":\"\",\"hostPath\":\"__excalidraw_cli_smoke_e01d2a25-1126-4012-83fe-ee91ab6848cf_case1.excalidraw.md\"}",
+        "floating input visible while Markdown source focused",
+        "floating input action accepted",
+        "child created from floating input",
+        "{\"ok\":true}",
+        "native Markdown image attached by Builder paste",
+        "{\"ok\":true,\"data\":{\"addedNodeIds\":[\"aU8YO71I\",\"i4gFweQt\",\"DkSvUjhQ\",\"wHjcM3VM\",\"D60hUJtd\"],\"rootId\":\"aU8YO71I\"}}",
+        "appendix reimport uses independent source ID",
+        "reimport exact editable source",
+        "undo removes reimport without removing original image",
+        "redo restores image with editable source",
+        "drawing persisted: {\"status\":\"persisted\",\"requestedRevision\":34,\"currentRevision\":34,\"acknowledgedRevision\":34}",
+        "source and independent image saved to disk",
+        "floating input hidden in view mode",
+        "floating input restored in edit mode",
+        "editable source survives save and reopen"
+      ]
+    },
+    {
+      "id": "javascript-errors",
+      "status": "passed",
+      "checks": []
+    }
+  ],
+  "cleanup": "passed",
+  "transportRecovery": [
+    {
+      "operation": "eval",
+      "id": 66,
+      "recovered": "completed receipt",
+      "error": "eval: spawnSync /Applications/Obsidian.app/Contents/MacOS/obsidian-cli ETIMEDOUT"
+    },
+    {
+      "operation": "eval",
+      "id": 73,
+      "recovered": "completed receipt",
+      "error": "eval: spawnSync /Applications/Obsidian.app/Contents/MacOS/obsidian-cli ETIMEDOUT"
+    }
+  ],
+  "baselineRestored": true,
+  "limits": [
+    "Focused script checks, not the complete plugin regression profile.",
+    "Windows, physical mobile, OS IME and moved-tab migration are not established."
+  ]
+}

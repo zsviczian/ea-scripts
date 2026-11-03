@@ -5,6 +5,7 @@
  */
 
 /** Creates this subsystem against the invocation-owned context. */
+import { parseMarkdownImageAppendix, resolveMarkdownImageReference } from "./markdownImages";
 import { parseBranchClipboard } from "./branchClipboard";
 import { createBranchPaste } from "./branchPaste.js";
 import { getMermaidMindmapBody, parseMermaidMindmap } from "./mermaid";
@@ -78,6 +79,17 @@ export function createMarkdownImport(runtimeContext) {
   const importTextToMap = async (rawText) => {
     if (!runtimeContext.isViewSet()) return;
     if (!rawText) return;
+    let appendix;
+    try {
+      appendix = parseMarkdownImageAppendix(rawText);
+      rawText = appendix.outline;
+    } catch {
+      new runtimeContext.Notice(runtimeContext.t("NOTICE_MARKDOWN_IMAGE_INVALID"));
+      return;
+    }
+    const addImportedNode = (text, follow, skip, all, parent, pos, ontology, shape) =>
+      runtimeContext.addNode(text, follow, skip, all, parent, pos, ontology, shape,
+        resolveMarkdownImageReference(text, appendix.images));
     let mermaid;
     try {
       mermaid = parseMermaidMindmap(rawText);
@@ -109,7 +121,8 @@ export function createMarkdownImport(runtimeContext) {
           text = "- " + text;
         }
       } else {
-        text = text.trim();
+        // A one-node map is exported as a heading, including image references.
+        text = text.replace(/^#+\s+/, "").trim();
       }
       text = text.replace(boundaryRegex, "");
       text = text.replace(blockRefRegex, "");
@@ -121,12 +134,12 @@ export function createMarkdownImport(runtimeContext) {
       }
       let isSubmapRef = false;
       const submapRefMatch = text.match(submapRefRegex);
-      if (submapRefMatch) {
+      if (submapRefMatch && !resolveMarkdownImageReference(text, appendix.images)) {
         isSubmapRef = true;
         text = submapRefMatch[1].trim();
       }
       if (text) {
-        currentParent = await runtimeContext.addNode(
+        currentParent = await addImportedNode(
           text.trim(),
           true,
           false,
@@ -225,7 +238,7 @@ export function createMarkdownImport(runtimeContext) {
         let isSubmapRef = false;
         text = text.trim();
         const submapRefMatch = text.match(submapRefRegex);
-        if (submapRefMatch) {
+        if (submapRefMatch && !resolveMarkdownImageReference(text, appendix.images)) {
           isSubmapRef = true;
           text = submapRefMatch[1].trim();
         }
@@ -316,7 +329,7 @@ export function createMarkdownImport(runtimeContext) {
       if (topLevelItems.length === 1) {
         const rootItem = topLevelItems[0];
         const rootIndex = parsed.indexOf(rootItem);
-        sel = currentParent = await runtimeContext.addNode(
+        sel = currentParent = await addImportedNode(
           rootItem.text,
           true,
           true,
@@ -332,7 +345,7 @@ export function createMarkdownImport(runtimeContext) {
           parsed.splice(rootIndex, 1);
         }
       } else {
-        sel = currentParent = await runtimeContext.addNode(
+        sel = currentParent = await addImportedNode(
           runtimeContext.t("INPUT_TITLE_PASTE_ROOT"),
           true,
           true,
@@ -375,7 +388,7 @@ export function createMarkdownImport(runtimeContext) {
         } else {
           // Edge case: Submap def without embed. Create at root to salvage data.
           const currentAllElements = runtimeContext.ea.getElements();
-          const newNode = await runtimeContext.addNode(
+          const newNode = await addImportedNode(
             item.text,
             false,
             true,
@@ -401,7 +414,7 @@ export function createMarkdownImport(runtimeContext) {
       }
       const parentNode = stack[stack.length - 1].node;
       const currentAllElements = runtimeContext.ea.getElements();
-      const newNode = await runtimeContext.addNode(
+      const newNode = await addImportedNode(
         item.text,
         false,
         true,

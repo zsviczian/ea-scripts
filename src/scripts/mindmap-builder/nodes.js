@@ -3,6 +3,7 @@
  * @overview nodes implementation extracted from Mindmap Builder.
  * Context accessors retain live per-invocation state; no plugin/view singleton is introduced.
  */
+import { addLocalMarkdownImage } from "./markdownImageNodes.js";
 import { fitTextContainer } from "./textContainers";
 import { parseLatexInput } from "./textParsing.js";
 
@@ -31,6 +32,12 @@ export function createNodes(runtimeContext) {
     y = 0,
     depth = 0,
   } = {}) => {
+    if (pathOrFile && typeof pathOrFile === "object" && "markdown" in pathOrFile) {
+      const id = await addLocalMarkdownImage(runtimeContext.ea, pathOrFile, x, y);
+      const element = runtimeContext.ea.getElement(id);
+      if (leftFacing) element.x = x - element.width;
+      return id;
+    }
     const newNodeId = await runtimeContext.ea.addImage(x, y, pathOrFile);
     const el = runtimeContext.ea.getElement(newNodeId);
     const targetWidth =
@@ -79,6 +86,7 @@ export function createNodes(runtimeContext) {
     pos = null,
     ontology = null,
     nodeShape = null,
+    localMarkdownImage = null,
   ) => {
     if (!runtimeContext.isViewSet()) return;
     if (!text || text.trim() === "") return;
@@ -114,9 +122,11 @@ export function createNodes(runtimeContext) {
     let newNodeId;
     let arrowId;
     // --- Image Detection ---
-    const imageInfo = runtimeContext.parseImageInput(text);
-    const embeddableUrl = runtimeContext.parseEmbeddableInput(text, imageInfo);
-    const latex = parseLatexInput(text);
+    const imageInfo = localMarkdownImage
+      ? { isImagePath: true, path: localMarkdownImage, width: localMarkdownImage.width }
+      : runtimeContext.parseImageInput(text);
+    const embeddableUrl = localMarkdownImage ? null : runtimeContext.parseEmbeddableInput(text, imageInfo);
+    const latex = localMarkdownImage ? null : parseLatexInput(text);
     const defaultNodeColor = runtimeContext.ea.getCM(st.viewBackgroundColor).invert().stringHEX({
       alpha: false,
     });

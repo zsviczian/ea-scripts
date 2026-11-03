@@ -4,6 +4,8 @@
  * Context accessors retain live per-invocation state; no plugin/view singleton is introduced.
  */
 
+import { isLocalMarkdownImage, serializeMarkdownImageAppendix } from "./markdownImages";
+
 /** Creates this subsystem against the invocation-owned context. */
 export function createMarkdownExport(runtimeContext) {
   /**
@@ -31,6 +33,23 @@ export function createMarkdownExport(runtimeContext) {
     const indentVal = useTab ? "\t" : " ".repeat(tabSize);
     // --- Crosslink & Block Reference Logic ---
     const branchIds = new Set(runtimeContext.getBranchElementIds(sel.id, all));
+    const markdownImages = new Map();
+    for (const node of all) {
+      if (!branchIds.has(node.id) || !isLocalMarkdownImage(node)) continue;
+      const source = runtimeContext.ea.targetView.excalidrawData.getMarkdownImage(node.fileId);
+      if (!source) {
+        new runtimeContext.Notice(runtimeContext.t("NOTICE_MARKDOWN_IMAGE_MISSING"));
+        return;
+      }
+      markdownImages.set(node.id, { markdown: source.markdown, render: node.customData.markdownImage.render });
+    }
+    let imageAppendix;
+    try {
+      imageAppendix = serializeMarkdownImageAppendix(markdownImages);
+    } catch {
+      new runtimeContext.Notice(runtimeContext.t("NOTICE_MARKDOWN_IMAGE_INVALID"));
+      return;
+    }
     const nodeBlockRefs = new Map(); // NodeID -> "^blockId"
     const nodeOutgoingLinks = new Map(); // NodeID -> ["text representation", ...]
     // Find arrows within this branch that are NOT structural branch arrows
@@ -94,6 +113,9 @@ export function createMarkdownExport(runtimeContext) {
       }
       let str = "";
       let text = runtimeContext.getTextFromNode(all, node, true);
+      if (isLocalMarkdownImage(node)) {
+        text = `![[#^markdown-image=${node.id}|${Math.round(node.width)}]]`;
+      }
       let ontologyStr = "";
       // Fetch ontology if it's not the absolute root, or if it's a child within a submap layout
       if (!isRootSelected || depth > 0 || isSubmapChild) {
@@ -129,7 +151,7 @@ export function createMarkdownExport(runtimeContext) {
       }
       // --- Submap Extraction Logic ---
       // If this node is an additional root AND it's not the immediate element we are printing the section for
-      if (!isPrintRoot && node.customData?.isAdditionalRoot) {
+      if (!isPrintRoot && node.customData?.isAdditionalRoot && !isLocalMarkdownImage(node)) {
         let submapTitle = text;
         // Clean up Image strings to use as clean anchor links
         if (submapTitle.startsWith("![[") && submapTitle.endsWith("]]")) {
@@ -278,6 +300,7 @@ export function createMarkdownExport(runtimeContext) {
         md += buildList(c.id, 0, true, false);
       });
     }
+    md += imageAppendix;
     if (toClipboard) await navigator.clipboard.writeText(md);
     if (cut) {
       const incomingArrow = all.find(

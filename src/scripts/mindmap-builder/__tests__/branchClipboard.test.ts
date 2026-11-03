@@ -107,3 +107,21 @@ it("keeps image files and user metadata while repairing copied boundary/fold ref
   );
   expect(data).toEqual({ mindmapOrder: 0, boundaryId: "pasted-boundary", user: { keep: true } });
 });
+
+it("treats a standalone local Markdown image as a pasteable root without Builder tags", () => {
+  const image = {
+    id: "markdown",
+    type: "image",
+    fileId: "source",
+    customData: { markdownImage: { schemaVersion: 1, source: "local", render: { width: 400 } } },
+  };
+  expect(analyzeBranchClipboard(clipboard(image))).toEqual({
+    kind: "branch",
+    elements: [image],
+    rootIds: [image.id],
+  });
+  expect(analyzeBranchClipboard(clipboard({ ...image, customData: {} }))).toEqual({ kind: "none" });
+  expect(analyzeBranchClipboard(clipboard({ ...image,
+    customData: { markdownImage: { source: "external" } },
+  }))).toEqual({ kind: "none" });
+});
