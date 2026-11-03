@@ -4,6 +4,7 @@
  * Context accessors retain live per-invocation state; no plugin/view singleton is introduced.
  */
 import { fitTextContainer } from "./textContainers";
+import { parseLatexInput } from "./textParsing.js";
 
 /** Creates this subsystem against the invocation-owned context. */
 export function createNodeEditing(runtimeContext) {
@@ -80,8 +81,9 @@ export function createNodeEditing(runtimeContext) {
     }
     const imageInfo = runtimeContext.parseImageInput(textInput);
     const embeddableUrl = runtimeContext.parseEmbeddableInput(textInput, imageInfo);
+    const latex = parseLatexInput(textInput);
     let newType = "text";
-    if (imageInfo?.isImagePath || imageInfo?.imageFile) newType = "image";
+    if (latex || imageInfo?.isImagePath || imageInfo?.imageFile) newType = "image";
     else if (embeddableUrl) newType = "embeddable";
     // Check for type conversion (e.g. Text -> Image) or non-text update
     const isTypeChange = (textEl && newType !== "text") || (!textEl && newType !== targetNode.type);
@@ -104,7 +106,10 @@ export function createNodeEditing(runtimeContext) {
       const st = runtimeContext.getAppState();
       runtimeContext.ea.style.strokeColor = targetNode.strokeColor ?? st.currentItemStrokeColor;
       if (newType === "image") {
-        if (imageInfo?.isImagePath) {
+        if (latex) {
+          newNodeId = await runtimeContext.ea.addLaTex(0, 0, latex);
+          if (!newNodeId) return;
+        } else if (imageInfo?.isImagePath) {
           newNodeId = await runtimeContext.addImage({
             pathOrFile: imageInfo.path,
             width: imageInfo.width,
@@ -169,7 +174,7 @@ export function createNodeEditing(runtimeContext) {
         const newElement = runtimeContext.ea.getElement(newNodeId);
         containerToUpdate = runtimeContext.boxChildren ? newElement : null;
         // Explicitly overwrite raw, original and text properties to handle links correctly
-        newTextElement = runtimeContext.boxChildren
+        const newTextElement = runtimeContext.boxChildren
           ? runtimeContext.ea.getElement(containerToUpdate.boundElements[0].id)
           : newElement;
         newTextElement.rawText = textInput;
@@ -196,6 +201,8 @@ export function createNodeEditing(runtimeContext) {
       runtimeContext.scaleDecorations(visualNode, newNode, all, info.rootId);
       // 3. Migrate custom data fields
       const keysToCopy = [
+        "presetName",
+        "customPalette",
         "mindmapOrder",
         "isPinned",
         "growthMode",

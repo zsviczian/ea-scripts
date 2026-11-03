@@ -4,6 +4,12 @@
  * Context accessors retain live per-invocation state; no plugin/view singleton is introduced.
  */
 
+/** Only a complete, nonempty display-math block represents an equation node. */
+export function parseLatexInput(input) {
+  const match = input.trim().match(/^\$\$((?:(?!\$\$)[\s\S])+)\$\$$/);
+  return match?.[1].trim() ? match[1].trim() : null;
+}
+
 /** Creates this subsystem against the invocation-owned context. */
 export function createTextParsing(runtimeContext) {
   //special trim function that returns trimmed text, including trimming a bullet point of the bullet
@@ -179,6 +185,9 @@ export function createTextParsing(runtimeContext) {
       return node.link.startsWith("[[") ? `!${node.link}` : `![](${node.link})`;
     }
     if (node.type === "image") {
+      const latex = runtimeContext.ea.targetView?.excalidrawData?.getEquation?.(node.fileId)?.latex
+        ?? node.customData?.latex;
+      if (typeof latex === "string" && latex.trim()) return `$$${latex}$$`;
       const embeddedFile = runtimeContext.ea.targetView?.excalidrawData?.getFile(node.fileId);
       if (!embeddedFile) return "";
       const file = runtimeContext.ea.getViewFileForImageElement(node);
