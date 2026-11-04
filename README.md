@@ -71,6 +71,8 @@ Generated scripts start with the script's local `README.md` and a UTC build time
 
 ## Included scripts
 
+- `printable-layout-wizard`: marker-frame page management and PDF export with page ranges
+
 - `mindmap-builder`: keyboard-driven mind mapping with a typed launcher,
   script-local translations, and 38 extracted JavaScript subsystems for layout,
   traversal, editing, import/export, controls, and lifecycle

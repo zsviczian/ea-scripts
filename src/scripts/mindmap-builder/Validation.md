@@ -1,5 +1,20 @@
 # Migration validation — 2026-10-13
 
+## Release cut — 2026-11-04
+
+Bumped the script release identifier to `v26.11.04` and rebuilt the merged
+LaTeX and local Markdown-image source together. Yesterday's LaTeX support remains
+in the generated script. The new release adds portable editable Markdown-image
+copy/cut/paste and retains the editor-focus visibility fix.
+
+The Mindmap Builder suite passes 142 tests in 19 files. The three-script/shared
+release selection has 346 passes and the same seven baseline slideshow failures;
+workspace typechecking retains 363 baseline diagnostics. The build and scoped
+bootstrap lint pass. This release cut changes the version identifier only; prior
+Markdown-image native evidence and its LaTeX integration limits remain as recorded
+below. Today's wizard native main/popout checks and slideshow pixel parity pass;
+those checks do not constitute a new native Mindmap Builder run.
+
 ## Local Markdown images — 2026-11-03
 
 `v26.11.03` recognizes the Markdown-image editor's nested Markdown leaf as part of the resident sidepanel when deciding floating-input visibility. API changes and active-leaf changes share that decision; ordinary Markdown tabs and drawing view mode still hide the floating controls. A standalone local Markdown image uses native element-preserving paste/attachment, with or without a selected parent.
