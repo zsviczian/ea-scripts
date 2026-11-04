@@ -2,7 +2,9 @@
 
 Export Excalidraw drawings as printable PDF pages. Define page areas with marker frames, add matching pages in any direction, rotate the next page, and choose page size, orientation, margins, locking, zoom, and empty-page handling.
 
-In **Printing → Pages**, leave the field blank to print all pages or enter a selection such as `1, 3-5, 9-`. This prints page 1, pages 3 through 5, and page 9 through the end. Commas and semicolons separate ranges. Pages retain alphabetical frame order; overlapping ranges print each page once. The dialog lists each page number and frame name. Numbers refer to this list **before** empty pages are skipped, and only include marker frames when that option is enabled. A range beyond the end selects no pages; an invalid range displays an error without exporting.
+In **Printing → Pages**, leave the field blank to print all pages or enter a selection such as `1, 3-5, 9-`. This prints page 1, pages 3 through 5, and page 9 through the end. Commas and semicolons separate ranges. Pages retain alphabetical frame order; overlapping ranges print each page once. The preview labels each page with its number and frame name. Numbers refer to these previews **before** empty pages are skipped, and only include marker frames when that option is enabled. A range beyond the end selects no pages; an invalid range displays an error without exporting.
+
+The print preview dims excluded pages and shows the chosen margins. The count next to **Export to PDF** updates as you change the range or empty-page option. Previews refresh when the drawing changes; use the refresh button to rebuild them manually.
 
 Frames define print areas; content outside them is excluded. Frame borders and titles do not print. Keep frames the same size and orientation for a uniform PDF. Custom frames retain their size. Existing script preferences are preserved; page selection resets when you close the dialog.
 

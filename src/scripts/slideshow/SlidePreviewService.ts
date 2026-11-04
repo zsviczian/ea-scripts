@@ -3,6 +3,9 @@
  * @overview Generates bounded, cached PNG previews for sorter and presenter views.
  */
 
+import { exportAreaPreviewPNG, getSceneVisualFingerprint } from "../../sharedUtils/previewUtils";
+export { getSceneVisualFingerprint } from "../../sharedUtils/previewUtils";
+
 import { AsyncTaskQueue } from "../../sharedUtils/AsyncTaskQueue";
 import { ByteBudgetLruCache } from "../../sharedUtils/ByteBudgetLruCache";
 import { getNavigationRect } from "../../sharedUtils/presentationGeometry";
@@ -14,21 +17,12 @@ import { isExitAnimationEffect } from "./types";
 const FALLBACK_BACKGROUND = "#ffffff";
 const PREVIEW_CACHE_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PREVIEW_WIDTH = 960;
-const MAX_PREVIEW_SCALE = 2;
 const PREVIEW_EXPORT_CONCURRENCY = 2;
 
 interface CachedPreview {
   objectUrl: string;
   backgroundColor: string;
 }
-
-interface CachedElementFingerprint {
-  version: unknown;
-  versionNonce: unknown;
-  value: string;
-}
-
-const elementFingerprintCache = new WeakMap<object, CachedElementFingerprint>();
 
 export interface SlidePreviewState {
   /** Number of frame build steps that should already be visible. Omit for final state. */
@@ -51,48 +45,6 @@ export function getPreviewNavigationRect(
     { width: printSlideWidth, height: printSlideHeight },
     maxZoom,
   );
-}
-
-function cloneWithoutMetadata(element: ExcalidrawElement): Record<string, unknown> {
-  const copy = { ...(element as unknown as Record<string, unknown>) };
-  const customData = copy.customData;
-  if (typeof customData === "object" && customData !== null && !Array.isArray(customData)) {
-    const visualCustomData = { ...(customData as Record<string, unknown>) };
-    delete visualCustomData.slideshow;
-    if (Object.keys(visualCustomData).length === 0) delete copy.customData;
-    else copy.customData = visualCustomData;
-  }
-  delete copy.version;
-  delete copy.versionNonce;
-  delete copy.updated;
-  // Frame names are rendered by Excalidraw's frame UI, but preview exports explicitly
-  // disable them. Renaming a slide therefore cannot change the preview bitmap.
-  if (copy.type === "frame") delete copy.name;
-  return copy;
-}
-
-/** Creates a stable visual fingerprint that ignores slideshow-only metadata changes. */
-export function getSceneVisualFingerprint(elements: readonly ExcalidrawElement[]): string {
-  return `[${elements
-    .map((element) => {
-      const raw = element as unknown as Record<string, unknown>;
-      const cacheKey = element as unknown as object;
-      if (raw.version === undefined && raw.versionNonce === undefined) {
-        return JSON.stringify(cloneWithoutMetadata(element));
-      }
-      const cached = elementFingerprintCache.get(cacheKey);
-      if (cached && cached.version === raw.version && cached.versionNonce === raw.versionNonce) {
-        return cached.value;
-      }
-      const value = JSON.stringify(cloneWithoutMetadata(element));
-      elementFingerprintCache.set(cacheKey, {
-        version: raw.version,
-        versionNonce: raw.versionNonce,
-        value,
-      });
-      return value;
-    })
-    .join(",")}]`;
 }
 
 /** Fingerprints only content that can be visible in one preview export. */
@@ -254,25 +206,11 @@ export class SlidePreviewService {
       if (opacity === element.opacity) return element;
       return { ...element, opacity } as ExcalidrawElement;
     });
-    const scale = Math.min(
-      MAX_PREVIEW_SCALE,
-      Math.max(targetWidth / Math.max(exportArea.width, 1), 0.01),
-    );
-    const blob = await this.ea.createViewPNG({
-      withBackground: true,
+    const blob = await exportAreaPreviewPNG(this.ea, {
+      elements: exportElements,
+      area: exportArea,
+      targetWidth,
       theme: appState.theme,
-      frameRendering: {
-        enabled: true,
-        name: false,
-        outline: false,
-        clip: false,
-      },
-      padding: 0,
-      selectedOnly: false,
-      embedScene: false,
-      elementsOverride: exportElements,
-      exportArea,
-      scale,
     });
     if (generation !== this.generation) return undefined;
     const cached = {

@@ -1,7 +1,8 @@
 {
   "status": "passed",
   "platform": "darwin",
-  "scriptHash": "e1a305103823e3aa211c4bb273f86b0b698649a691950b491d84cc20f114f4d5",
+  "boundary": "Actual Script Engine, UI and SVG generation; EA.createPDF submission captured. Native PDF printing and physical mobile touch were not exercised.",
+  "scriptHash": "a1464ceeb69a840f90eaa6d09f05a32aca9c3e3de11a23b294596e8a33f02cb4",
   "artifacts": {
     "sourceHashes": {
       "main.js": "ef24d7d28e4a175e0dcba4a0bd91e326cdfbc10efea33c0aa111aaf1751145be",
@@ -80,6 +81,16 @@
             "repeat activation reused dialog",
             "close restored rendering and removed runtime"
           ]
+        },
+        {
+          "testId": "slideshow-preview-pixel-parity",
+          "featureIds": [],
+          "status": "passed",
+          "assertions": [
+            "old/new real slideshow preview pixels match exactly",
+            "original size, crop and background preserved",
+            "scene unchanged"
+          ]
         }
       ]
     },
@@ -90,6 +101,5 @@
   ],
   "cleanup": "passed",
   "baselineRestored": true,
-  "reportDir": "/Users/zsviczian/GitHub/obsidian-excalidraw-plugin/.test-work/reports/printable-layout-2cabee89-41ee-4e8a-a366-b0ec2215c66a",
-  "boundary": "Actual Script Engine, UI and SVG generation; EA.createPDF submission captured. Native PDF printing and physical mobile touch were not exercised."
+  "reportDir": "/Users/zsviczian/GitHub/obsidian-excalidraw-plugin/.test-work/reports/printable-layout-a5e09fae-8aae-43d6-885a-222350c567b4"
 }

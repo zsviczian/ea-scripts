@@ -1,6 +1,5 @@
 import type { WizardTranslator } from "./lang";
-import { getFrames } from "./frames";
-import { selectPages } from "./pageRanges";
+import { describePrintPages, selectPrintablePages } from "./printPages";
 import { MARGINS } from "./settings";
 
 /** Selects and crops a read-only scene snapshot; never commits placeholder rectangles. */
@@ -29,19 +28,13 @@ export async function printToPdf(
   };
   assertTarget();
   const scene = ea.getViewElements();
-  const frames = getFrames(scene, options.markersOnly);
+  const plan = describePrintPages(ea, scene, options.markersOnly);
+  const frames = plan.frames;
   if (!frames.length) {
     new ea.obsidian.Notice(t("noFrames"));
     return;
   }
-  const selected = selectPages(frames, options.ranges).filter(
-    (frame) =>
-      options.printEmpty ||
-      ea.getElementsInArea(
-        scene.filter((el) => el.type !== "frame"),
-        frame,
-      ).length > 0,
-  );
+  const selected = selectPrintablePages(plan, options.ranges, options.printEmpty);
   if (!selected.length) {
     new ea.obsidian.Notice(t("noPages"));
     return;

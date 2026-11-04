@@ -1,5 +1,13 @@
 /** English is the typed source of truth for this script. */
 export const en = {
+  preview: "Print preview",
+  previewPage: "{number}: {name}",
+  emptyPage: "Empty page",
+  previewFailed: "Preview unavailable",
+  refreshPreview: "Refresh previews",
+  printCount: "{count} pages",
+  printCountOne: "1 page",
+
   requiresVersion: "Please update Excalidraw to version {version} or newer.",
   noView: "Open an Excalidraw drawing first.",
   title: "Page management",

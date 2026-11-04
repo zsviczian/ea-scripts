@@ -2,6 +2,14 @@ import type { TranslationCatalog } from "../../../sharedUtils/i18n";
 import type { WizardTranslationKey } from "./en";
 /** Additional labels fall back to English. */
 export const fr = {
+  preview: "Aperçu avant impression",
+  previewPage: "{number} : {name}",
+  emptyPage: "Page vide",
+  previewFailed: "Aperçu indisponible",
+  refreshPreview: "Actualiser les aperçus",
+  printCount: "{count} pages",
+  printCountOne: "1 page",
+
   title: "Gestion des pages",
   frames: "Cadres",
   printing: "Impression",

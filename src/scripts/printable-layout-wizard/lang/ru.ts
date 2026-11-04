@@ -2,6 +2,14 @@ import type { TranslationCatalog } from "../../../sharedUtils/i18n";
 import type { WizardTranslationKey } from "./en";
 /** Additional labels fall back to English. */
 export const ru = {
+  preview: "Предпросмотр печати",
+  previewPage: "{number}: {name}",
+  emptyPage: "Пустая страница",
+  previewFailed: "Предпросмотр недоступен",
+  refreshPreview: "Обновить предпросмотр",
+  printCount: "Страниц: {count}",
+  printCountOne: "1 страница",
+
   title: "Управление страницами",
   frames: "Рамки",
   printing: "Печать",

@@ -4,6 +4,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
+import { execFileSync } from "node:child_process";
+import { build } from "esbuild";
 import { fileURLToPath, pathToFileURL } from "node:url";
 const authoringRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../../../..");
 const pluginRoot = resolve(authoringRoot, "../obsidian-excalidraw-plugin");
@@ -75,6 +77,35 @@ try {
     join(authoringRoot, "build/printable-layout-wizard/printable-layout-wizard.md"),
     "utf8",
   );
+  const comparisonRef = process.argv
+    .find((arg) => arg.startsWith("--compare-slideshow="))
+    ?.slice(20);
+  const previewModules = [];
+  if (comparisonRef) {
+    const file = "src/scripts/slideshow/SlidePreviewService.ts";
+    for (const source of [
+      execFileSync("git", ["show", `${comparisonRef}:${file}`], {
+        cwd: authoringRoot,
+        encoding: "utf8",
+      }),
+      readFileSync(join(authoringRoot, file), "utf8"),
+    ]) {
+      const compiled = await build({
+        stdin: {
+          contents: source,
+          loader: "ts",
+          resolveDir: join(authoringRoot, "src/scripts/slideshow"),
+        },
+        bundle: true,
+        format: "iife",
+        globalName: "previewModule",
+        write: false,
+        platform: "browser",
+        target: "es2022",
+      });
+      previewModules.push(compiled.outputFiles[0].text);
+    }
+  }
   const report = await runObsidianSmoke({
     projectRoot: pluginRoot,
     ...target,
@@ -92,7 +123,13 @@ try {
         ...(await runInAppTask({
           cli,
           execute: exercise,
-          args: [drawingPath, script],
+          args: [drawingPath, script, previewModules],
+          onRequest: (request) => {
+            if (request.method !== "screenshot") throw Error("Unknown host request");
+            const name = request.params.name;
+            if (!/^[a-z-]+$/.test(name)) throw Error("Unowned screenshot path");
+            cli("dev:screenshot", "path=" + join(reportDir, name + ".png"));
+          },
           timeoutMs: 120000,
         })),
       }),
@@ -141,7 +178,7 @@ try {
 }
 
 /** Exercise the actual bundled script and host renderer; PDF submission is captured, never printed. */
-async function exercise(c, drawingPath, script) {
+async function exercise(c, drawingPath, script, previewModules) {
   const plugin = app.plugins.plugins["obsidian-excalidraw-plugin"];
   const main = app.workspace
     .getLeavesOfType("excalidraw")
@@ -170,6 +207,30 @@ async function exercise(c, drawingPath, script) {
         (el) => el.getAttribute("aria-label") === label,
       );
     check(button("Create first frame"), "empty drawing did not offer first page");
+    modal.modalEl.setCssStyles({ width: "700px", maxWidth: "calc(100vw - 32px)" });
+    const dimensions = () =>
+      [...modal.contentEl.querySelectorAll(".printable-layout-dimensions label")].map((el) =>
+        el.getBoundingClientRect(),
+      );
+    await c.waitFor(
+      () => dimensions().length === 2 && Math.abs(dimensions()[0].top - dimensions()[1].top) < 1,
+      "wide page controls share a row",
+    );
+    check(
+      Math.abs(
+        button("Create first frame").getBoundingClientRect().width -
+          modal.contentEl.querySelector(".printable-layout-panel").getBoundingClientRect().width,
+      ) < 1,
+      "first-frame action is not full width",
+    );
+    await c.requestHost("screenshot", { name: "wizard-first-frame-wide" });
+    modal.modalEl.setCssStyles({ width: "350px" });
+    await c.waitFor(
+      () => dimensions()[1].top > dimensions()[0].bottom,
+      "narrow page controls wrap",
+    );
+    await c.requestHost("screenshot", { name: "wizard-first-frame-narrow" });
+    modal.modalEl.setCssStyles({ width: "700px" });
     button("Create first frame").click();
     await c.waitFor(
       () =>
@@ -177,6 +238,32 @@ async function exercise(c, drawingPath, script) {
         button("Rotate next page"),
       "first page created",
     );
+    const arrows = [
+      "Add page above",
+      "Add page to the left",
+      "Rotate next page",
+      "Add page to the right",
+      "Add page below",
+    ].map((label) => button(label).getBoundingClientRect());
+    check(
+      arrows.every(
+        (rect) =>
+          Math.abs(rect.width - arrows[0].width) < 1 &&
+          Math.abs(rect.height - arrows[0].height) < 1,
+      ),
+      "frame action sizes differ",
+    );
+    check(
+      Math.abs(arrows[2].top - arrows[1].top) < 1 && Math.abs(arrows[2].top - arrows[3].top) < 1,
+      "rotate action is not centered",
+    );
+    const tab = button("Frames").getBoundingClientRect(),
+      panel = modal.contentEl.querySelector(".printable-layout-panel").getBoundingClientRect();
+    check(
+      panel.top - tab.bottom >= 10 && button("Frames").getAttribute("role") === "tab",
+      "tab panel border/spacing absent",
+    );
+    await c.requestHost("screenshot", { name: "wizard-frame-controls" });
     const first = api.getSceneElements().find((el) => el.type === "frame");
     check(
       first.frameRole === "marker" && first.locked && first.name === "01",
@@ -283,6 +370,20 @@ async function exercise(c, drawingPath, script) {
       check(ea, "script-owned EA missing");
       eas.push(ea);
       const outputs = [];
+      const originalPNG = ea.createViewPNG.bind(ea);
+      let pngCount = 0,
+        activePNGs = 0,
+        maxActivePNGs = 0;
+      ea.createViewPNG = async (options) => {
+        pngCount++;
+        activePNGs++;
+        maxActivePNGs = Math.max(maxActivePNGs, activePNGs);
+        try {
+          return await originalPNG(options);
+        } finally {
+          activePNGs--;
+        }
+      };
       ea.createPDF = async (result) => {
         outputs.push(result);
       };
@@ -298,6 +399,59 @@ async function exercise(c, drawingPath, script) {
         el.dispatchEvent(new el.ownerDocument.defaultView.Event("input", { bubbles: true }));
       };
       check(input(), "page range input missing");
+      const status = () => modal.contentEl.querySelector('[role="status"]').textContent;
+      const previewImage = () => modal.contentEl.querySelector(".printable-layout-page img");
+      await c.waitFor(
+        () => previewImage()?.naturalWidth > 0 && activePNGs === 0,
+        "real decoded page previews",
+      );
+      check(status() === "9 pages", "initial live print count differs");
+      const exportBounds = button("Export to PDF").getBoundingClientRect();
+      check(
+        exportBounds.bottom <= modal.contentEl.ownerDocument.defaultView.innerHeight - 8 &&
+          exportBounds.top >= 0,
+        "export/count footer is outside the viewport",
+      );
+      const firstPreview = previewImage();
+      const beforePNG = pngCount;
+      const margin = modal.contentEl.querySelector('select[aria-label="Print margin"]');
+      check(margin.getBoundingClientRect().width > 200, "margin selector is too small");
+      margin.value = "tiny";
+      margin.dispatchEvent(new margin.ownerDocument.defaultView.Event("change", { bubbles: true }));
+      set("1, 3-5, 9-");
+      check(status() === "6 pages", "range count did not update");
+      check(
+        firstPreview === previewImage() && pngCount === beforePNG,
+        "range/margin edit rerendered thumbnails",
+      );
+      check(
+        modal.contentEl.querySelectorAll('[data-included="true"]').length === 6,
+        "preview inclusion differs from count",
+      );
+      check(maxActivePNGs <= 2, "preview PNG concurrency is unbounded");
+      if (mode === "main") {
+        await c.requestHost("screenshot", { name: "wizard-print-preview" });
+        const body = modal.contentEl.ownerDocument.body;
+        const wasDark = body.classList.contains("theme-dark");
+        const wasLight = body.classList.contains("theme-light");
+        const originalWidth = modal.modalEl.style.width;
+        try {
+          body.classList.remove("theme-light");
+          body.classList.add("theme-dark");
+          await c.requestHost("screenshot", { name: "wizard-print-preview-dark" });
+          modal.modalEl.style.width = "350px";
+          await c.waitFor(() => modal.modalEl.getBoundingClientRect().width <= 350, "narrow print layout");
+          const footer = button("Export to PDF").getBoundingClientRect();
+          const counter = modal.contentEl.querySelector('[role="status"]').getBoundingClientRect();
+          check(footer.bottom <= body.ownerDocument.defaultView.innerHeight - 8, "narrow export footer hidden");
+          check(Math.abs(footer.top - counter.top) < 40, "narrow page count separated from export");
+          await c.requestHost("screenshot", { name: "wizard-print-preview-narrow" });
+        } finally {
+          modal.modalEl.style.width = originalWidth;
+          body.classList.toggle("theme-dark", wasDark);
+          body.classList.toggle("theme-light", wasLight);
+        }
+      }
       set("1, 3-5, 9-");
       let previous = input();
       button("Export to PDF").click();
@@ -329,9 +483,11 @@ async function exercise(c, drawingPath, script) {
       );
       set("2");
       // Defaults skip empty pages; selecting the empty frame must not reach PDF submission.
-      previous = input();
+      check(
+        button("Export to PDF").disabled && status() === "0 pages",
+        "empty selection was not disabled",
+      );
       button("Export to PDF").click();
-      await c.waitFor(() => input() !== previous, "empty selection returns");
       check(outputs.length === 1, "empty frame was printed by default");
       const currentToggle = [...modal.contentEl.querySelectorAll(".setting-item")]
         .find((el) => el.querySelector(".setting-item-name")?.textContent === "Print empty pages")
@@ -348,6 +504,7 @@ async function exercise(c, drawingPath, script) {
       await plugin.scriptEngine.executeScript(view, script, "Printable Layout Wizard");
       check(app.__printableLayoutWizard.modal === modal, "repeated invocation duplicated modal");
       modal.close();
+      await c.waitFor(() => activePNGs === 0, "preview exports settled on close");
       check(!app.__printableLayoutWizard, "modal runtime retained after close");
       check(
         JSON.stringify(api.getAppState().frameRendering) === rendering,
@@ -370,6 +527,80 @@ async function exercise(c, drawingPath, script) {
       };
     });
   }
+  if (pop) {
+    await pop.setViewState({ type: "empty", state: {} });
+    pop.detach();
+    pop = null;
+  }
+  app.workspace.setActiveLeaf(main, { focus: true });
+  if (previewModules.length)
+    await c.case("slideshow-preview-pixel-parity", [], async () => {
+      const view = main.view,
+        ea = plugin.ea.getAPI(view);
+      eas.push(ea);
+      ea.clear();
+      const id = ea.addFrame(-100, -100, 600, 400, "Preview regression");
+      const shape = ea.addRect(0, 0, 140, 80);
+      ea.getElement(shape).backgroundColor = "#ff0000";
+      ea.getElement(shape).fillStyle = "solid";
+      await ea.addElementsToView(false, true, true);
+      ea.clear();
+      const modules = previewModules.map((source) =>
+        new Function(source + ";return previewModule;")(),
+      );
+      const sceneBefore = JSON.stringify(view.excalidrawAPI.getSceneElements());
+      const slide = {
+        id,
+        kind: "frame",
+        frameId: id,
+        title: "Preview regression",
+        rect: { x1: -100, y1: -100, x2: 500, y2: 300 },
+        excluded: false,
+        order: 0,
+        animationSteps: [],
+      };
+      const config = { maxZoom: 30, printSlideWidth: 600, printSlideHeight: 400 };
+      const pixels = [];
+      for (const module of modules) {
+        const service = new module.SlidePreviewService(ea, view.excalidrawAPI, config);
+        try {
+          const image = await service.createPreview(slide, view.ownerDocument, {
+            targetWidth: 360,
+          });
+          await image.decode();
+          const canvas = view.contentEl.createEl("canvas");
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+          const context = canvas.getContext("2d");
+          context.drawImage(image, 0, 0);
+          pixels.push({
+            width: canvas.width,
+            height: canvas.height,
+            bytes: [...context.getImageData(0, 0, canvas.width, canvas.height).data],
+          });
+          canvas.remove();
+        } finally {
+          service.clear();
+        }
+      }
+      check(
+        pixels[0].width === pixels[1].width &&
+          pixels[0].height === pixels[1].height &&
+          pixels[0].bytes.every((byte, i) => byte === pixels[1].bytes[i]),
+        "slideshow pixels differ after shared extraction",
+      );
+      check(
+        JSON.stringify(view.excalidrawAPI.getSceneElements()) === sceneBefore,
+        "slideshow preview changed scene",
+      );
+      return {
+        assertions: [
+          "old/new real slideshow preview pixels match exactly",
+          "original size, crop and background preserved",
+          "scene unchanged",
+        ],
+      };
+    });
   return {
     tests: c.tests,
     limitation:
