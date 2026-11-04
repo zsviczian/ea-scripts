@@ -2,7 +2,7 @@
   "status": "passed",
   "platform": "darwin",
   "boundary": "Actual Script Engine, UI and SVG generation; EA.createPDF submission captured. Native PDF printing and physical mobile touch were not exercised.",
-  "scriptHash": "2d98bc98517dd5a67e8964301c1f7115cc4767f052606795362966bcdb4ff79b",
+  "scriptHash": "750c3a84759ac9694681cf7f3cd8bb3989e358f813d7001aab6bc20165e9211d",
   "artifacts": {
     "sourceHashes": {
       "main.js": "ef24d7d28e4a175e0dcba4a0bd91e326cdfbc10efea33c0aa111aaf1751145be",
@@ -105,5 +105,5 @@
   ],
   "cleanup": "passed",
   "baselineRestored": true,
-  "reportDir": "/Users/zsviczian/GitHub/obsidian-excalidraw-plugin/.test-work/reports/printable-layout-7fe42590-509b-4627-9392-9053456a65c3"
+  "reportDir": "/Users/zsviczian/GitHub/obsidian-excalidraw-plugin/.test-work/reports/printable-layout-bca36b4d-4817-4369-bc41-e501b8594973"
 }
