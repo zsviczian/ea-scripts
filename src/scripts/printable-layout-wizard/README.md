@@ -6,7 +6,7 @@ In **Printing → Pages**, leave the field blank to print all pages or enter a s
 
 The print preview dims excluded pages and shows the chosen margins. The count next to **Export to PDF** updates as you change the range or empty-page option. Previews refresh when the drawing changes; use the refresh button to rebuild them manually.
 
-Frames define print areas; content outside them is excluded. Frame borders and titles do not print. Keep frames the same size and orientation for a uniform PDF. Custom frames retain their size. Existing script preferences are preserved; page selection resets when you close the dialog.
+Frames define print areas; content outside them is excluded. Frame borders and titles do not print. Keep frames the same size and orientation for a uniform PDF. Custom frames retain their size. Existing script preferences are preserved; page selection resets when you close the dialog. The selected Frames or Printing tab is remembered per file until Obsidian restarts.
 
 Requires Excalidraw 2.27.0 or newer. PDF export uses the plugin's existing PDF service (Excalidraw Extras on desktop).
 

@@ -8,6 +8,10 @@ import { PagePreviewPanel } from "./PagePreviewPanel";
 import { printToPdf } from "./printToPdf";
 import { KEYS, MARGINS, PAGE_SIZES, loadSettings, type Preference } from "./settings";
 
+type WizardTab = "frames" | "printing";
+type SessionWindow = Window & {
+  __printableLayoutWizardTabs?: Map<string, WizardTab>;
+};
 type Modal = InstanceType<ExcalidrawAutomate["FloatingModal"]>;
 type RuntimeHost = App & {
   __printableLayoutWizard?: { modal: Modal; view: ExcalidrawAutomate["targetView"] };
@@ -27,7 +31,10 @@ export function openWizard(ea: ExcalidrawAutomate, t: WizardTranslator): void {
   const modal = new ea.FloatingModal(app);
   const settings = loadSettings(ea.getScriptSettings());
   const originalRendering = api.getAppState().frameRendering;
-  let tab: "frames" | "printing" = "frames";
+  // Store only paths and tab names on the main window, shared across views/popouts.
+  const session = window as SessionWindow;
+  const tabsByFile = (session.__printableLayoutWizardTabs ??= new Map<string, WizardTab>());
+  let tab: WizardTab = (file && tabsByFile.get(file.path)) ?? "frames";
   let rotate = false;
   let busy = false;
   let closed = false;
@@ -143,11 +150,17 @@ export function openWizard(ea: ExcalidrawAutomate, t: WizardTranslator): void {
       gap: "10px",
       minWidth: "0",
       flexWrap: "wrap",
+      paddingBottom: key === "margin" ? "12px" : "0",
     });
     const label = t(key === "size" ? "pageSize" : key);
     row.createSpan({ text: label });
     const dropdown = row.createEl("select", { cls: "dropdown", attr: { "aria-label": label } });
-    dropdown.setCssStyles({ flex: "1 1 130px", width: "100%", minWidth: "0", height: "36px" });
+    dropdown.setCssStyles({
+      flex: "1 1 130px",
+      width: "100%",
+      minWidth: "0",
+      height: "var(--input-height, 30px)",
+    });
     for (const entry of entries)
       dropdown.createEl("option", {
         value: entry,
@@ -320,6 +333,7 @@ export function openWizard(ea: ExcalidrawAutomate, t: WizardTranslator): void {
       for (const name of ["frames", "printing"] as const) {
         const control = button(tabs, t(name), () => {
           tab = name;
+          if (file) tabsByFile.set(file.path, name);
           render();
         });
         control.setAttribute("role", "tab");

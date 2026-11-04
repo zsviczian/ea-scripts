@@ -31,7 +31,10 @@ The original settings keys, option values, marker/all-frame filter, alphabetical
 ordering, frame geometry, rotate-once behavior, custom PDF sizing, margins, and
 empty-page preference remain compatible. Missing settings are now filled
 independently; unknown settings are preserved. The script requires Excalidraw
-2.27.0 for the lifecycle-aware authoring baseline. Page ranges are dialog-local.
+2.27.0 for the lifecycle-aware authoring baseline. Page ranges are dialog-local. The main window holds a session-only map from file
+path to the last explicitly selected tab; it retains no views or elements and is
+shared by main-window and popout invocations. Files without eligible frames still
+open the frame-creation controls.
 
 For real Obsidian main/popout tests, with the sibling plugin/fork/Extras checkouts
 and the repository-owned vault already opened and trusted:
@@ -81,3 +84,11 @@ covers frame/path crops, light/dark themes, widths, animation build steps, opaci
 cache reuse, fingerprints and source immutability. Do not modify sorter behavior
 when extending shared preview helpers. Native PNG parity exercises the actual
 Excalidraw exporter; it does not establish physical-device performance.
+
+The margin selector uses Obsidian's `--input-height` and leaves 12 px before the
+next divider. Native assertions compare it to the actual text input and exercise
+close/reopen tab restoration for both Frames and Printing in main/popout views.
+
+Hosted Obsidian CodeScanner is unavailable locally; its CSS review remains
+pending. The changed declarations use existing theme variables and element-local
+DOM helpers; scoped ESLint and native geometry checks pass.

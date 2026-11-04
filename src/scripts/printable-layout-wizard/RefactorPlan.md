@@ -30,3 +30,9 @@ Manual risk checks: verify real PDF margins/crops and Save cancellation; scroll 
 large preview list while editing frames, and close during decoding. Repeat on
 Windows/Linux main/popout and physical mobile (controls and scrolling). See the
 validation boundaries in CONTRIBUTING.md; native tests capture PDF submission.
+
+2026-11-04: Matched dropdown height to the theme's input height and separated the
+margin row from the next divider. Added a main-window, per-file session tab map;
+only explicit tab choices update it, and first-frame controls remain the fallback
+for drawings without eligible frames. Native checks cover geometry and reopening
+both tabs in main and popout views. Slideshow and shared preview source unchanged.

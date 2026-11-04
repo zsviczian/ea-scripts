@@ -184,11 +184,18 @@ async function exercise(c, drawingPath, script, previewModules) {
     .getLeavesOfType("excalidraw")
     .find((leaf) => leaf.view.file?.path === drawingPath);
   const eas = [];
+  const originalTabs = window.__printableLayoutWizardTabs;
+  const originalEntries = originalTabs ? [...originalTabs.entries()] : [];
   let pop;
   c.observations = {};
   c.defer(async () => {
     app.__printableLayoutWizard?.modal.close();
     eas.forEach((ea) => ea.destroy());
+    if (originalTabs) {
+      originalTabs.clear();
+      originalEntries.forEach(([path, tab]) => originalTabs.set(path, tab));
+      window.__printableLayoutWizardTabs = originalTabs;
+    } else delete window.__printableLayoutWizardTabs;
     if (pop) {
       await pop.setViewState({ type: "empty", state: {} });
       pop.detach();
@@ -358,7 +365,7 @@ async function exercise(c, drawingPath, script, previewModules) {
         notices: [...document.querySelectorAll(".notice")].map((el) => el.textContent),
       };
       await c.waitFor(() => app.__printableLayoutWizard?.modal, "wizard opens");
-      const modal = app.__printableLayoutWizard.modal;
+      let modal = app.__printableLayoutWizard.modal;
       check(
         modal.contentEl.ownerDocument === view.ownerDocument,
         "wizard opened in the wrong document",
@@ -416,6 +423,18 @@ async function exercise(c, drawingPath, script, previewModules) {
       const beforePNG = pngCount;
       const margin = modal.contentEl.querySelector('select[aria-label="Print margin"]');
       check(margin.getBoundingClientRect().width > 200, "margin selector is too small");
+      check(
+        Math.abs(margin.getBoundingClientRect().height - input().getBoundingClientRect().height) <=
+          1,
+        "margin selector height differs from the normal input",
+      );
+      check(
+        margin.closest("label").nextElementSibling.getBoundingClientRect().top -
+          margin.getBoundingClientRect().bottom >=
+          8,
+        "margin selector overlaps the following divider",
+      );
+      margin.focus();
       margin.value = "tiny";
       margin.dispatchEvent(new margin.ownerDocument.defaultView.Event("change", { bubbles: true }));
       set("1, 3-5, 9-");
@@ -440,10 +459,16 @@ async function exercise(c, drawingPath, script, previewModules) {
           body.classList.add("theme-dark");
           await c.requestHost("screenshot", { name: "wizard-print-preview-dark" });
           modal.modalEl.style.width = "350px";
-          await c.waitFor(() => modal.modalEl.getBoundingClientRect().width <= 350, "narrow print layout");
+          await c.waitFor(
+            () => modal.modalEl.getBoundingClientRect().width <= 350,
+            "narrow print layout",
+          );
           const footer = button("Export to PDF").getBoundingClientRect();
           const counter = modal.contentEl.querySelector('[role="status"]').getBoundingClientRect();
-          check(footer.bottom <= body.ownerDocument.defaultView.innerHeight - 8, "narrow export footer hidden");
+          check(
+            footer.bottom <= body.ownerDocument.defaultView.innerHeight - 8,
+            "narrow export footer hidden",
+          );
           check(Math.abs(footer.top - counter.top) < 40, "narrow page count separated from export");
           await c.requestHost("screenshot", { name: "wizard-print-preview-narrow" });
         } finally {
@@ -510,6 +535,29 @@ async function exercise(c, drawingPath, script, previewModules) {
         JSON.stringify(api.getAppState().frameRendering) === rendering,
         "frame rendering was not restored",
       );
+      const reopen = async () => {
+        await plugin.scriptEngine.executeScript(view, script, "Printable Layout Wizard");
+        modal = app.__printableLayoutWizard.modal;
+        plugin.scriptEngine.eaInstances.forEach((item) => {
+          if (item.activeScript === "Printable Layout Wizard" && !eas.includes(item))
+            eas.push(item);
+        });
+      };
+      await reopen();
+      check(
+        button("Printing").getAttribute("aria-selected") === "true" &&
+          window.__printableLayoutWizardTabs.get(view.file.path) === "printing",
+        "Printing tab was not remembered for this file",
+      );
+      button("Frames").click();
+      modal.close();
+      await reopen();
+      check(
+        button("Frames").getAttribute("aria-selected") === "true" &&
+          window.__printableLayoutWizardTabs.get(view.file.path) === "frames",
+        "Frames tab was not remembered for this file",
+      );
+      modal.close();
       // The two cases reuse the disposable drawing; clear it before the next view opens.
       api.updateScene({ elements: [], captureUpdate: "NEVER" });
       await view.save(false, true);
@@ -517,6 +565,8 @@ async function exercise(c, drawingPath, script, previewModules) {
         assertions: [
           "actual Script Engine bootstrap",
           "main/popout range UI",
+          "margin selector matches input height and clears the divider",
+          "per-file Printing and Frames tabs survive close/reopen",
           "six ordered custom-size SVG pages",
           "invalid range rejected",
           "empty-page handling",
