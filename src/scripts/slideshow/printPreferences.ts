@@ -16,6 +16,7 @@ export function loadPrintPreferences(
   const defaults: PrintPreferences = {
     layout: "slides",
     visibleOnly: true,
+    includeFrames: false,
     margin: "none",
     width,
     height,
@@ -29,6 +30,7 @@ export function loadPrintPreferences(
   if (["slides", "notes", "handout-2", "handout-3"].includes(String(saved.layout)))
     defaults.layout = saved.layout as PrintPreferences["layout"];
   if (typeof saved.visibleOnly === "boolean") defaults.visibleOnly = saved.visibleOnly;
+  if (typeof saved.includeFrames === "boolean") defaults.includeFrames = saved.includeFrames;
   if (["none", "minimal", "normal"].includes(String(saved.margin)))
     defaults.margin = saved.margin as PrintPreferences["margin"];
   if (["configured", "A4", "Letter", "16:9", "custom"].includes(String(saved.preset)))

@@ -10,6 +10,7 @@ export interface SlideshowPrintSettings {
   theme?: PrintTheme;
   layout: HandoutLayout;
   visibleOnly: boolean;
+  includeFrames?: boolean;
   margin: PrintMargin;
   width: number;
   height: number;

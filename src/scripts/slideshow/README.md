@@ -128,10 +128,11 @@ Select **Print slideshow to PDF** in the sidepanel or presentation toolbar to op
 - The **Print only visible slides** toggle is on by default. Turn it off to include excluded slides, including decks whose slides are all excluded.
 - Choose the configured slide size, **A4**, **Letter**, **16:9**, or **Custom**, then select **Landscape** or **Portrait**. Width and height are editable in pixels (96 pixels per inch), from 320 to 14400 pixels. Holding Shift while opening setup starts with the current viewport dimensions.
 - Each slide is clipped to its own rectangle and fitted intact inside its page or handout slot. Changing paper aspect ratio never pulls neighboring slides into the printout or splits a slide across pages. Handout slots retain the configured presentation aspect ratio.
+- **Include frames around slides** adds a border using the configured slide aspect ratio in notes and handout layouts, including notes continuations. It is off by default and hidden for **Slides only**, which always prints without added frames.
 - **Margins** offers **None** (default, edge-to-edge slides), **Minimal** (10 px), and **Normal** (60 px). Margins apply to slides and handouts without adding a second inset in the PDF exporter.
 - Notes use Obsidian's Markdown renderer, preserving headings, emphasis, links, lists, tables, and code as formatted HTML. Long notes continue in another slot with the slide repeated.
 - **Page ranges** accepts output-page selections such as `1-3;5;9-`; leave it blank for all pages. Ranges count final pages, including notes continuation pages, and preserve their original order.
-- Confirmed print preferences (layout, visibility, page size, orientation/dimensions, margins, and page ranges) are saved in script settings and restored the next time print setup opens. The slideshow source initially follows the current drawing.
+- Confirmed print preferences (layout, visibility, handout frames, page size, orientation/dimensions, margins, and page ranges) are saved in script settings and restored the next time print setup opens. The slideshow source initially follows the current drawing.
 
 PDF creation uses Excalidraw's existing desktop PDF export and its normal save dialog.
 

@@ -68,6 +68,18 @@ export function openSlideshowPrintDialog(
       ["handout-3", t("printHandout3")],
     ]);
     layout.value = preferences.layout;
+    let includeFrames = preferences.includeFrames ?? false;
+    const framesRow = new ea.obsidian.Setting(modal.contentEl)
+      .setName(t("printIncludeFrames"))
+      .addToggle((toggle) =>
+        toggle.setValue(includeFrames).onChange((value) => {
+          includeFrames = value;
+        }),
+      );
+    const updateFramesVisibility = (): void =>
+      framesRow.settingEl.toggle(layout.value !== "slides");
+    layout.addEventListener("change", updateFramesVisibility);
+    updateFramesVisibility();
     const theme = select(t("printTheme"), [
       ["light", t("printThemeLight")],
       ["dark", t("printThemeDark")],
@@ -163,6 +175,7 @@ export function openSlideshowPrintDialog(
           sourceKey: source.value as SlideshowPrintSettings["sourceKey"],
           layout: layout.value as HandoutLayout,
           visibleOnly,
+          includeFrames: layout.value !== "slides" && includeFrames,
           theme: theme.value as PrintTheme,
           pageRanges: ranges.value.trim(),
           margin: margin.value as PrintMargin,
@@ -170,6 +183,7 @@ export function openSlideshowPrintDialog(
         void savePrintPreferences(ea, {
           layout: result.layout,
           visibleOnly,
+          includeFrames,
           margin: result.margin,
           width: result.width,
           height: result.height,

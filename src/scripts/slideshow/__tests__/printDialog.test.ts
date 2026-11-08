@@ -3,19 +3,31 @@ import { openSlideshowPrintDialog } from "../PrintDialog";
 import { createSlideshowTranslator } from "../lang";
 
 /** Models only the host dialog/control boundary; the production dialog owns state and validation. */
-function dialogFixture(theme: "light" | "dark"): {
+function dialogFixture(
+  theme: "light" | "dark",
+  preferences: Record<string, unknown> = {},
+): {
   result: ReturnType<typeof openSlideshowPrintDialog>;
   ea: {
     FloatingModal: unknown;
     setScriptSettings: Mock<(value: Record<string, unknown>) => Promise<void>>;
   };
-  controls: Map<string, { value: string }>;
+  controls: Map<string, { value: string; listener: () => void }>;
+  toggles: Map<
+    string,
+    { value: boolean; change: (value: boolean) => void; row: { hidden: boolean } }
+  >;
   buttons: Map<string, { listener: () => void }>;
   modal: { close: () => void };
 } {
   const controls = new Map<string, Control>();
   const buttons = new Map<string, Control>();
+  const toggles = new Map<
+    string,
+    { value: boolean; change: (value: boolean) => void; row: Control }
+  >();
   class Control {
+    public hidden = false;
     public value = "";
     public selectedIndex = 0;
     public listener = (): void => undefined;
@@ -35,8 +47,11 @@ function dialogFixture(theme: "light" | "dark"): {
     }
     public setText(): void {}
     public setCssStyles(): void {}
+    public toggle(show: boolean): void {
+      this.hidden = !show;
+    }
     public addEventListener(event: string, listener: () => void): void {
-      if (event === "click") this.listener = listener;
+      this.listener = listener;
     }
     public focus(): void {}
   }
@@ -51,21 +66,32 @@ function dialogFixture(theme: "light" | "dark"): {
   }
   class Setting {
     public controlEl = new Control();
-    public setName(): this {
+    public settingEl = new Control();
+    public name = "";
+    public setName(name: string): this {
+      this.name = name;
       return this;
     }
     public setDesc(): this {
       return this;
     }
     public addToggle(
-      callback: (toggle: { setValue: () => { onChange: () => void } }) => void,
+      callback: (toggle: {
+        setValue: (value: boolean) => { onChange: (change: (value: boolean) => void) => void };
+      }) => void,
     ): this {
-      callback({ setValue: () => ({ onChange: () => undefined }) });
+      callback({
+        setValue: (value) => ({
+          onChange: (change) => {
+            toggles.set(this.name, { value, change, row: this.settingEl });
+          },
+        }),
+      });
       return this;
     }
   }
   let settings: Record<string, unknown> = {
-    slideshowPrintPreferences: { theme: theme === "dark" ? "light" : "dark" },
+    slideshowPrintPreferences: { theme: theme === "dark" ? "light" : "dark", ...preferences },
   };
   const constructor = vi.fn(function () {
     return new FloatingModal();
@@ -99,6 +125,7 @@ function dialogFixture(theme: "light" | "dark"): {
     result,
     ea,
     controls,
+    toggles,
     buttons,
     modal: constructor.mock.results[0]!.value as FloatingModal,
   };
@@ -106,6 +133,42 @@ function dialogFixture(theme: "light" | "dark"): {
 
 afterEach(() => vi.unstubAllGlobals());
 describe("floating print setup", () => {
+  it.each(["notes", "handout-2", "handout-3"])(
+    "offers slide frames only in %s layout",
+    async (layout) => {
+      const fixture = dialogFixture("light");
+      const frames = fixture.toggles.get("Include frames around slides")!;
+      expect(frames.value).toBe(false);
+      expect(frames.row.hidden).toBe(true);
+      const layoutControl = fixture.controls.get("Layout")!;
+      layoutControl.value = layout;
+      layoutControl.listener();
+      expect(frames.row.hidden).toBe(false);
+      frames.change(true);
+      fixture.buttons.get("Create PDF")!.listener();
+      expect(await fixture.result).toMatchObject({ layout, includeFrames: true });
+    },
+  );
+  it("restores the handout frame preference but excludes frames from slides-only output", async () => {
+    const fixture = dialogFixture("light", { layout: "handout-2", includeFrames: true });
+    const frames = fixture.toggles.get("Include frames around slides")!;
+    expect(frames.value).toBe(true);
+    expect(frames.row.hidden).toBe(false);
+    const layout = fixture.controls.get("Layout")!;
+    layout.value = "slides";
+    layout.listener();
+    expect(frames.row.hidden).toBe(true);
+    layout.value = "notes";
+    layout.listener();
+    expect(frames.row.hidden).toBe(false);
+    layout.value = "slides";
+    layout.listener();
+    fixture.buttons.get("Create PDF")!.listener();
+    expect(await fixture.result).toMatchObject({ layout: "slides", includeFrames: false });
+    expect(fixture.ea.setScriptSettings.mock.calls[0]![0].slideshowPrintPreferences).toMatchObject({
+      includeFrames: true,
+    });
+  });
   it.each(["light", "dark"] as const)(
     "defaults to the %s scene theme even with a stale saved theme",
     async (theme) => {

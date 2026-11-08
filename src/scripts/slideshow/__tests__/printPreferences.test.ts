@@ -33,6 +33,7 @@ describe("print preferences", () => {
       ...defaults,
       layout: "handout-3" as const,
       visibleOnly: false,
+      includeFrames: true,
       margin: "normal" as const,
       preset: "A4" as const,
       width: 794.56,
@@ -50,6 +51,7 @@ describe("print preferences", () => {
         slideshowPrintPreferences: {
           layout: "bad",
           visibleOnly: "false",
+          includeFrames: "true",
           margin: "-1",
           width: 1,
           height: Infinity,
@@ -61,6 +63,7 @@ describe("print preferences", () => {
     expect(loadPrintPreferences(ea as never, 1920, 1080)).toEqual({
       layout: "slides",
       visibleOnly: true,
+      includeFrames: false,
       margin: "none",
       width: 1920,
       height: 1080,

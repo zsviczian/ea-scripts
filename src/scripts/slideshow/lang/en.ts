@@ -10,6 +10,7 @@ export const en = {
   printNotesPage: "Notes — one slide per page",
   printHandout2: "Handout — two slides with notes per page",
   printHandout3: "Handout — three slides with notes per page",
+  printIncludeFrames: "Include frames around slides",
   printVisibleOnly: "Print only visible slides",
   printVisibleOnlyHint: "Turn off to include excluded slides.",
   printPageRanges: "Page ranges",

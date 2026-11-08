@@ -223,6 +223,19 @@ export async function generateSlideshowPdf(
           clone.setAttribute("x", String(boxes.slide.x));
           clone.setAttribute("y", String(boxes.slide.y + y));
           page!.appendChild(clone);
+          if (settings.includeFrames) {
+            page!.createSvg("rect", {
+              attr: {
+                x: slideBox.x,
+                y: slideBox.y + y,
+                width: slideBox.width,
+                height: slideBox.height,
+                fill: "none",
+                stroke: colors.border,
+                "stroke-width": 1,
+              },
+            });
+          }
           appendPrintNotes(page!, notes, { ...boxes.notes, y: boxes.notes.y + y });
           slot += 1;
         }

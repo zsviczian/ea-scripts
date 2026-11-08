@@ -51,7 +51,12 @@ class Svg {
     this.children.push(child);
   }
   public cloneNode(): Svg {
-    return this;
+    const clone = new Svg(this.tag);
+    clone.attributes = { ...this.attributes };
+    clone.styles = { ...this.styles };
+    clone.textContent = this.textContent;
+    clone.children = this.children.map((child) => child.cloneNode());
+    return clone;
   }
 }
 
@@ -268,7 +273,7 @@ describe("slideshow print output", () => {
         return chunk;
       });
       vi.mocked(renderPrintNotes).mockResolvedValueOnce(chunks as never);
-      await generateSlideshowPdf(options, { ...settings, layout });
+      await generateSlideshowPdf(options, { ...settings, layout, includeFrames: true });
       expect(renderPrintNotes).toHaveBeenLastCalledWith(
         options.ea,
         "Hello <script> & notes",
@@ -288,11 +293,68 @@ describe("slideshow print output", () => {
       expect(
         pages.flatMap((page) => page.children.filter((child) => child.tag === "svg")),
       ).toHaveLength(3);
+      const frames = pages.flatMap((page) =>
+        page.children.filter((child) => child.attributes.stroke),
+      );
+      const images = pages.flatMap((page) => page.children.filter((child) => child.tag === "svg"));
+      expect(frames).toHaveLength(3);
+      frames.forEach((frame, index) => {
+        for (const coordinate of ["x", "y", "width", "height"])
+          expect(frame.attributes[coordinate]).toBe(images[index]!.attributes[coordinate]);
+      });
       expect(
         pages
           .flatMap((page) => page.children)
           .some((node) => node.textContent.includes("(continued)")),
       ).toBe(true);
+    },
+  );
+  it.each(["notes", "handout-2", "handout-3"] as const)(
+    "frames %s thumbnails at the configured slide aspect ratio in either theme",
+    async (layout) => {
+      for (const [width, height, theme] of [
+        [1600, 900, "light"],
+        [900, 1200, "dark"],
+      ] as const) {
+        const { options, createPDF } = printFixture();
+        options.printSlideWidth = width;
+        options.printSlideHeight = height;
+        await generateSlideshowPdf(options, { ...settings, layout, theme, includeFrames: true });
+        const page = createPDF.mock.calls[0]![0].SVG[0] as Svg;
+        const frame = page.children.find((child) => child.attributes.stroke)!;
+        const image = page.children.find((child) => child.tag === "svg")!;
+        const slot = getHandoutBoxes({ ...settings, layout }).slide;
+        expect(frame.tag).toBe("rect");
+        expect(frame.attributes.fill).toBe("none");
+        expect(frame.attributes.stroke).toBe(theme === "dark" ? "#666666" : "#aaaaaa");
+        expect(Number(frame.attributes.width) / Number(frame.attributes.height)).toBeCloseTo(
+          width / height,
+        );
+        expect(Number(frame.attributes.width)).toBeLessThanOrEqual(slot.width);
+        expect(Number(frame.attributes.height)).toBeLessThanOrEqual(slot.height);
+        for (const coordinate of ["x", "y", "width", "height"])
+          expect(frame.attributes[coordinate]).toBe(image.attributes[coordinate]);
+      }
+    },
+  );
+  it.each([
+    ["slides", true],
+    ["notes", false],
+    ["handout-2", false],
+    ["handout-3", undefined],
+  ] as const)(
+    "leaves %s output frameless when includeFrames is %s",
+    async (layout, includeFrames) => {
+      const { options, createPDF } = printFixture();
+      await generateSlideshowPdf(options, {
+        ...settings,
+        layout,
+        ...(includeFrames === undefined ? {} : { includeFrames }),
+      });
+      const pages = createPDF.mock.calls[0]![0].SVG as Svg[];
+      expect(
+        pages.flatMap((page) => page.children.filter((child) => child.attributes.stroke)),
+      ).toHaveLength(0);
     },
   );
   it("applies output page ranges after assembly without duplicating overlapping selections", async () => {
