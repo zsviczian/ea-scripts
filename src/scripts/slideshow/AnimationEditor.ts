@@ -7,15 +7,17 @@
 
 import type { AppState } from "@zsviczian/excalidraw/types";
 
+import { AnimationTargetPreviewService } from "./AnimationTargetPreviewService";
 import {
   AnimationRuntime,
+  type AnimationSlideScope,
   captureAnimationTargets,
   getAnimationSlideScope,
   recycleMissingAnimationTargets,
-  removeAnimationTargetConflicts,
   resolveAnimationTargetElementIds,
 } from "./AnimationRuntime";
 import type { SlideDeckSlide } from "./SlideDeck";
+import { getAnimationEditorIcon, type AnimationIconChoice } from "./icons";
 import type { SlideshowTranslator } from "./lang";
 import { saveFrameAnimationSteps, saveLineAnimationSteps } from "./slideDeckMutations";
 import type {
@@ -47,7 +49,8 @@ function targetKey(target: AnimationTarget): string {
 
 function sameTargets(left: readonly AnimationTarget[], right: readonly AnimationTarget[]): boolean {
   if (left.length !== right.length) return false;
-  return left.every((target, index) => targetKey(target) === targetKey(right[index] ?? target));
+  const keys = new Set(right.map(targetKey));
+  return left.every((target) => keys.has(targetKey(target)));
 }
 
 function uniqueStepId(steps: readonly AnimationStep[]): string {
@@ -79,17 +82,27 @@ export class AnimationEditor {
   private delayMs = 1000;
   private durationMs = 350;
   private direction: AnimationDirection = "left";
+  private newStepDefaults = {
+    effect: this.effect,
+    trigger: this.trigger,
+    delayMs: this.delayMs,
+    durationMs: this.durationMs,
+    direction: this.direction,
+  };
+  private lastSelectionTargets: AnimationTarget[] | null = null;
   private destroyed = false;
   private saving = false;
-  private ignoreSelectionUntil = 0;
+  private selectingStep = false;
   private recycleTimer = 0;
   private pendingRecycleElements: readonly ExcalidrawElement[] | null = null;
   private readonly previewRuntime: AnimationRuntime;
+  private readonly targetPreviews: AnimationTargetPreviewService;
   private readonly drawingFile: ScriptExcalidrawView["file"];
 
   public constructor(private readonly options: AnimationEditorOptions) {
     this.steps = options.slide.animationSteps.map((step) => structuredClone(step));
     this.drawingFile = options.hostView.file;
+    this.targetPreviews = new AnimationTargetPreviewService(options.ea, options.api);
     this.previewRuntime = new AnimationRuntime({
       ea: options.ea,
       api: options.api,
@@ -135,9 +148,10 @@ export class AnimationEditor {
       this.targets.forEach((target, index) => {
         const chip = doc.createElement("span");
         chip.className = "slideshow-animation-editor__target";
-        const label = doc.createElement("span");
-        label.textContent = this.getTargetLabel(target);
-        chip.appendChild(label);
+        const preview = this.createTargetPreview(doc, [target], "slideshow-animation-editor__target-preview");
+        preview.setAttribute("role", "img");
+        preview.setAttribute("aria-label", this.getTargetLabel(target));
+        chip.appendChild(preview);
         const remove = this.iconButton(doc, icons.close, t("removeAnimationTarget"), false, () => {
           this.targets.splice(index, 1);
           this.render();
@@ -151,7 +165,7 @@ export class AnimationEditor {
 
     const form = doc.createElement("div");
     form.className = "slideshow-animation-editor__form";
-    const effectSelect = this.createSelect<AnimationEffect>(doc, t("animationEffect"), [
+    const effectSelect = this.createChoices<AnimationEffect>(doc, t("animationEffect"), [
       ["appear", t("animationEffectAppear")],
       ["fade", t("animationEffectFade")],
       ["slide", t("animationEffectSlide")],
@@ -162,15 +176,17 @@ export class AnimationEditor {
       ["zoom-out", t("animationEffectZoomOut")],
     ], this.effect, (value) => {
       this.effect = value;
+      this.rememberFormDefaults();
       this.render();
     });
     form.appendChild(effectSelect);
 
-    const triggerSelect = this.createSelect<AnimationTrigger>(doc, t("animationTrigger"), [
+    const triggerSelect = this.createChoices<AnimationTrigger>(doc, t("animationTrigger"), [
       ["advance", t("animationTriggerAdvance")],
       ["after-delay", t("animationTriggerDelay")],
     ], this.trigger, (value) => {
       this.trigger = value;
+      this.rememberFormDefaults();
       this.render();
     });
     form.appendChild(triggerSelect);
@@ -179,6 +195,7 @@ export class AnimationEditor {
       form.appendChild(
         this.numberField(doc, t("animationDelayMs"), this.delayMs, 0, (value) => {
           this.delayMs = value;
+          this.rememberFormDefaults();
         }),
       );
     }
@@ -186,6 +203,7 @@ export class AnimationEditor {
       form.appendChild(
         this.numberField(doc, t("animationDurationMs"), this.durationMs, 0, (value) => {
           this.durationMs = value;
+          this.rememberFormDefaults();
         }),
       );
     }
@@ -204,8 +222,10 @@ export class AnimationEditor {
             ["down", t("animationDirectionDown")],
           ];
       form.appendChild(
-        this.createSelect<AnimationDirection>(doc, t("animationDirection"), directionOptions, this.direction, (value) => {
+        this.createChoices<AnimationDirection>(doc, t("animationDirection"), directionOptions, this.direction, (value) => {
           this.direction = value;
+          this.rememberFormDefaults();
+          this.render();
         }),
       );
     }
@@ -272,7 +292,7 @@ export class AnimationEditor {
     if (
       this.destroyed ||
       !this.isCurrentDrawing() ||
-      Date.now() < this.ignoreSelectionUntil
+      this.selectingStep
     ) {
       return;
     }
@@ -283,12 +303,26 @@ export class AnimationEditor {
       appState.selectedGroupIds,
     );
     if (
-      sameTargets(captured.targets, this.targets) &&
+      this.lastSelectionTargets !== null &&
+      sameTargets(captured.targets, this.lastSelectionTargets) &&
       captured.ignoredSelectionCount === this.ignoredSelectionCount
     ) {
       return;
     }
-    this.targets = captured.targets;
+    const selectionChanged = this.lastSelectionTargets === null ||
+      !sameTargets(captured.targets, this.lastSelectionTargets);
+    this.lastSelectionTargets = captured.targets;
+    if (selectionChanged) {
+      const ids = new Set(resolveAnimationTargetElementIds(this.getSlideScope(), captured.targets, elements));
+      const firstStep = this.steps.find((step) =>
+        resolveAnimationTargetElementIds(this.getSlideScope(), step.targets, elements).some((id) => ids.has(id)),
+      );
+      if (firstStep) this.loadStepForm(firstStep);
+      else {
+        this.startNewStep();
+        this.targets = captured.targets;
+      }
+    }
     this.ignoredSelectionCount = captured.ignoredSelectionCount;
     this.render();
   }
@@ -300,6 +334,7 @@ export class AnimationEditor {
     if (this.recycleTimer) this.options.hostView.ownerWindow.clearTimeout(this.recycleTimer);
     this.recycleTimer = 0;
     this.pendingRecycleElements = null;
+    this.targetPreviews.destroy();
     if (this.isCurrentDrawing()) await this.previewRuntime.leaveSlide();
     else this.previewRuntime.abandonActiveSlide();
   }
@@ -339,7 +374,7 @@ export class AnimationEditor {
         } else {
           this.selectedStepId = null;
           this.targets = [];
-          this.resetFormDefaults();
+          this.startNewStep();
         }
       }
       this.options.onSaved(this.steps);
@@ -362,11 +397,14 @@ export class AnimationEditor {
     const summary = doc.createElement("button");
     summary.type = "button";
     summary.className = "slideshow-animation-editor__step-summary";
-    summary.textContent = t("animationStepSummary", {
+    const label = doc.createElement("span");
+    label.textContent = t("animationStepSummary", {
       number: index + 1,
       effect: this.effectLabel(step.effect),
       targets: step.targets.length,
     });
+    const preview = this.createTargetPreview(doc, step.targets, "slideshow-animation-editor__step-preview");
+    summary.append(preview, label);
     summary.addEventListener("click", () => this.selectStep(step));
     row.appendChild(summary);
 
@@ -422,7 +460,8 @@ export class AnimationEditor {
     return row;
   }
 
-  private selectStep(step: AnimationStep): void {
+  /** Loads a saved step without changing the user's defaults for the next new step. */
+  private loadStepForm(step: AnimationStep): void {
     this.selectedStepId = step.id;
     this.targets = step.targets.map((target) => structuredClone(target));
     this.effect = step.effect;
@@ -431,6 +470,28 @@ export class AnimationEditor {
     this.durationMs = step.durationMs ?? 350;
     this.direction = step.direction ?? "left";
     this.ignoredSelectionCount = 0;
+  }
+
+  /** Shares the bounded thumbnail cache between selected-target cards and sequence rows. */
+  private createTargetPreview(
+    doc: Document,
+    targets: readonly AnimationTarget[],
+    className: string,
+  ): HTMLElement {
+    const preview = doc.createElement("span");
+    preview.className = className;
+    void this.targetPreviews.createPreview(
+      this.getSlideScope(), targets, doc,
+      () => !this.destroyed && preview.isConnected && this.isCurrentDrawing(),
+      this.previewRuntime.getOriginalOpacities(),
+    ).then((image) => {
+      if (image && !this.destroyed && preview.isConnected) preview.replaceChildren(image);
+    }).catch((error) => console.error("Slideshow animation thumbnail failed", error));
+    return preview;
+  }
+
+  private selectStep(step: AnimationStep): void {
+    this.loadStepForm(step);
     const ids = resolveAnimationTargetElementIds(
       this.getSlideScope(),
       step.targets,
@@ -439,8 +500,28 @@ export class AnimationEditor {
     const elements = this.options.ea
       .getViewElements()
       .filter((element) => ids.includes(element.id));
-    this.ignoreSelectionUntil = Date.now() + 500;
-    if (elements.length > 0) this.options.ea.selectElementsInView(elements);
+    // Remember the programmatic canvas selection so its later onChange cannot
+    // replace a deliberately selected second/third animation with the first one.
+    this.selectingStep = true;
+    try {
+      if (elements.length > 0) this.options.ea.selectElementsInView(elements);
+      this.options.api.updateScene({
+        appState: {
+          selectedGroupIds: Object.fromEntries(step.targets
+            .filter((target) => target.type === "group")
+            .map((target) => [target.id, true])),
+        },
+        captureUpdate: "NEVER",
+        forceFlushSync: true,
+      });
+      const state = this.options.api.getAppState();
+      this.lastSelectionTargets = captureAnimationTargets(
+        this.getSlideScope(), this.options.ea.getViewElements(),
+        state.selectedElementIds, state.selectedGroupIds,
+      ).targets;
+    } finally {
+      this.selectingStep = false;
+    }
     this.render();
   }
 
@@ -449,17 +530,10 @@ export class AnimationEditor {
     this.saving = true;
     this.render();
     try {
-      const elements = this.options.ea.getViewElements();
       const selectedId = this.selectedStepId;
-      let steps = removeAnimationTargetConflicts(
-        this.getSlideScope(),
-        this.steps,
-        this.targets,
-        elements,
-        selectedId ?? undefined,
-        this.effect,
-      );
+      const steps = this.steps.map((step) => structuredClone(step));
       const step = this.buildFormStep(selectedId ?? uniqueStepId(steps));
+      this.rememberFormDefaults();
       if (selectedId) {
         const index = steps.findIndex((candidate) => candidate.id === selectedId);
         if (index >= 0) steps[index] = step;
@@ -470,8 +544,9 @@ export class AnimationEditor {
       await this.saveAnimationSteps(steps);
       if (!this.isCurrentDrawing()) return;
       this.steps = steps;
-      this.selectedStepId = step.id;
-      this.targets = step.targets.map((target) => structuredClone(target));
+      if (!selectedId && this.selectedStepId === null && sameTargets(this.targets, step.targets)) {
+        this.startNewStep();
+      }
       this.options.onSaved(this.steps);
     } catch (error) {
       console.error("Slideshow animation metadata save failed", error);
@@ -496,7 +571,7 @@ export class AnimationEditor {
     if (this.selectedStepId === stepId) {
       this.selectedStepId = null;
       this.targets = [];
-      this.resetFormDefaults();
+      this.startNewStep();
     }
     this.render();
   }
@@ -549,10 +624,10 @@ export class AnimationEditor {
 
   private startNewStep(): void {
     this.selectedStepId = null;
-    this.resetFormDefaults();
+    Object.assign(this, this.newStepDefaults);
   }
 
-  private getSlideScope() {
+  private getSlideScope(): AnimationSlideScope {
     const appState = this.options.api.getAppState();
     return getAnimationSlideScope(this.options.slide, this.options.config, {
       width: appState.width,
@@ -564,12 +639,15 @@ export class AnimationEditor {
     return this.options.hostView.file === this.drawingFile;
   }
 
-  private resetFormDefaults(): void {
-    this.effect = "appear";
-    this.trigger = "advance";
-    this.delayMs = 1000;
-    this.durationMs = 350;
-    this.direction = "left";
+  /** Remembers explicit form choices independently of saved-step selection. */
+  private rememberFormDefaults(): void {
+    this.newStepDefaults = {
+      effect: this.effect,
+      trigger: this.trigger,
+      delayMs: this.delayMs,
+      durationMs: this.durationMs,
+      direction: this.direction,
+    };
   }
 
   private getTargetLabel(target: AnimationTarget): string {
@@ -621,28 +699,38 @@ export class AnimationEditor {
     return button;
   }
 
-  private createSelect<T extends string>(
+  /** Renders accessible effect/direction buttons using the same form state as timing controls. */
+  private createChoices<T extends AnimationIconChoice>(
     doc: Document,
     labelText: string,
-    options: readonly (readonly [T, string])[],
+    choices: readonly (readonly [T, string])[],
     value: T,
     onChange: (value: T) => void,
   ): HTMLElement {
-    const label = doc.createElement("label");
-    const text = doc.createElement("span");
-    text.textContent = labelText;
-    label.appendChild(text);
-    const select = doc.createElement("select");
-    for (const [optionValue, optionLabel] of options) {
-      const option = doc.createElement("option");
-      option.value = optionValue;
-      option.textContent = optionLabel;
-      select.appendChild(option);
+    const section = doc.createElement("div");
+    section.className = "slideshow-animation-editor__choices-section";
+    const heading = doc.createElement("span");
+    heading.textContent = labelText;
+    const buttons = doc.createElement("div");
+    buttons.className = "slideshow-animation-editor__choices";
+    buttons.setAttribute("role", "group");
+    buttons.setAttribute("aria-label", labelText);
+    for (const [choice, label] of choices) {
+      const button = doc.createElement("button");
+      button.type = "button";
+      const icon = doc.createElement("span");
+      icon.className = "slideshow-animation-editor__choice-icon";
+      icon.setAttribute("aria-hidden", "true");
+      icon.innerHTML = getAnimationEditorIcon(this.options.ea, choice, isExitAnimationEffect(this.effect));
+      const text = doc.createElement("span");
+      text.textContent = label;
+      button.append(icon, text);
+      button.setAttribute("aria-pressed", String(choice === value));
+      button.addEventListener("click", () => onChange(choice));
+      buttons.appendChild(button);
     }
-    select.value = value;
-    select.addEventListener("change", () => onChange(select.value as T));
-    label.appendChild(select);
-    return label;
+    section.append(heading, buttons);
+    return section;
   }
 
   private numberField(

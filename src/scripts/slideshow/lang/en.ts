@@ -177,7 +177,7 @@ export const en = {
   animationEditorTitle: "Animations — {title}",
   closeAnimationEditor: "Close animation editor",
   animationSelectionHint:
-    "Select elements or groups in the drawing, then configure and add them as a build step.",
+    "Select an element or group to edit its first animation or add a new one. Add step readies the next animation; New step animates the same selection again.",
   animationOutsideFrameIgnored: "Ignored {count} selected item(s) outside this frame.",
   animationOutsideSlideIgnored: "Ignored {count} selected item(s) outside this slide.",
   animationTargets: "Targets",

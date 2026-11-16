@@ -88,14 +88,6 @@ export function getHiddenBuildElementIds(
     step,
     ids: resolveAnimationTargetElementIds(scope, step.targets, elements),
   }));
-  const claimedByLaterStep = new Set<string>();
-  for (let index = resolved.length - 1; index >= 0; index -= 1) {
-    const current = resolved[index];
-    if (!current) continue;
-    const phase = isExitAnimationEffect(current.step.effect) ? "exit" : "enter";
-    current.ids = current.ids.filter((id) => !claimedByLaterStep.has(`${phase}:${id}`));
-    for (const id of current.ids) claimedByLaterStep.add(`${phase}:${id}`);
-  }
 
   const hiddenIds = new Set<string>();
   const initialized = new Set<string>();

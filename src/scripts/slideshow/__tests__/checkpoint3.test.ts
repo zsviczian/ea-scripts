@@ -8,7 +8,6 @@ import {
   getAnimationOverlayPlacement,
   getAnimationSlideScope,
   recycleMissingAnimationTargets,
-  removeAnimationTargetConflicts,
   resolveAnimationTargetElementIds,
 } from "../AnimationRuntime";
 import { buildFrameSlideDeck, buildLineSlideDeck, getVisibleSlideIndex } from "../SlideDeck";
@@ -286,63 +285,7 @@ describe("checkpoint 3 animation target resolution", () => {
     ]);
   });
 
-  it("moves overlapping visual targets out of earlier animation steps", () => {
-    const elements = [
-      frame(),
-      element("one", "rectangle", null, { x: 20, y: 20, groupIds: ["g"] }),
-      element("two", "ellipse", null, { x: 50, y: 20, groupIds: ["g"] }),
-    ];
-    const steps: AnimationStep[] = [
-      {
-        id: "first",
-        targets: [{ type: "element", id: "one" }],
-        effect: "appear",
-        trigger: "advance",
-      },
-      {
-        id: "second",
-        targets: [{ type: "element", id: "two" }],
-        effect: "fade",
-        trigger: "advance",
-      },
-    ];
-    expect(
-      removeAnimationTargetConflicts(
-        "frame",
-        steps,
-        [{ type: "group", id: "g" }],
-        elements,
-      ),
-    ).toEqual([]);
-  });
 
-  it("allows the same target to have one entrance and one exit animation", () => {
-    const elements = [frame(), element("one", "rectangle", null, { x: 20, y: 20 })];
-    const steps: AnimationStep[] = [
-      {
-        id: "enter",
-        targets: [{ type: "element", id: "one" }],
-        effect: "fade",
-        trigger: "advance",
-      },
-      {
-        id: "exit",
-        targets: [{ type: "element", id: "one" }],
-        effect: "fade-out",
-        trigger: "advance",
-      },
-    ];
-    expect(
-      removeAnimationTargetConflicts(
-        "frame",
-        steps,
-        [{ type: "element", id: "one" }],
-        elements,
-        undefined,
-        "zoom-out",
-      ),
-    ).toEqual([steps[0]]);
-  });
 });
 
 describe("checkpoint 3 animation metadata and runtime", () => {
@@ -366,14 +309,16 @@ describe("checkpoint 3 animation metadata and runtime", () => {
       delayMs: 500,
       durationMs: 800,
       direction: "right",
+      newStepDefaults: { effect: "fade-out", trigger: "after-delay", delayMs: 500, durationMs: 800, direction: "right" },
     });
 
     editor.startNewStep();
 
     expect(editor.selectedStepId).toBeNull();
     expect(editor.targets).toBe(targets);
-    expect(editor.effect).toBe("appear");
-    expect(editor.trigger).toBe("advance");
+    expect(editor.effect).toBe("fade-out");
+    expect(editor.trigger).toBe("after-delay");
+    expect(editor.direction).toBe("right");
   });
 
   it("accepts exit animation effects without changing the metadata schema version", () => {
