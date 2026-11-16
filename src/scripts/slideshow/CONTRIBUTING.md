@@ -7,6 +7,7 @@
 - `slideshowRuntime.ts`: shared temporary per-view contexts, controllers, and slide progress.
 - `SlideshowController.ts`: presentation lifecycle, hierarchical slide/build navigation, fullscreen/display placement, presenter synchronization, and restoration.
 - `AnimationEditor.ts`: frame target capture, step editing/reordering, and previews.
+- `AnimationTargetPreviewService.ts`: bounded, cached target PNGs owned by one editor session.
 - `AnimationRuntime.ts`: target resolution, timed builds, transient effects, and guaranteed restoration.
 - `PresentationControls.ts`: presentation toolbar and slide picker.
 - `presentationPath.ts`: non-mutating canonical deck resolution plus presentation setup.
@@ -46,3 +47,16 @@ Run the full workspace gate with:
 ```bash
 npm run check
 ```
+
+Run the focused native animation workflow in the plugin's repository-owned test vault:
+
+```bash
+node src/scripts/slideshow/testing/native.mjs
+```
+
+This builds and freezes the local plugin/fork/Extras combination, checks the actual
+Script Engine editor in main and popout windows, and restores the vault baseline.
+The report includes screenshots and a canvas-pixel assertion at the motion-overlay
+handoff. `native-evidence.json` points to the latest report; failed reports remain
+under the plugin's ignored `.test-work/reports/` directory. Physical mobile touch
+and native platforms other than the current host need separate coverage.

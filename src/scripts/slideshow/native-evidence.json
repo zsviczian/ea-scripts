@@ -1,0 +1,92 @@
+{
+  "status": "passed",
+  "platform": "darwin",
+  "boundary": "Actual Script Engine, selection-driven animation UI, persisted metadata, target PNGs and motion overlay/canvas handoff in main and popout windows. Physical mobile touch was not exercised.",
+  "scriptHash": "ca5f3406369b6f6b6f508ef3521a4bf3f2a4e95eea8645ca571d467302840562",
+  "artifacts": {
+    "sourceHashes": {
+      "main.js": "d1ce8a6578397afe98101ecbaada97fc1bc7a330b20ed07090bc3ccbc5fca7e3",
+      "manifest.json": "8e82828fd9125615e8a361d0f15553e548cac2ee7a303e55387378a53b925fd9",
+      "styles.css": "c66306b0fd8f29348b58e50339b2ae614c82524c043c3241dc39e12ee287665e"
+    },
+    "installedHashes": {
+      "main.js": "d1ce8a6578397afe98101ecbaada97fc1bc7a330b20ed07090bc3ccbc5fca7e3",
+      "manifest.json": "8e82828fd9125615e8a361d0f15553e548cac2ee7a303e55387378a53b925fd9",
+      "styles.css": "c66306b0fd8f29348b58e50339b2ae614c82524c043c3241dc39e12ee287665e"
+    },
+    "version": "2.29.2"
+  },
+  "scenarios": [
+    {
+      "id": "plugin-load",
+      "status": "passed",
+      "assertions": [
+        "commands registered",
+        "drawing/font/export runtime available",
+        "host protocol 4"
+      ]
+    },
+    {
+      "id": "drawing-main-window",
+      "status": "passed",
+      "assertions": [
+        "Excalidraw API ready",
+        "wrapper mounted",
+        "owner document matches",
+        "main application document"
+      ]
+    },
+    {
+      "id": "slideshow",
+      "status": "passed",
+      "assertions": [
+        "main/popout animation workflows"
+      ],
+      "tests": [
+        {
+          "testId": "animation-editor-main",
+          "featureIds": [],
+          "status": "passed",
+          "assertions": [
+            "selected text/elements/groups display 64x56 thumbnails instead of target codes",
+            "target removal preserves other selected targets",
+            "target and sequence thumbnails share cached exports",
+            "all effect/direction/trigger icons render at 24px",
+            "trigger buttons update timing controls",
+            "next-step form and sticky effect/direction",
+            "canvas selects first step",
+            "repeated target preserved",
+            "bounded group thumbnails",
+            "motion handoff has painted canvas target",
+            "panel/overlay cleanup"
+          ]
+        },
+        {
+          "testId": "animation-editor-popout",
+          "featureIds": [],
+          "status": "passed",
+          "assertions": [
+            "selected text/elements/groups display 64x56 thumbnails instead of target codes",
+            "target removal preserves other selected targets",
+            "target and sequence thumbnails share cached exports",
+            "all effect/direction/trigger icons render at 24px",
+            "trigger buttons update timing controls",
+            "next-step form and sticky effect/direction",
+            "canvas selects first step",
+            "repeated target preserved",
+            "bounded group thumbnails",
+            "motion handoff has painted canvas target",
+            "panel/overlay cleanup"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "javascript-errors",
+      "status": "passed"
+    }
+  ],
+  "cleanup": "passed",
+  "baselineRestored": true,
+  "reportDir": "/Users/zsviczian/GitHub/obsidian-excalidraw-plugin/.test-work/reports/slideshow-animation-cd1bbe1d-651a-43d1-9552-30b917e47dab"
+}

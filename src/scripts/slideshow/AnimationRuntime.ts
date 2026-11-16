@@ -434,43 +434,6 @@ export function captureAnimationTargets(
   return { targets, ignoredSelectionCount };
 }
 
-function targetsOverlap(
-  slideScope: string | AnimationSlideScope,
-  left: AnimationTarget,
-  right: AnimationTarget,
-  elements: readonly ExcalidrawElement[],
-): boolean {
-  const leftIds = new Set(resolveAnimationTargetElementIds(slideScope, [left], elements));
-  return resolveAnimationTargetElementIds(slideScope, [right], elements).some((id) => leftIds.has(id));
-}
-
-/**
- * Moves conflicting targets out of other steps so one current visual unit belongs to one step.
- * Empty steps are removed. The edited step itself is excluded from conflict removal.
- */
-export function removeAnimationTargetConflicts(
-  slideScope: string | AnimationSlideScope,
-  steps: readonly AnimationStep[],
-  incomingTargets: readonly AnimationTarget[],
-  elements: readonly ExcalidrawElement[],
-  editedStepId?: string,
-  incomingEffect?: AnimationStep["effect"],
-): AnimationStep[] {
-  return steps.flatMap((step) => {
-    if (step.id === editedStepId) return [structuredClone(step)];
-    if (
-      incomingEffect !== undefined &&
-      isExitAnimationEffect(step.effect) !== isExitAnimationEffect(incomingEffect)
-    ) {
-      return [structuredClone(step)];
-    }
-    const targets = step.targets.filter(
-      (target) => !incomingTargets.some((incoming) => targetsOverlap(slideScope, target, incoming, elements)),
-    );
-    return targets.length === 0 ? [] : [{ ...structuredClone(step), targets }];
-  });
-}
-
 function getOpacity(element: ExcalidrawElement): number {
   return asAnimationShape(element).opacity;
 }
@@ -484,14 +447,6 @@ function resolveRuntimeSteps(
     step: structuredClone(step),
     elementIds: resolveAnimationTargetElementIds(slideScope, step.targets, elements),
   }));
-  const claimedByLaterStep = new Set<string>();
-  for (let index = resolved.length - 1; index >= 0; index -= 1) {
-    const current = resolved[index];
-    if (!current) continue;
-    const phase = isExitAnimationEffect(current.step.effect) ? "exit" : "enter";
-    current.elementIds = current.elementIds.filter((id) => !claimedByLaterStep.has(`${phase}:${id}`));
-    for (const id of current.elementIds) claimedByLaterStep.add(`${phase}:${id}`);
-  }
   return resolved.filter((step) => step.elementIds.length > 0);
 }
 
@@ -641,6 +596,9 @@ export class AnimationRuntime {
       await this.runStepEffect(resolved, true, generation);
       if (!this.active || generation !== this.generation) return true;
       this.active.completedSteps -= 1;
+      // Repeated targets can already be visible/hidden before this step. Its
+      // inverse alone does not necessarily reproduce the preceding build state.
+      this.applyBuildState();
       this.emitState();
       return true;
     } catch (error) {
@@ -874,7 +832,15 @@ export class AnimationRuntime {
       overlay.style.opacity = "0";
     }
     await this.wait(duration + 24, generation);
-    if (generation === this.generation) this.applyResolvedOpacity(resolved, endsHidden ? 0 : null);
+    if (generation === this.generation) {
+      this.applyResolvedOpacity(resolved, endsHidden ? 0 : null);
+      // updateScene schedules the static canvas render. Keep the final overlay
+      // until that render has crossed a paint boundary, avoiding a blank frame.
+      if (!endsHidden) {
+        await this.nextFrame(generation);
+        await this.nextFrame(generation);
+      }
+    }
     overlay.remove();
     this.overlays.delete(overlay);
   }
