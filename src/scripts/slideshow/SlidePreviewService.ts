@@ -13,8 +13,8 @@ import { getAnimationSlideScope, resolveAnimationTargetElementIds } from "./Anim
 import type { SlideDeckSlide } from "./SlideDeck";
 import type { SlideshowConfig } from "./types";
 import { isExitAnimationEffect } from "./types";
+import { getPreviewAppearance } from "./previewAppearance";
 
-const FALLBACK_BACKGROUND = "#ffffff";
 const PREVIEW_CACHE_BYTES = 64 * 1024 * 1024;
 const DEFAULT_PREVIEW_WIDTH = 960;
 const PREVIEW_EXPORT_CONCURRENCY = 2;
@@ -55,12 +55,6 @@ export function getSlideVisualFingerprint(
   return getSceneVisualFingerprint(
     slide.kind === "path" ? elements.filter((element) => element.id !== slide.pathId) : elements,
   );
-}
-
-function readBackgroundColor(appState: ReturnType<ExcalidrawAPI["getAppState"]>): string {
-  return typeof appState.viewBackgroundColor === "string"
-    ? appState.viewBackgroundColor
-    : FALLBACK_BACKGROUND;
 }
 
 export function getHiddenBuildElementIds(
@@ -126,7 +120,7 @@ export class SlidePreviewService {
 
   /** Returns the drawing background used behind previews. */
   public getBackgroundColor(): string {
-    return readBackgroundColor(this.api.getAppState());
+    return getPreviewAppearance(this.api.getAppState()).backgroundColor;
   }
 
   /** Returns the configured presentation aspect ratio used by sorter previews. */
@@ -171,8 +165,8 @@ export class SlidePreviewService {
     targetWidth: number,
     generation: number,
     cacheKey: string,
+    appearance = getPreviewAppearance(this.api.getAppState()),
   ): Promise<CachedPreview | undefined> {
-    const appState = this.api.getAppState();
     const rect = getPreviewNavigationRect(
       slide,
       this.config.maxZoom,
@@ -185,7 +179,7 @@ export class SlidePreviewService {
       width: Math.abs(rect.right - rect.left),
       height: Math.abs(rect.bottom - rect.top),
     };
-    if (generation !== this.generation) return undefined;
+    if (generation !== this.generation || getPreviewAppearance(this.api.getAppState()).key !== appearance.key) return undefined;
     const hiddenIds = new Set(hiddenElementIds);
     // Preview-only changes touch opacity at the element root. Preserve IDs and nested payloads with
     // shallow copies so independent PNG exports do not contend for EA's shared mutable workbench.
@@ -202,12 +196,12 @@ export class SlidePreviewService {
       elements: exportElements,
       area: exportArea,
       targetWidth,
-      theme: appState.theme,
+      theme: appearance.theme,
     });
-    if (generation !== this.generation) return undefined;
+    if (generation !== this.generation || getPreviewAppearance(this.api.getAppState()).key !== appearance.key) return undefined;
     const cached = {
       objectUrl: URL.createObjectURL(blob),
-      backgroundColor: readBackgroundColor(appState),
+      backgroundColor: appearance.backgroundColor,
     };
     this.cached.set(cacheKey, cached, blob.size);
     return cached;
@@ -228,6 +222,7 @@ export class SlidePreviewService {
       this.config,
     );
     const appState = this.api.getAppState();
+    const appearance = getPreviewAppearance(appState);
     const targetWidth = Math.max(Math.trunc(state.targetWidth ?? DEFAULT_PREVIEW_WIDTH), 1);
     const opacityKey = state.originalOpacities
       ? [...state.originalOpacities.entries()]
@@ -251,8 +246,7 @@ export class SlidePreviewService {
       includeBoundElements: true,
     });
     const cacheKey = [
-      appState.theme,
-      readBackgroundColor(appState),
+      appearance.key,
       slide.kind === "path" ? `path:${slide.pathId}` : "frame",
       `hidden:${hiddenElementIds.join(",")}`,
       `opacity:${opacityKey}`,
@@ -275,6 +269,7 @@ export class SlidePreviewService {
           targetWidth,
           generation,
           cacheKey,
+          appearance,
         ),
       () => generation === this.generation,
     );

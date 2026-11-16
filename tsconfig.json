@@ -5,6 +5,9 @@
     "moduleResolution": "bundler",
     "baseUrl": ".",
     "paths": {
+      "@zsviczian/excalidraw/common/colors": [
+        "node_modules/@zsviczian/excalidraw/types/common/src/colors.d.ts"
+      ],
       "@zsviczian/excalidraw/types": [
         "node_modules/@zsviczian/excalidraw/types/excalidraw/types.d.ts"
       ],

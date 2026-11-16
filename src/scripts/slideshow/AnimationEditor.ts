@@ -18,6 +18,7 @@ import {
 } from "./AnimationRuntime";
 import type { SlideDeckSlide } from "./SlideDeck";
 import { getAnimationEditorIcon, type AnimationIconChoice } from "./icons";
+import { getPreviewAppearance } from "./previewAppearance";
 import type { SlideshowTranslator } from "./lang";
 import { saveFrameAnimationSteps, saveLineAnimationSteps } from "./slideDeckMutations";
 import type {
@@ -98,6 +99,9 @@ export class AnimationEditor {
   private readonly previewRuntime: AnimationRuntime;
   private readonly targetPreviews: AnimationTargetPreviewService;
   private readonly drawingFile: ScriptExcalidrawView["file"];
+  private readonly targetPreviewBindings = new Map<HTMLElement, readonly AnimationTarget[]>();
+  private previewAppearanceKey = "";
+  private previewGeneration = 0;
 
   public constructor(private readonly options: AnimationEditorOptions) {
     this.steps = options.slide.animationSteps.map((step) => structuredClone(step));
@@ -116,6 +120,9 @@ export class AnimationEditor {
     if (this.destroyed) return;
     const { container, icons, t } = this.options;
     const doc = container.ownerDocument;
+    this.targetPreviewBindings.clear();
+    this.previewGeneration += 1;
+    this.previewAppearanceKey = getPreviewAppearance(this.options.api.getAppState()).key;
     container.replaceChildren();
     container.className = "slideshow-animation-editor";
 
@@ -280,6 +287,13 @@ export class AnimationEditor {
     elements: readonly ExcalidrawElement[],
     appState: Pick<AppState, "selectedElementIds" | "selectedGroupIds">,
   ): void {
+    if (this.destroyed || !this.isCurrentDrawing()) return;
+    const appearanceKey = getPreviewAppearance(this.options.api.getAppState()).key;
+    if (appearanceKey !== this.previewAppearanceKey) {
+      this.previewAppearanceKey = appearanceKey;
+      this.previewGeneration += 1;
+      for (const [preview, targets] of this.targetPreviewBindings) this.loadTargetPreview(preview, targets);
+    }
     this.captureSelection(elements, appState);
     this.scheduleMissingTargetRecycle(elements);
   }
@@ -334,6 +348,8 @@ export class AnimationEditor {
     if (this.recycleTimer) this.options.hostView.ownerWindow.clearTimeout(this.recycleTimer);
     this.recycleTimer = 0;
     this.pendingRecycleElements = null;
+    this.targetPreviewBindings.clear();
+    this.previewGeneration += 1;
     this.targetPreviews.destroy();
     if (this.isCurrentDrawing()) await this.previewRuntime.leaveSlide();
     else this.previewRuntime.abandonActiveSlide();
@@ -480,14 +496,21 @@ export class AnimationEditor {
   ): HTMLElement {
     const preview = doc.createElement("span");
     preview.className = className;
+    this.targetPreviewBindings.set(preview, targets);
+    this.loadTargetPreview(preview, targets);
+    return preview;
+  }
+
+  /** Updates image content in place so appearance changes preserve the mounted form controls. */
+  private loadTargetPreview(preview: HTMLElement, targets: readonly AnimationTarget[]): void {
+    const generation = this.previewGeneration;
     void this.targetPreviews.createPreview(
-      this.getSlideScope(), targets, doc,
-      () => !this.destroyed && preview.isConnected && this.isCurrentDrawing(),
+      this.getSlideScope(), targets, preview.ownerDocument,
+      () => !this.destroyed && generation === this.previewGeneration && preview.isConnected && this.isCurrentDrawing(),
       this.previewRuntime.getOriginalOpacities(),
     ).then((image) => {
-      if (image && !this.destroyed && preview.isConnected) preview.replaceChildren(image);
+      if (image && !this.destroyed && generation === this.previewGeneration && preview.isConnected) preview.replaceChildren(image);
     }).catch((error) => console.error("Slideshow animation thumbnail failed", error));
-    return preview;
   }
 
   private selectStep(step: AnimationStep): void {

@@ -23,6 +23,7 @@ import {
 } from "./desktopDisplays";
 import { getVisibleSlideIndex, type SlideDeckSlide } from "./SlideDeck";
 import { SlidePreviewService, getSceneVisualFingerprint } from "./SlidePreviewService";
+import { getPreviewAppearance } from "./previewAppearance";
 import { SlideSorter } from "./SlideSorter";
 import type { SlideshowTranslator } from "./lang";
 import {
@@ -394,6 +395,7 @@ export class SlideshowSidepanel {
   private ownerWindow: Window;
   private lastFingerprint = "";
   private lastPreviewFingerprint = "";
+  private lastPreviewAppearanceKey = "";
   private lastChromeFingerprint = "";
   private pendingRefresh = false;
   private sorterMutationDepth = 0;
@@ -599,6 +601,12 @@ export class SlideshowSidepanel {
         if (view.file !== this.boundDrawingFile) {
           this.bindView(view);
           return;
+        }
+        const appearanceKey = getPreviewAppearance(appState).key;
+        if (appearanceKey !== this.lastPreviewAppearanceKey) {
+          this.lastPreviewAppearanceKey = appearanceKey;
+          this.sorter?.invalidatePreviewAppearance();
+          this.refreshPreviewsOnce();
         }
         if (this.sorterMutationDepth > 0) {
           this.pendingRefresh = true;

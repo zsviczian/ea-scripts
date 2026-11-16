@@ -195,7 +195,7 @@ async function exercise(c, drawingPath, script) {
       api.updateScene({ appState: { selectedElementIds: { [one]: true, [text]: true }, selectedGroupIds: { [groupId]: true } }, captureUpdate: "NEVER", forceFlushSync: true });
     };
     await c.case("animation-editor-" + mode, [], async () => {
-      api.updateScene({ elements: [], captureUpdate: "NEVER" });
+      api.updateScene({ elements: [], appState: { theme: "light", viewBackgroundColor: "#fff8ed" }, captureUpdate: "NEVER", forceFlushSync: true });
       ea.clear();
       frameId = ea.addFrame(0, 0, 700, 400, "Animation editing");
       ea.getElement(frameId).frameRole = "marker";
@@ -228,6 +228,7 @@ async function exercise(c, drawingPath, script) {
       button("Edit animations").click();
       const editor = () => panel()?.querySelector(".slideshow-animation-editor");
       await c.waitFor(() => editor(), "animation editor mounted");
+      check(panel().querySelector(".slideshow-sorter__preview").dataset.slideId === frameId, "opening the animation editor lost the slide preview identity");
       const expectIcon = (label, name) => {
         const control = button(label, editor());
         const icon = control?.querySelector(`.slideshow-animation-editor__choice-icon[aria-hidden="true"] svg.lucide-${name}`);
@@ -311,6 +312,75 @@ async function exercise(c, drawingPath, script) {
       const row = editor().querySelector(".slideshow-animation-editor__step-summary");
       row.click();
       await c.waitFor(() => button("Update step", editor()), "sequence selection loads step");
+      const slideImage = () => panel().querySelector(".slideshow-sorter__preview img");
+      const colorPixel = (color) => {
+        const canvas = doc.createElement("canvas");
+        canvas.width = canvas.height = 1;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = color;
+        ctx.fillRect(0, 0, 1, 1);
+        return [...ctx.getImageData(0, 0, 1, 1).data];
+      };
+      const matchesBackground = async (image, expected) => {
+        if (!image?.complete || !image.naturalWidth) return false;
+        await image.decode();
+        const host = image.parentElement;
+        if (!host || !image.isConnected) return false;
+        const canvas = doc.createElement("canvas");
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(image, 0, 0);
+        const pixel = [...ctx.getImageData(0, 0, 1, 1).data];
+        const cssPixel = colorPixel(image.ownerDocument.defaultView.getComputedStyle(image).backgroundColor);
+        c.observations.previewPixels ??= {};
+        c.observations.previewPixels[host.className] = { pixel, cssPixel, size: [image.naturalWidth, image.naturalHeight] };
+        return pixel.every((value, i) => Math.abs(value - expected[i]) <= 3) &&
+          cssPixel.every((value, i) => Math.abs(value - expected[i]) <= 3);
+      };
+      const expectedBackground = (theme, color) => colorPixel(
+        window.ExcalidrawLib.applyDarkModeFilter(color, theme === "dark"),
+      );
+      panel().querySelector(".slideshow-sorter__preview").scrollIntoView({ block: "start" });
+      app.workspace.setActiveLeaf(context().ea.getSidepanelLeaf(), { focus: true });
+      try { await c.waitFor(() => slideImage()?.complete && slideImage().naturalWidth > 0, "initial focused slide preview ready"); }
+      catch (error) {
+        await c.requestHost("screenshot", { name: "appearance-initial-failure-" + mode });
+        const host = panel().querySelector(".slideshow-sorter__preview");
+        throw Error(error.message + " " + JSON.stringify({ activeLeaf: app.workspace.activeLeaf?.id,
+          panelLeaf: context().ea.getSidepanelLeaf()?.id, rect: host.getBoundingClientRect().toJSON(),
+          content: host.outerHTML, state: { theme: api.getAppState().theme, background: api.getAppState().viewBackgroundColor } }));
+      }
+      const durationInput = [...editor().querySelectorAll("label")].find((el) => el.textContent.includes("Duration (ms)")).querySelector("input");
+      durationInput.value = "425";
+      app.workspace.setActiveLeaf(leaf, { focus: true });
+      panel().querySelector(".slideshow-sorter__preview").scrollIntoView({ block: "start" });
+      for (const [theme, color, name] of [
+        ["light", "#fff8ed", "warm-light"], ["dark", "#fff8ed", "warm-dark"],
+        ["dark", "#e3fafc", "blue-dark"], ["light", "#fff8ed", "restored-light"],
+      ]) {
+        api.updateScene({ appState: { theme, viewBackgroundColor: color }, captureUpdate: "NEVER", forceFlushSync: true });
+        const expected = expectedBackground(theme, color);
+        try { await c.waitFor(async () => {
+          const images = [...editor().querySelectorAll(".slideshow-animation-editor__target-preview img, .slideshow-animation-editor__step-preview img"), slideImage()];
+          return images.length === 5 && (await Promise.all(images.map((image) => matchesBackground(image, expected)))).every(Boolean);
+        }, "scene-matching target/sequence/slide preview pixels: " + name); }
+        catch (error) {
+          await c.requestHost("screenshot", { name: "appearance-failure-" + mode });
+          throw Error(error.message + " " + JSON.stringify({ expected, pixels: c.observations.previewPixels,
+            targetCount: editor()?.querySelectorAll(".slideshow-animation-editor__target-preview img").length,
+            stepCount: editor()?.querySelectorAll(".slideshow-animation-editor__step-preview img").length, slideImage: !!slideImage(),
+            slideMarkup: slideImage()?.parentElement.outerHTML, activeLeaf: app.workspace.activeLeaf?.id, panelLeaf: context().ea.getSidepanelLeaf()?.id }));
+        }
+        check(durationInput.isConnected && durationInput.value === "425", "appearance refresh replaced unsaved form input");
+        if (name === "warm-dark") {
+          editor().querySelector(".slideshow-animation-editor__targets").scrollIntoView({ block: "start" });
+          await c.requestHost("screenshot", { name: "animation-dark-targets-" + mode });
+          panel().querySelector(".slideshow-sorter__preview").scrollIntoView({ block: "start" });
+          await c.requestHost("screenshot", { name: "slide-dark-preview-" + mode });
+        }
+      }
+      durationInput.value = "350";
       // Restore a deterministic slide-in preview; sample the real static canvas
       // when the overlay is removed to detect a blank handoff frame.
       button("Slide in", editor()).click();
@@ -339,11 +409,18 @@ async function exercise(c, drawingPath, script) {
       } finally { view.ownerWindow.Element.prototype.remove = originalRemove; }
       editor().querySelector(".slideshow-animation-editor__choices-section").scrollIntoView({ block: "start" });
       await c.requestHost("screenshot", { name: "animation-editor-" + mode });
+      button("Edit animations").click();
+      await c.waitFor(() => !editor(), "animation editor collapsed");
+      panel().querySelector(".slideshow-sorter__preview").scrollIntoView({ block: "start" });
+      for (const theme of ["dark", "light"]) {
+        api.updateScene({ appState: { theme }, captureUpdate: "NEVER", forceFlushSync: true });
+        await c.waitFor(() => matchesBackground(slideImage(), expectedBackground(theme, "#fff8ed")), "sorter theme refresh without animation editor: " + theme);
+      }
       context().ea.checkForActiveSidepanelTabForScript()?.close();
       await c.waitFor(() => !panel(), "animation panel closed");
       check(!view.contentEl.querySelector(".slideshow-animation-overlay"), "overlay leaked on close");
       context().ea.destroy();
-      return { assertions: ["selected text/elements/groups display 64x56 thumbnails instead of target codes", "target removal preserves other selected targets", "target and sequence thumbnails share cached exports", "all effect/direction/trigger icons render at 24px", "trigger buttons update timing controls", "next-step form and sticky effect/direction", "canvas selects first step", "repeated target preserved", "bounded group thumbnails", "motion handoff has painted canvas target", "panel/overlay cleanup"] };
+      return { assertions: ["target/sequence/slide PNG pixels and letterboxing match warm light/dark and changed scene backgrounds", "live appearance updates preserve unsaved form input", "slide previews refresh with the animation editor open or closed", "selected text/elements/groups display 64x56 thumbnails instead of target codes", "target removal preserves other selected targets", "target and sequence thumbnails share cached exports", "all effect/direction/trigger icons render at 24px", "trigger buttons update timing controls", "next-step form and sticky effect/direction", "canvas selects first step", "repeated target preserved", "bounded group thumbnails", "motion handoff has painted canvas target", "panel/overlay cleanup"] };
     });
   }
   return { assertions: ["main/popout animation workflows"], tests: c.tests };

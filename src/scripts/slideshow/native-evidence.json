@@ -2,7 +2,7 @@
   "status": "passed",
   "platform": "darwin",
   "boundary": "Actual Script Engine, selection-driven animation UI, persisted metadata, target PNGs and motion overlay/canvas handoff in main and popout windows. Physical mobile touch was not exercised.",
-  "scriptHash": "ca5f3406369b6f6b6f508ef3521a4bf3f2a4e95eea8645ca571d467302840562",
+  "scriptHash": "9e6e8b2f7cd6f96412a75d62ffc1452591ad80f15f9c26dd030664fd2968b114",
   "artifacts": {
     "sourceHashes": {
       "main.js": "d1ce8a6578397afe98101ecbaada97fc1bc7a330b20ed07090bc3ccbc5fca7e3",
@@ -48,6 +48,9 @@
           "featureIds": [],
           "status": "passed",
           "assertions": [
+            "target/sequence/slide PNG pixels and letterboxing match warm light/dark and changed scene backgrounds",
+            "live appearance updates preserve unsaved form input",
+            "slide previews refresh with the animation editor open or closed",
             "selected text/elements/groups display 64x56 thumbnails instead of target codes",
             "target removal preserves other selected targets",
             "target and sequence thumbnails share cached exports",
@@ -66,6 +69,9 @@
           "featureIds": [],
           "status": "passed",
           "assertions": [
+            "target/sequence/slide PNG pixels and letterboxing match warm light/dark and changed scene backgrounds",
+            "live appearance updates preserve unsaved form input",
+            "slide previews refresh with the animation editor open or closed",
             "selected text/elements/groups display 64x56 thumbnails instead of target codes",
             "target removal preserves other selected targets",
             "target and sequence thumbnails share cached exports",
@@ -88,5 +94,5 @@
   ],
   "cleanup": "passed",
   "baselineRestored": true,
-  "reportDir": "/Users/zsviczian/GitHub/obsidian-excalidraw-plugin/.test-work/reports/slideshow-animation-cd1bbe1d-651a-43d1-9552-30b917e47dab"
+  "reportDir": "/Users/zsviczian/GitHub/obsidian-excalidraw-plugin/.test-work/reports/slideshow-animation-655ba5da-0fdb-4ea1-8a1b-91c07b71f2ac"
 }

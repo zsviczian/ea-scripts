@@ -235,6 +235,14 @@ export class SlideSorter {
     }
   }
 
+  /** Marks appearance changes for a fresh export even while ordinary scene refreshes are paused. */
+  public invalidatePreviewAppearance(): void {
+    this.options.container.querySelectorAll<HTMLElement>(".slideshow-sorter__preview").forEach((host) => {
+      host.dataset.previewDirty = "true";
+    });
+    this.refreshPreviews();
+  }
+
   /** Re-establishes lazy loading after focus returns, without touching already-populated thumbnails. */
   public resumePreviewRendering(): void {
     if (!this.previewRenderingEnabled) return;
@@ -867,6 +875,7 @@ export class SlideSorter {
 
     const preview = doc.createElement("div");
     preview.className = "slideshow-sorter__preview";
+    preview.dataset.slideId = slide.id;
     preview.style.backgroundColor = this.options.previewService.getBackgroundColor();
     preview.style.aspectRatio = this.options.previewService.getAspectRatio();
     content.appendChild(preview);

@@ -4,6 +4,7 @@ import { ByteBudgetLruCache } from "../../sharedUtils/ByteBudgetLruCache";
 import { getSceneVisualFingerprint } from "../../sharedUtils/previewUtils";
 import { resolveAnimationTargetElementIds, type AnimationSlideScope } from "./AnimationRuntime";
 import type { AnimationTarget } from "./types";
+import { getPreviewAppearance } from "./previewAppearance";
 
 /** Serializes target exports and owns all thumbnail URLs for one animation editor. */
 export class AnimationTargetPreviewService {
@@ -35,15 +36,16 @@ export class AnimationTargetPreviewService {
       return opacity === element.opacity ? element : { ...element, opacity };
     });
     if (selected.length === 0) return null;
-    const theme = this.api.getAppState().theme;
-    const key = `${theme}|${getSceneVisualFingerprint(selected)}`;
+    const appearance = getPreviewAppearance(this.api.getAppState());
+    const key = `${appearance.key}|${getSceneVisualFingerprint(selected)}`;
     let url = this.cache.get(key);
     if (!url) {
       url = await this.queue.enqueue(key, async () => {
+        if (getPreviewAppearance(this.api.getAppState()).key !== appearance.key) return undefined;
         const bounds = this.ea.getBoundingBox(selected);
         const blob = await this.ea.createViewPNG({
-          withBackground: false,
-          theme,
+          withBackground: true,
+          theme: appearance.theme,
           frameRendering: { enabled: false, name: false, outline: false, clip: false },
           padding: 4,
           selectedOnly: false,
@@ -51,7 +53,7 @@ export class AnimationTargetPreviewService {
           elementsOverride: selected,
           scale: Math.min(2, 160 / Math.max(bounds.width + 8, bounds.height + 8, 1)),
         });
-        if (this.destroyed) return undefined;
+        if (this.destroyed || getPreviewAppearance(this.api.getAppState()).key !== appearance.key) return undefined;
         const objectUrl = URL.createObjectURL(blob);
         this.cache.set(key, objectUrl, blob.size);
         return objectUrl;
@@ -67,6 +69,7 @@ export class AnimationTargetPreviewService {
     image.src = url;
     image.alt = "";
     image.draggable = false;
+    image.style.backgroundColor = appearance.backgroundColor;
     return image;
   }
 
