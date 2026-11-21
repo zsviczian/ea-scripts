@@ -3,7 +3,7 @@ import type { ExcaliAITranslationKey } from "./en";
 /** Untranslated task prompts and advanced UI fall back to English. */
 export const es: TranslationCatalog<ExcaliAITranslationKey> = {
   noView: "Abre primero un dibujo de Excalidraw.",
-  requiresVersion: "Este script requiere Excalidraw 2.29.2 o posterior. Actualiza el complemento.",
+  requiresVersion: "Este script requiere Excalidraw 2.29.3 o posterior. Actualiza el complemento.",
   prompt: "Instrucciones",
   advancedSettings: "{value1} <span>Ajustes avanzados</span>",
   systemPrompt: "Instrucciones del sistema",

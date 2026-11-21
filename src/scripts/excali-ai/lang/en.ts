@@ -5,7 +5,7 @@ export const en = {
   requestFailed: "ExcaliAI could not complete this task. Check your model settings and try again.",
   errorTitle: "Error",
   thisScriptRequiresExcalidrawOrLaterPlease:
-    "This script requires Excalidraw 2.23.0 or later. Please update the plugin.",
+    "This script requires Excalidraw 2.29.3 or later. Please update the plugin.",
   textResponse: "Text response",
   usesTheTextOrMultimodalModelAnd:
     "Uses the text or multimodal model and returns structured output such as HTML, Mermaid, a mind map, or Excalidraw strokes.",
@@ -271,6 +271,6 @@ export const en = {
   advancedPromptWarning: "Advanced: change this only if you know why.",
   reasoningHelp: "Reasoning effort: {effort} (from Excalidraw AI settings).",
   reasoningDefault: "API default",
-  requiresVersion: "This script requires Excalidraw 2.29.2 or later. Please update the plugin.",
+  requiresVersion: "This script requires Excalidraw 2.29.3 or later. Please update the plugin.",
 } as const;
 export type ExcaliAITranslationKey = keyof typeof en;

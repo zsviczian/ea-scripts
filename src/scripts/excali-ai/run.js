@@ -69,7 +69,7 @@ export async function runExcaliAI(ea, utils) {
   } = createTaskHelpers(t);
   let dirty = false;
 
-  if (!ea.verifyMinimumPluginVersion || !ea.verifyMinimumPluginVersion("2.29.2")) {
+  if (!ea.verifyMinimumPluginVersion || !ea.verifyMinimumPluginVersion("2.29.3")) {
     new Notice(t("requiresVersion"));
     return;
   }

@@ -4,7 +4,7 @@ import type { ExcaliAITranslationKey } from "./en";
 export const fr: TranslationCatalog<ExcaliAITranslationKey> = {
   noView: "Ouvrez d’abord un dessin Excalidraw.",
   requiresVersion:
-    "Ce script nécessite Excalidraw 2.29.2 ou une version ultérieure. Mettez le plugin à jour.",
+    "Ce script nécessite Excalidraw 2.29.3 ou une version ultérieure. Mettez le plugin à jour.",
   prompt: "Instruction",
   advancedSettings: "{value1} <span>Paramètres avancés</span>",
   systemPrompt: "Instruction système",
